@@ -437,8 +437,9 @@ const authLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:auth:'),
-    passOnStoreError: true,
+    // Sign-in/installation doors keep counting through a Redis outage (core/limiter-fallback-store).
+    store: require('./core/limiter-fallback-store').withMemoryFallback(limiterStore('rl:auth:')),
+    passOnStoreError: false,
     message: { error: 'Too many attempts, please try again later.' }
 });
 
@@ -453,8 +454,9 @@ const loginIpLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:loginip:'),
-    passOnStoreError: true,
+    // Sign-in/installation doors keep counting through a Redis outage (core/limiter-fallback-store).
+    store: require('./core/limiter-fallback-store').withMemoryFallback(limiterStore('rl:loginip:')),
+    passOnStoreError: false,
     skipSuccessfulRequests: true, // only failed logins count toward the cap
     message: { error: 'Too many failed login attempts from your network, please try again later.' }
 });
@@ -489,8 +491,9 @@ const setupLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:setup:'),
-    passOnStoreError: true,
+    // Sign-in/installation doors keep counting through a Redis outage (core/limiter-fallback-store).
+    store: require('./core/limiter-fallback-store').withMemoryFallback(limiterStore('rl:setup:')),
+    passOnStoreError: false,
     message: { error: 'Too many setup attempts, please try again later.' }
 });
 
@@ -505,9 +508,10 @@ const mcpLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) => {
-        const h = String((req.headers && req.headers.authorization) || '');
-        if (h.startsWith('Bearer wja_')) {
-            return 'agent:' + require('crypto').createHash('sha256').update(h.slice(7)).digest('hex').slice(0, 32);
+        // The same reader agentAuth uses, so the bucket is keyed by exactly the token that authenticates.
+        const t = require('./middleware/auth').bearerToken(req);
+        if (t && t.startsWith('wja_')) {
+            return 'agent:' + require('crypto').createHash('sha256').update(t).digest('hex').slice(0, 32);
         }
         return ipKey(req);
     },

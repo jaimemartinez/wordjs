@@ -308,6 +308,18 @@ class User {
     }
 
     /**
+     * bcrypt reads at most 72 BYTES of a password and silently ignores the rest, so a longer one would be
+     * stored as its first 72 bytes: two passwords that differ only past that point would both sign in. The
+     * limit is in bytes, not characters — an accented letter is 2 bytes in UTF-8, an emoji 4 — so it is
+     * measured that way on every door that SETS a password (signing in with an existing hash is unchanged).
+     */
+    static PASSWORD_MAX_BYTES = 72;
+    static PASSWORD_TOO_LONG_MESSAGE = 'Password must not exceed 72 bytes (about 72 plain letters; accented letters count as 2 and emoji as 4).';
+    static passwordTooLong(password: unknown): boolean {
+        return typeof password === 'string' && Buffer.byteLength(password, 'utf8') > User.PASSWORD_MAX_BYTES;
+    }
+
+    /**
      * `password` is the plain password, hashed here. `passwordHash` is the alternative for ONE caller:
      * POST /auth/verify-email creates an account whose password was hashed when the registration was
      * submitted (the plain text was never stored). Only a well-formed bcrypt hash is accepted, and never
@@ -324,6 +336,8 @@ class User {
         if (passwordHash !== undefined && (password || typeof passwordHash !== 'string' || !BCRYPT_HASH_RE.test(passwordHash))) {
             throw new Error('A pre-hashed password must be a bcrypt hash, given instead of a password');
         }
+        // Backstop for every caller (the routes answer a 400 first): see passwordTooLong.
+        if (User.passwordTooLong(password)) throw new Error(User.PASSWORD_TOO_LONG_MESSAGE);
 
         // Reject any role not in the known roles allow-list (prevents role mass-assignment / bogus role).
         assertValidRole(role);
@@ -511,6 +525,23 @@ class User {
         return user;
     }
 
+    /**
+     * Check `password` against THIS account's own hash, found by id. The re-authentication of a signed-in
+     * user (the sudo door, routes/users.ts) must ask about the account the session belongs to; resolving it
+     * again through a sign-in identifier can land on a different row (a legacy login that spells another
+     * account's email). Same dummy-hash cost as authenticate() when the row is gone. Throws on mismatch.
+     */
+    static async verifyPassword(id: number, password: string): Promise<void> {
+        const row = Number.isInteger(Number(id)) && Number(id) > 0
+            ? await dbAsync.get('SELECT user_pass FROM users WHERE id = ?', [Number(id)])
+            : null;
+        const hash = row && typeof row.user_pass === 'string' && row.user_pass
+            ? row.user_pass
+            : '$2a$12$r/WI9u0Eop2pwQ1nYgGWnOyH7eYYMRCEp0ATWSigC8ZNONV4KUm66';
+        const valid = await bcrypt.compare(String(password || ''), hash);
+        if (!valid || !row) throw new Error('Invalid credentials');
+    }
+
     static async update(id: number, data: any) {
         const updates: string[] = [];
         const values: any[] = [];
@@ -547,6 +578,7 @@ class User {
             updates.push('user_url = ?'); values.push(safeUrl);
         }
         if (data.password) {
+            if (User.passwordTooLong(data.password)) throw new Error(User.PASSWORD_TOO_LONG_MESSAGE);
             const hashedPassword = await bcrypt.hash(data.password, SALT_ROUNDS);
             updates.push('user_pass = ?');
             values.push(hashedPassword);
@@ -582,6 +614,10 @@ class User {
             // Same for AI agent connections bound to this account: they act AS the user, so compromise
             // recovery must cut them off too.
             try { await require('./AgentConnection').revokeAllForUser(id); } catch { /* best-effort, as above */ }
+            // ...and a password-reset link that is still outstanding: the password it was asked for to
+            // replace no longer exists, so the link must not be able to replace the new one.
+            await User.updateMeta(id, 'password_reset_hash', '');
+            await User.updateMeta(id, 'password_reset_expires', '0');
         }
 
         // Update meta if provided

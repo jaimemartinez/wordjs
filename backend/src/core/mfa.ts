@@ -25,11 +25,46 @@ const CHALLENGE_TTL = '5m';
 function normCode(c: string): string {
     return String(c || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
 }
+/**
+ * BACKUP CODES AT REST. A code carries 50 random bits; stored as a bare SHA-256 that is a lookup away
+ * from the code for anyone who reads the table (a backup, an export, a read-only SQL bug). Each code is
+ * now stored as `s1:<salt>:<scrypt>` — a salted, deliberately slow hash — so a copy of the table does not
+ * hand out working second factors. No server secret is involved, so rotating one never invalidates a
+ * user's codes. Codes stored before this (64 hex characters, SHA-256) still verify, so nobody is locked
+ * out; the next set they generate uses the new form.
+ */
+const BACKUP_HASH_PREFIX = 's1:';
+const BACKUP_SCRYPT = { N: 4096, r: 8, p: 1, maxmem: 32 * 1024 * 1024 };
+const LEGACY_BACKUP_RE = /^[0-9a-f]{64}$/;
+
 function hashBackup(code: string): string {
-    return crypto.createHash('sha256').update(normCode(code)).digest('hex');
+    const salt = crypto.randomBytes(16);
+    const derived: Buffer = crypto.scryptSync(normCode(code), salt, 32, BACKUP_SCRYPT);
+    return `${BACKUP_HASH_PREFIX}${salt.toString('hex')}:${derived.toString('hex')}`;
 }
 
-/** Generate N human-friendly one-time recovery codes; returns plaintext (shown once) + sha256 hashes. */
+function scryptAsync(input: string, salt: Buffer): Promise<Buffer> {
+    return new Promise((resolve, reject) => crypto.scrypt(input, salt, 32, BACKUP_SCRYPT, (e: any, k: Buffer) => (e ? reject(e) : resolve(k))));
+}
+
+/** Does `code` match one stored backup-code hash (either form)? Constant-time on the digest. */
+async function backupMatches(stored: unknown, code: string): Promise<boolean> {
+    if (typeof stored !== 'string') return false;
+    const typed = normCode(code);
+    if (stored.startsWith(BACKUP_HASH_PREFIX)) {
+        const [saltHex, hashHex] = stored.slice(BACKUP_HASH_PREFIX.length).split(':');
+        if (!/^[0-9a-f]{32}$/.test(saltHex || '') || !/^[0-9a-f]{64}$/.test(hashHex || '')) return false;
+        const derived = await scryptAsync(typed, Buffer.from(saltHex, 'hex'));
+        return crypto.timingSafeEqual(derived, Buffer.from(hashHex, 'hex'));
+    }
+    if (LEGACY_BACKUP_RE.test(stored)) {
+        const h = crypto.createHash('sha256').update(typed).digest('hex');
+        return crypto.timingSafeEqual(Buffer.from(h), Buffer.from(stored));
+    }
+    return false;
+}
+
+/** Generate N human-friendly one-time recovery codes; returns plaintext (shown once) + salted hashes. */
 function generateBackupCodes(n = N_BACKUP): { codes: string[]; hashes: string[] } {
     const codes: string[] = [], hashes: string[] = [];
     for (let i = 0; i < n; i++) {
@@ -81,12 +116,39 @@ async function challengeUsed(userId: number, challenge: { jti?: string }): Promi
     return Object.prototype.hasOwnProperty.call(await readUsedChallenges(userId), challenge.jti);
 }
 
-/** Record that this challenge completed a sign-in, until it would have expired anyway. */
-async function markChallengeUsed(userId: number, challenge: { jti?: string; exp?: number }): Promise<void> {
-    if (!challenge.jti) return;
-    const used = await readUsedChallenges(userId);
-    used[challenge.jti] = challenge.exp || Math.floor(Date.now() / 1000) + 300;
-    await User.updateMeta(userId, META.usedChallenges, JSON.stringify(used));
+/**
+ * CLAIM a challenge for the one session it may produce (recorded until it would have expired anyway), atomically: true for exactly one caller. The
+ * used-challenge list is advanced with a compare-and-set on the exact stored text (the way backup codes
+ * and the TOTP step are consumed), so two requests that both passed `challengeUsed` and both presented a
+ * valid code — two different backup codes, say — cannot both be issued a session; the loser finds the
+ * list changed, re-reads it, and sees its challenge already claimed. A challenge without an id (issued
+ * before ids existed) cannot be tracked and is let through, as before.
+ */
+async function claimChallenge(userId: number, challenge: { jti?: string; exp?: number }): Promise<boolean> {
+    if (!challenge.jti) return true;
+    const now = Math.floor(Date.now() / 1000);
+    for (let attempt = 0; attempt < 8; attempt++) {
+        const rows = await User.getMetaValues(userId, META.usedChallenges);
+        const raw = rows.length ? String(rows[0]) : null;
+        let parsed: Record<string, unknown> = {};
+        try { parsed = raw ? JSON.parse(raw) : {}; } catch { parsed = {}; }
+        const used: Record<string, number> = Object.create(null);
+        if (parsed && typeof parsed === 'object' && !Array.isArray(parsed)) {
+            for (const [k, v] of Object.entries(parsed)) if (Number(v) > now) used[k] = Number(v);
+        }
+        if (Object.prototype.hasOwnProperty.call(used, challenge.jti)) return false;
+        used[challenge.jti] = challenge.exp || now + 300;
+        const next = JSON.stringify(used);
+        if (raw === null) {
+            // First claim for this account: insert the row only if nobody did meanwhile (serialized on the
+            // account's TOTP secret row, which every enrolled account has).
+            if (await User.insertMetaIfAbsent(userId, META.usedChallenges, next, META.secret)) return true;
+            if (!(await User.getMetaValues(userId, META.secret)).length) return false; // 2FA removed meanwhile
+            continue;
+        }
+        if (await User.compareAndSetMeta(userId, META.usedChallenges, raw, next)) return true;
+    }
+    return false;
 }
 
 async function isEnabled(userId: number): Promise<boolean> {
@@ -142,8 +204,11 @@ async function verifyLoginCode(userId: number, code: string): Promise<boolean> {
     if (!raw) return false;
     let hashes: string[];
     try { hashes = JSON.parse(raw); } catch { return false; }
-    const h = hashBackup(code);
-    const idx = hashes.findIndex((x) => x.length === h.length && crypto.timingSafeEqual(Buffer.from(x), Buffer.from(h)));
+    if (!Array.isArray(hashes) || !normCode(code)) return false;
+    let idx = -1;
+    for (let i = 0; i < hashes.length; i++) {
+        if (await backupMatches(hashes[i], code)) { idx = i; break; }
+    }
     if (idx === -1) return false;
     const next = hashes.slice();
     next.splice(idx, 1);
@@ -161,11 +226,13 @@ async function beginEnroll(userId: number, account: string): Promise<{ secret: s
 /** Finish enroll: verify a code against the pending secret, then activate + return fresh backup codes. */
 async function completeEnroll(userId: number, code: string): Promise<{ ok: boolean; backupCodes?: string[] }> {
     const pending = await User.getMeta(userId, META.pending);
-    if (!pending || !totp.verifyTotp(pending, String(code || '').replace(/\s+/g, ''))) return { ok: false };
+    const step = pending ? totp.verifyTotpStep(pending, String(code || '').replace(/\s+/g, '')) : -1;
+    if (step < 0) return { ok: false };
     const { codes, hashes } = generateBackupCodes();
     // The replay counter row must exist for the atomic compare-and-set; write it BEFORE the secret so no
-    // window exists in which a secret is verifiable without its counter.
-    await User.updateMeta(userId, META.lastStep, '-1');
+    // window exists in which a secret is verifiable without its counter. It starts at the step the
+    // enrollment code just used: that code is spent, and must not open a session or a step-up afterwards.
+    await User.updateMeta(userId, META.lastStep, String(step));
     await User.updateMeta(userId, META.secret, pending);
     await User.updateMeta(userId, META.backup, JSON.stringify(hashes));
     await User.updateMeta(userId, META.enabled, '1');
@@ -392,7 +459,7 @@ async function tokenExposure(): Promise<{ requiredRoleTokens: number; unenrolled
 
 module.exports = {
     META, N_BACKUP,
-    signChallenge, verifyChallenge, challengeUsed, markChallengeUsed, isEnabled, verifyLoginCode,
+    signChallenge, verifyChallenge, challengeUsed, claimChallenge, isEnabled, verifyLoginCode,
     beginEnroll, completeEnroll, regenerateBackupCodes, disable, backupCount, hashBackup,
     getPolicy, setPolicy, evaluate, tokenExposure, POLICY_OPTION, DEFAULT_POLICY,
     recordFreshInstall, tokenEnforcementDefault, FRESH_INSTALL_OPTION

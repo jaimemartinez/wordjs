@@ -13,6 +13,7 @@ import { runEach } from "@/lib/bulkRun";
 import { useRolesMap } from "@/lib/useRoleOptions";
 import { avatarInitial } from "@/lib/avatarInitial";
 import { roleDisplayName, roleNameFrom } from "@/lib/roleOptions";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 const PER_PAGE = 20;
 
@@ -32,6 +33,9 @@ export default function UsersPage() {
     const [bulkBusy, setBulkBusy] = useState(false);
     const [bulkMessage, setBulkMessage] = useState("");
     const [bulkDeleting, setBulkDeleting] = useState<User[] | null>(null);
+    // Promoting accounts into a privileged role asks the administrator to confirm (password, and a code
+    // with 2FA). One confirmation covers the whole batch: the server holds it briefly for this session.
+    const bulkStepUp = useMfaStepUp();
     const selectable = (u: User) => !(me && me.id === u.id);
     const toggleRow = (id: number) => setSelected((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
     const toggleAllRows = () => setSelected((s) => {
@@ -43,9 +47,21 @@ export default function UsersPage() {
         if (!bulkRole || selectedUsers.length === 0) return;
         setBulkBusy(true);
         setBulkMessage("");
-        // A role is not a sudo-gated field (and your own role cannot be changed at all), so the proof is never
-        // added — withSudoProof states that instead of every screen deciding it for itself.
-        const result = await runEach(selectedUsers.map((u) => u.id), (id) => usersApi.update(id, withSudoProof({}, { role: bulkRole, email: undefined }, null)));
+        // A role is not a self-service sudo field (and your own role cannot be changed at all), so the
+        // self-edit proof is never added — withSudoProof states that. A PRIVILEGED role is confirmed by the
+        // administrator instead: the first row tells whether the server asks for it, before the rest run.
+        const stepUp = bulkStepUp.payload();
+        const [firstId, ...restIds] = selectedUsers.map((u) => u.id);
+        let firstFailed: { id: number; reason: string } | null = null;
+        try {
+            await usersApi.update(firstId, { ...withSudoProof({}, { role: bulkRole, email: undefined }, null), ...stepUp });
+        } catch (e) {
+            if (bulkStepUp.absorb(e)) { setBulkBusy(false); return; }
+            firstFailed = { id: firstId, reason: e instanceof Error && e.message ? e.message : String(e) };
+        }
+        const result = await runEach(restIds, (id) => usersApi.update(id, { ...withSudoProof({}, { role: bulkRole, email: undefined }, null), ...stepUp }));
+        if (firstFailed) result.failed.unshift(firstFailed); else result.done.unshift(firstId);
+        bulkStepUp.reset();
         setBulkBusy(false);
         setBulkMessage(result.failed.length
             ? `${t("users.bulk.roleFailed").replace("{n}", String(result.failed.length))} ${result.failed[0].reason}`
@@ -159,6 +175,9 @@ export default function UsersPage() {
                                     className="min-h-11 px-4 rounded-lg bg-blue-600 text-white text-xs font-bold hover:bg-blue-700 disabled:opacity-50">
                                     {t("users.bulk.apply")}
                                 </button>
+                                {(bulkStepUp.needsPassword || bulkStepUp.needsCode) && (
+                                    <div className="w-full max-w-sm"><MfaStepUpFields stepUp={bulkStepUp} /></div>
+                                )}
                             </>
                         )}
                         {can('delete_users') && (

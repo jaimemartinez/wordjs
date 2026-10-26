@@ -20,16 +20,18 @@ import { stepUpAsk, stepUpPayload, MfaStepUpFields, type MfaStepUp } from "../Mf
 import { translations } from "@/lib/i18n";
 
 const fake = (over: Partial<MfaStepUp>): MfaStepUp => ({
-    needsCode: false, needsPassword: false, code: "", password: "",
+    needsCode: false, needsPassword: false, sudo: false, code: "", password: "",
     setCode: () => undefined, setPassword: () => undefined,
     absorb: () => false, payload: () => ({}), reset: () => undefined,
     ...over,
 });
 
 describe("stepUpAsk", () => {
-    it("recognises the two answers that ask for more input", () => {
+    it("recognises the answers that ask for more input", () => {
         expect(stepUpAsk("rest_mfa_step_up_required")).toBe("code");
         expect(stepUpAsk("rest_mfa_password_required")).toBe("password");
+        // A sensitive action confirmed with the caller's own password (and then a code with 2FA).
+        expect(stepUpAsk("rest_sudo_required")).toBe("password");
     });
     it("treats every other answer as a real failure", () => {
         for (const c of ["rest_mfa_invalid", "rest_bad_current_password", "rest_mfa_required_for_tokens", "rest_forbidden", undefined, null, 403]) {
@@ -70,6 +72,14 @@ describe("MfaStepUpFields", () => {
         expect(html).toContain("stepUp.passwordLabel");
         expect(html).toContain("stepUp.passwordHelp");
     });
+    it("a sudo confirmation explains itself as one, not as the invalid-code ceiling", () => {
+        const html = renderToStaticMarkup(<MfaStepUpFields stepUp={fake({ needsPassword: true, sudo: true })} />);
+        expect(html).toContain('type="password"');
+        expect(html).toContain("stepUp.sudoHelp");
+        expect(html).not.toContain("stepUp.passwordHelp");
+        // ...and the code it may ask for next carries its own help when the screen gave none.
+        expect(renderToStaticMarkup(<MfaStepUpFields stepUp={fake({ needsPassword: true, needsCode: true, sudo: true })} />)).toContain("stepUp.codeHelp");
+    });
     it("withCode={false} shows only the password (the 2FA screen has its own code field)", () => {
         const html = renderToStaticMarkup(<MfaStepUpFields stepUp={fake({ needsCode: true, needsPassword: true })} withCode={false} />);
         expect(html).toContain('type="password"');
@@ -92,10 +102,25 @@ describe("wiring", () => {
         const agents = src("app/admin/agents/page.tsx");
         expect(agents).toMatch(/\.\.\.createStepUp\.payload\(\)/);
         expect(agents).toMatch(/agentsApi\.grant\([^;]*grantStepUp\.payload\(\)\)/);
+        // Turning publish confirmation off carries one too.
+        expect(agents).toMatch(/agentsApi\.setPublishConfirmation\([^;]*confirmationStepUp\.payload\(\)/);
+    });
+
+    it("authority over privileged accounts goes through the shared step-up on every screen that exercises it", () => {
+        for (const rel of ["app/admin/users/UserFormModal.tsx", "app/admin/users/[id]/page.tsx", "app/admin/users/UserMfaReset.tsx", "app/admin/users/page.tsx", "app/admin/settings/media-storage/page.tsx"]) {
+            const s = src(rel);
+            expect(s, rel).toMatch(/useMfaStepUp\(\)/);
+            expect(s, rel).toMatch(/<MfaStepUpFields\b/);
+            expect(s, rel).toMatch(/\.absorb\(e(rror)?\)/);
+            expect(s, rel).toMatch(/\.payload\(\)/);
+        }
+        // The Redis screen reuses its own current-password field.
+        expect(src("app/admin/settings/RedisServerPanel.tsx")).toMatch(/rest_sudo_required/);
     });
 
     it("every string the step-up uses exists in every catalogue", () => {
-        const keys = ["tokens.stepUpLabel", "tokens.stepUpPlaceholder", "tokens.stepUpHelp", "stepUp.passwordLabel", "stepUp.passwordHelp", "agents.stepUpHelp"];
+        const keys = ["tokens.stepUpLabel", "tokens.stepUpPlaceholder", "tokens.stepUpHelp", "stepUp.passwordLabel", "stepUp.passwordHelp", "agents.stepUpHelp",
+            "stepUp.sudoHelp", "stepUp.codeHelp", "apiError.rest_sudo_required", "agents.confirmationTurnOff", "settings.redisServer.testNeedsPassword"];
         for (const [lang, table] of Object.entries(translations)) {
             for (const k of keys) expect(table[k], `${lang}:${k}`).toBeTruthy();
         }

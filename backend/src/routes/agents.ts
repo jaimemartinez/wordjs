@@ -40,6 +40,25 @@ const requireMfaForMachineCredential = (req: Request, res: Response, kind: Machi
     require('./auth').requireMfaForMachineCredential(req, res, kind);
 const MFA_AGENT_CREATE: MachineCredentialKind = { before: 'creating agent connections', action: 'create an agent connection', auditDetail: { credential: 'agent_connection' } };
 const MFA_AGENT_GRANT: MachineCredentialKind = { before: 'granting capabilities to an agent', action: 'grant capabilities to an agent connection', auditDetail: { credential: 'agent_grant' } };
+const MFA_AGENT_UNCONFIRMED: MachineCredentialKind = { before: 'letting agents publish without confirmation', action: 'let agents publish without a person confirming', auditDetail: { credential: 'agent_publish_confirmation' } };
+
+/**
+ * The session refusals every door that hands an agent authority applies (POST /agents and PUT
+ * /agents/:id/grant): a network administrator's handoff session, which must not leave behind a credential
+ * that outlives it, and a session started at an address other than the main one. Answers the request
+ * and resolves true when refused.
+ */
+function refuseAgentAuthoritySession(req: Request, res: Response): boolean {
+    if (sessionBoundToSecondaryAddress(req)) {
+        res.status(403).json({
+            code: 'rest_token_bound_session',
+            message: 'Agent connections can only be created or granted from a session started at the main address.',
+            data: { status: 403 }
+        });
+        return true;
+    }
+    return false;
+}
 
 /** At most this many live (pending or active) connections per bound user. */
 const MAX_LIVE_CONNECTIONS_PER_USER = 25;
@@ -129,6 +148,7 @@ router.get('/', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandle
  *             required: [publishConfirmation]
  *             properties:
  *               publishConfirmation: { type: boolean }
+ *               mfaCode: { type: string, description: "Turning confirmation OFF follows the agent-grant rule: a current code when the caller's role requires two-factor authentication and the session did not sign in with it (403 rest_mfa_step_up_required)" }
  *     responses:
  *       200:
  *         description: The stored setting.
@@ -144,8 +164,15 @@ router.put('/settings', authenticate, sessionOnly, can('manage_api_tokens'), asy
         return res.status(400).json({ code: 'rest_invalid_param', message: 'publishConfirmation must be true or false.', data: { status: 400 } });
     }
     const previous = await agentPublishing.publishConfirmationRequired();
+    // Turning confirmation OFF lets every granted agent publish on its own: the same second-factor rule as
+    // granting an agent authority (step-up when the caller's role requires 2FA). Turning it on never needs it.
+    let mfaAssurance: string | null = null;
+    if (previous && !value) {
+        mfaAssurance = await requireMfaForMachineCredential(req, res, MFA_AGENT_UNCONFIRMED);
+        if (!mfaAssurance) return;
+    }
     await updateOption(agentPublishing.AGENT_PUBLISH_CONFIRMATION_OPTION, value ? '1' : '0');
-    if (previous !== value) await recordAudit(req.user.id, 'agent.settings', 'agent', 0, { publishConfirmation: value, previous });
+    if (previous !== value) await recordAudit(req.user.id, 'agent.settings', 'agent', 0, { publishConfirmation: value, previous, ...(mfaAssurance ? { mfa: mfaAssurance } : {}) });
     res.json({ publishConfirmation: value });
 }));
 
@@ -234,13 +261,7 @@ router.delete('/publish-queue/:postId', authenticate, sessionOnly, can('manage_a
  *         description: Unknown capability, nothing requested, or invalid expiry.
  */
 router.post('/', authenticate, sessionOnly, require('../core/network-handoff').refuseHandoffSession, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
-    if (sessionBoundToSecondaryAddress(req)) {
-        return res.status(403).json({
-            code: 'rest_token_bound_session',
-            message: 'Agent connections can only be created from a session started at the main address.',
-            data: { status: 403 }
-        });
-    }
+    if (refuseAgentAuthoritySession(req, res)) return;
     const { name, requested, expiresInDays, userId } = req.body || {};
     const bad = invalidAgentCapabilities(requested);
     if (bad.length) {
@@ -254,8 +275,9 @@ router.post('/', authenticate, sessionOnly, require('../core/network-handoff').r
     if (!caps.length) {
         return res.status(400).json({ code: 'rest_missing_param', message: 'Request at least one capability.', data: { status: 400 } });
     }
-    if (expiresInDays != null && (!Number.isFinite(Number(expiresInDays)) || Number(expiresInDays) <= 0)) {
-        return res.status(400).json({ code: 'rest_invalid_param', message: 'expiresInDays must be a positive number of days.', data: { status: 400 } });
+    const expiryProblem = require('../models/ApiToken').expiryDaysProblem(expiresInDays);
+    if (expiryProblem) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: expiryProblem, data: { status: 400 } });
     }
 
     let boundId = req.user.id;
@@ -326,7 +348,8 @@ router.post('/', authenticate, sessionOnly, require('../core/network-handoff').r
  *       403:
  *         description: Not an administrator.
  */
-router.put('/:id/grant', authenticate, sessionOnly, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
+router.put('/:id/grant', authenticate, sessionOnly, require('../core/network-handoff').refuseHandoffSession, can('manage_api_tokens'), asyncHandler(async (req: Request, res: Response) => {
+    if (refuseAgentAuthoritySession(req, res)) return;
     if (!isAdministrator(req)) return forbidden(res, 'Only an administrator can grant capabilities to an agent.');
     const rec = await connectionForCaller(req, res);
     if (!rec) return;

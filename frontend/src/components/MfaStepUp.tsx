@@ -12,6 +12,10 @@ import { Input } from "@/components/ui";
  *     with it: minting a token or an agent connection (or granting one) needs a fresh code (`mfaCode`).
  *   • 403 `rest_mfa_password_required` — the account has collected too many invalid codes: the code alone
  *     is no longer enough, the account password goes with it (`currentPassword`).
+ *   • 403 `rest_sudo_required` — an action that hands out authority over a privileged account (creating
+ *     an administrator, changing another administrator's password or address, resetting a second factor)
+ *     or reuses a stored secret elsewhere: confirm with your own password (`currentPassword`), and then,
+ *     when your account has 2FA, a current code (`rest_mfa_step_up_required` → `mfaCode`).
  *
  * Neither is a failure the user caused, so `absorb` reports them as "ask for more" instead of an error,
  * and the next submit carries what was asked for (`payload`).
@@ -20,7 +24,7 @@ import { Input } from "@/components/ui";
 export type StepUpAsk = "code" | "password" | null;
 export function stepUpAsk(code: unknown): StepUpAsk {
     if (code === "rest_mfa_step_up_required") return "code";
-    if (code === "rest_mfa_password_required") return "password";
+    if (code === "rest_mfa_password_required" || code === "rest_sudo_required") return "password";
     return null;
 }
 
@@ -37,12 +41,14 @@ export function useMfaStepUp() {
     const [needsPassword, setNeedsPassword] = useState(false);
     const [code, setCode] = useState("");
     const [password, setPassword] = useState("");
+    // Why the password was asked for: to confirm a sensitive action (sudo), or after too many invalid codes.
+    const [sudo, setSudo] = useState(false);
 
     /** True when the error only asked for more input; it clears a field the server just rejected. */
     const absorb = (e: any): boolean => {
         const ask = stepUpAsk(e?.code);
         if (ask === "code") { setNeedsCode(true); return true; }
-        if (ask === "password") { setNeedsPassword(true); return true; }
+        if (ask === "password") { setNeedsPassword(true); if (e?.code === "rest_sudo_required") setSudo(true); return true; }
         if (e?.code === "rest_mfa_invalid") setCode("");
         if (e?.code === "rest_bad_current_password") setPassword("");
         return false;
@@ -50,9 +56,9 @@ export function useMfaStepUp() {
 
     const payload = () => stepUpPayload({ needsCode, needsPassword, code, password });
 
-    const reset = () => { setNeedsCode(false); setNeedsPassword(false); setCode(""); setPassword(""); };
+    const reset = () => { setNeedsCode(false); setNeedsPassword(false); setSudo(false); setCode(""); setPassword(""); };
 
-    return { needsCode, needsPassword, code, setCode, password, setPassword, absorb, payload, reset };
+    return { needsCode, needsPassword, sudo, code, setCode, password, setPassword, absorb, payload, reset };
 }
 
 export type MfaStepUp = ReturnType<typeof useMfaStepUp>;
@@ -62,14 +68,15 @@ export function MfaStepUpFields({ stepUp, codeHelp, withCode = true }: { stepUp:
     const { t } = useI18n();
     const showCode = withCode && stepUp.needsCode;
     if (!showCode && !stepUp.needsPassword) return null;
+    const codeText = codeHelp || (stepUp.sudo ? t("stepUp.codeHelp") : undefined);
     return (
         <div className="rounded-2xl border border-amber-200 bg-amber-50/60 p-3 space-y-2" data-testid="mfa-step-up">
             {showCode && (
                 <>
-                    {codeHelp && (
+                    {codeText && (
                         <p className="text-[11px] text-amber-800 leading-relaxed flex items-start gap-2">
                             <i className="fa-solid fa-shield-halved mt-0.5"></i>
-                            <span>{codeHelp}</span>
+                            <span>{codeText}</span>
                         </p>
                     )}
                     <Input
@@ -88,7 +95,7 @@ export function MfaStepUpFields({ stepUp, codeHelp, withCode = true }: { stepUp:
                 <>
                     <p className="text-[11px] text-amber-800 leading-relaxed flex items-start gap-2">
                         <i className="fa-solid fa-key mt-0.5"></i>
-                        <span>{t("stepUp.passwordHelp")}</span>
+                        <span>{stepUp.sudo ? t("stepUp.sudoHelp") : t("stepUp.passwordHelp")}</span>
                     </p>
                     <Input
                         label={t("stepUp.passwordLabel")}

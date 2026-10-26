@@ -18,7 +18,7 @@ const User = require('../models/User');
 // refuseRetiringSignIn likewise for an address retired a few seconds ago (503 rest_address_retiring).
 // sessionBoundToSecondaryAddress keeps an address-bound session from minting an unbound API token, and
 // unboundSessionOnly from changing which accounts need a second factor (PUT /mfa/policy).
-const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, sessionRemembered, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted, sessionMfaVerified, sessionHandoff, trustedHost, isQueryTicketPath, issueQueryTicket, QUERY_TICKET_TTL_SECONDS } = require('../middleware/auth');
+const { authenticate, generateToken, verifyToken, issueSessionCookie, sessionOnly, sessionCookie, sessionCookieOptions, sessionRemembered, clearSessionCookies, refuseInsecureSignIn, refuseRetiringSignIn, signInRefusal, sessionBoundToSecondaryAddress, unboundSessionOnly, sessionAddressStillAccepted, sessionMfaVerified, sessionHandoff, trustedHost, isQueryTicketPath, issueQueryTicket, QUERY_TICKET_TTL_SECONDS, bearerToken } = require('../middleware/auth');
 const networkHandoff = require('../core/network-handoff');
 const { refuseHandoffSession } = networkHandoff;
 const { isAdmin, can } = require('../middleware/permissions');
@@ -73,9 +73,17 @@ function auditText(v: any, max = 64): string {
  * reader we are protecting the user from here is an administrator who already has the log. The key
  * changes when the JWT secret is rotated, so digests correlate within a deployment's key lifetime,
  * which is far longer than any incident.
+ *
+ * The key is DERIVED from that secret for this one use (HKDF-SHA256 with its own label) rather than the
+ * session-signing secret itself: an HMAC under the signing key over a caller-chosen string is the same
+ * primitive that signs sessions, and nothing outside the signer should ever compute one.
  */
+const ATTEMPT_DIGEST_LABEL = 'wordjs:audit:attempt-digest:v1';
+function attemptDigestKey(): Buffer {
+    return Buffer.from(crypto.hkdfSync('sha256', String(config.jwt.secret || ''), Buffer.alloc(0), ATTEMPT_DIGEST_LABEL, 32));
+}
 function attemptDigest(value: any): string {
-    return crypto.createHmac('sha256', String(config.jwt.secret || ''))
+    return crypto.createHmac('sha256', attemptDigestKey())
         .update(String(value == null ? '' : value))
         .digest('hex')
         .slice(0, 16);
@@ -639,8 +647,10 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
     // whose sessions are still being ended (rest_address_retiring).
     if (refuseInsecureSignIn(req, res)) return;
     if (refuseRetiringSignIn(req, res)) return;
-    const registrationAllowed = await getOption('users_can_register', 0);
-    if (!registrationAllowed || registrationAllowed == '0') {
+    // One boolean reading (core/options toBooleanOption): 'off', 'false' and the like are OFF, and a value
+    // it cannot read keeps registration closed.
+    const registrationAllowed = require('../core/options').toBooleanOption(await getOption('users_can_register', 0), false);
+    if (!registrationAllowed) {
         return res.status(403).json({
             code: 'rest_cannot_register',
             message: 'User registration is currently disabled.',
@@ -672,6 +682,9 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
             data: { status: 400 }
         });
     }
+    // The display name every account write stores (routes/users.ts displayNameOrRefuse): no markup, trimmed, capped.
+    const shownName = require('./users').displayNameOrRefuse(res, displayName);
+    if (!shownName) return;
 
     // Validate email format — shared, length-capped validator (ReDoS-safe on unbounded input)
     if (!isValidAddress(email)) {
@@ -700,10 +713,11 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         });
     }
 
-    if (password.length > 72) {
+    // bcrypt's limit is 72 BYTES (User.passwordTooLong), not 72 characters.
+    if (User.passwordTooLong(password)) {
         return res.status(400).json({
-            code: 'rest_invalid_param',
-            message: 'Password must not exceed 72 characters.',
+            code: 'rest_password_too_long',
+            message: User.PASSWORD_TOO_LONG_MESSAGE,
             data: { status: 400 }
         });
     }
@@ -761,10 +775,12 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
         // path fail differently from the taken one is exactly the oracle the body equality was meant to
         // remove (the account owner can register again; the caller learns nothing either way).
         const passwordHash = await User.hashPassword(password);
-        try {
+        // The paced half: storing the registration and handing a message to the mail system (fresh) or
+        // only the message (taken) — see settleAtUniformPace.
+        await settleAtUniformPace(Date.now(), 'register', async () => {
             // Account mail (core/account-mail) through the editable templates (core/email-templates): the
-            // built-in transport, or a provider plugin only if an administrator allowed it. Handed off, not
-            // awaited — the answer must not wait on (or time) the relay. Every value is escaped by the
+            // built-in transport, or a provider plugin only if an administrator allowed it. The answer does not
+            // wait on (or time) the relay — see settleAtUniformPace. Every value is escaped by the
             // renderer (the login is chosen by an anonymous caller), and the link is drawn by the layout:
             // no edit of the template can drop it or move the token into another field.
             const emailTemplates = require('../core/email-templates');
@@ -778,7 +794,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                     username,
                     email: canonicalEmail,
                     passwordHash,
-                    displayName: displayName || username
+                    displayName: shownName.value || username
                 }, VERIFY_TTL_MS);
                 // The site's link base (core/site-address) — never this request's Host: whoever calls this
                 // endpoint must not be able to choose which host receives the verification token.
@@ -789,9 +805,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
                     actionUrl: link,
                 });
             }
-        } catch (error) {
-            log.warn({ err: error }, '[register] a registration past the identity checks did not complete');
-        }
+        });
 
         // No session cookie and no `user`: the body is the one an already-registered address gets.
         return res.status(201).json({ verificationRequired: true, message: VERIFY_MESSAGE });
@@ -806,7 +820,7 @@ router.post('/register', asyncHandler(async (req: Request, res: Response) => {
             username,
             email,
             password,
-            displayName: displayName || username,
+            displayName: shownName.value || username,
             role: defaultRole
         });
     } catch (error) {
@@ -1393,8 +1407,7 @@ router.post('/logout', asyncHandler(async (req: Request, res: Response) => {
     let actorId: any = null;
     let scope: 'session' | 'all' | null = null;
     try {
-        const ah = req.headers.authorization;
-        let token = (ah && ah.startsWith('Bearer ')) ? ah.substring(7) : null;
+        let token = bearerToken(req);
         // sessionCookie(), not req.cookies directly: cookie-parser JSON-decodes any `j:`-prefixed value,
         // so the raw bag can hand back an Array/Object and verifyToken would throw on it.
         if (!token) token = sessionCookie(req);
@@ -1482,7 +1495,7 @@ async function mailReady(): Promise<boolean> {
 // deliver would strand every new account. Mirrors password reset's degrade-to-unavailable posture.
 async function emailVerificationRequired(): Promise<boolean> {
     try {
-        if (String(await getOption('require_email_verification', '0')) !== '1') return false;
+        if (!require('../core/options').toBooleanOption(await getOption('require_email_verification', '0'), false)) return false;
         return await mailReady();
     } catch {
         return false;
@@ -1585,19 +1598,28 @@ router.get('/password-reset-available', asyncHandler(async (_req: Request, res: 
  *         description: Rate limited by the strict per-IP auth limiter.
  */
 router.post('/forgot-password', asyncHandler(async (req: Request, res: Response) => {
+    const startedAt = Date.now();
     const login = String((req.body && req.body.login) || '').trim();
     const ok = () => res.json({ ok: true, message: 'If an account with a recovery email exists, a reset link has been sent.' });
     if (!login) return ok();
     if (!(await mailReady())) return ok();
 
+    // Everything that depends on whether the account exists runs inside settleAtUniformPace: the answer
+    // leaves at the same moment whichever way it went (see there).
+    await settleAtUniformPace(startedAt, 'forgot-password', () => sendPasswordReset(req, login));
+    return ok();
+}));
+
+/** The account-dependent half of POST /auth/forgot-password: find the account, mint the link, send it. */
+async function sendPasswordReset(req: Request, login: string): Promise<void> {
     // An '@' identifier is resolved as an EMAIL first (User.findByIdentifier): trying the login first let a
     // username equal to someone else's email receive that person's reset link.
     let user: any;
     try { user = await User.findByIdentifier(login); } catch { user = null; }
-    if (!user) return ok();
+    if (!user) return;
 
     const to = await recoveryTarget(user);
-    if (!to) return ok();
+    if (!to) return;
 
     // Mint a single-use token; persist only its SHA-256 hash + expiry (never the raw token).
     const { raw, hash } = mintSingleUseToken();
@@ -1623,9 +1645,27 @@ router.post('/forgot-password', asyncHandler(async (req: Request, res: Response)
             actionUrl: link,
         });
     } catch { /* swallow send errors — keep the response uniform, don't leak mail-infra state */ }
+}
 
-    return ok();
-}));
+/**
+ * THE ANSWER LEAVES AT A FIXED PACE. The anonymous account flows (forgot-password, sign-up with email
+ * verification) answer the same body whether or not an account matched, but the work behind that body
+ * differs — a lookup that finds nothing returns at once, a match writes a token and hands a message to
+ * the mail system — and the time to answer told the two apart. Here the answer leaves UNIFORM_ANSWER_MS
+ * after `startedAt` whichever branch ran: the work is sized to finish well inside that, so both answers
+ * wait for the same floor. Should the work overrun it (a database under heavy load), the answer waits for
+ * it, up to UNIFORM_ANSWER_CAP_MS, so a caller is never told "done" before the link exists; past the cap
+ * it finishes on its own. Errors are logged, never answered.
+ */
+const UNIFORM_ANSWER_MS = 800;
+const UNIFORM_ANSWER_CAP_MS = 10_000;
+async function settleAtUniformPace(startedAt: number, what: string, work: () => Promise<unknown>): Promise<void> {
+    const running = Promise.resolve().then(work).catch((e) => { log.warn({ err: e }, `[${what}] background step did not complete`); });
+    await new Promise((r) => setTimeout(r, Math.max(0, UNIFORM_ANSWER_MS - (Date.now() - startedAt))));
+    let cap: ReturnType<typeof setTimeout> | undefined;
+    await Promise.race([running, new Promise((r) => { cap = setTimeout(r, Math.max(0, UNIFORM_ANSWER_CAP_MS - (Date.now() - startedAt))); })]);
+    clearTimeout(cap);
+}
 
 /**
  * POST /auth/reset-password
@@ -1674,7 +1714,7 @@ router.post('/forgot-password', asyncHandler(async (req: Request, res: Response)
  *         description: >-
  *           rest_invalid_reset (missing, unknown, expired or already-consumed link — one uniform answer,
  *           so a bad token never reveals whether the account exists), rest_weak_password (under 8
- *           characters) or rest_invalid_param (over 72 characters).
+ *           characters) or rest_password_too_long (over 72 bytes).
  *         content:
  *           application/json:
  *             schema:
@@ -1696,7 +1736,7 @@ router.post('/reset-password', asyncHandler(async (req: Request, res: Response) 
     const bad = () => res.status(400).json({ code: 'rest_invalid_reset', message: 'This reset link is invalid or has expired. Please request a new one.', data: { status: 400 } });
     if (!uid || !token || !password) return bad();
     if (password.length < 8) return res.status(400).json({ code: 'rest_weak_password', message: 'Password must be at least 8 characters.', data: { status: 400 } });
-    if (password.length > 72) return res.status(400).json({ code: 'rest_invalid_param', message: 'Password must not exceed 72 characters.', data: { status: 400 } });
+    if (User.passwordTooLong(password)) return res.status(400).json({ code: 'rest_password_too_long', message: User.PASSWORD_TOO_LONG_MESSAGE, data: { status: 400 } });
 
     let user: any;
     try { user = await User.findById(uid); } catch { user = null; }
@@ -1707,11 +1747,13 @@ router.post('/reset-password', asyncHandler(async (req: Request, res: Response) 
     // Single-use token: constant-time hash compare + expiry (shared helper — same scheme as verify-email).
     if (!singleUseTokenValid(token, storedHash, expires)) return bad();
 
-    // User.update() bcrypt-hashes the password AND stamps token_valid_after (revokes every session);
-    // then consume the single-use token so the link cannot be replayed.
-    await User.update(uid, { password });
-    await User.updateMeta(uid, 'password_reset_hash', '');
+    // CONSUME the single-use token BEFORE anything is written, atomically: the stored hash is cleared with a
+    // compare-and-set on the exact value just checked, and only the request whose clear wins goes on. Two
+    // concurrent requests with the same link used to both pass the check and both set a password.
+    if (!(await User.compareAndSetMeta(uid, 'password_reset_hash', storedHash, ''))) return bad();
     await User.updateMeta(uid, 'password_reset_expires', '0');
+    // User.update() bcrypt-hashes the password AND stamps token_valid_after (revokes every session).
+    await User.update(uid, { password });
 
     // A credential replaced through the anonymous recovery flow, and it revoked every session of that
     // account. The actor IS the account: possession of the emailed single-use token is the only proof
@@ -2167,8 +2209,10 @@ async function requireMfaForMachineCredential(req: Request, res: Response, kind:
  *                     items:
  *                       type: string
  *               expiresInDays:
- *                 type: number
- *                 description: Positive number of days until expiry; omit for a token that never expires.
+ *                 type: integer
+ *                 minimum: 1
+ *                 maximum: 3650
+ *                 description: Whole number of days until expiry (1 to 3650); omit for a token that never expires.
  *               mfaCode:
  *                 type: string
  *                 description: >-
@@ -2200,7 +2244,7 @@ async function requireMfaForMachineCredential(req: Request, res: Response, kind:
  *       400:
  *         description: >-
  *           rest_token_limit (100 active tokens already), rest_invalid_param (expiresInDays is not a
- *           positive number), rest_invalid_scope, or rest_mfa_invalid (the step-up `mfaCode` was wrong;
+ *           whole number from 1 to 3650), rest_invalid_scope, or rest_mfa_invalid (the step-up `mfaCode` was wrong;
  *           recorded as an `auth.token.create_refused` audit row).
  *         content:
  *           application/json:
@@ -2259,10 +2303,11 @@ router.post('/tokens', authenticate, sessionOnly, refuseHandoffSession, can('man
         });
     }
 
-    if (expiresInDays != null && (!Number.isFinite(Number(expiresInDays)) || Number(expiresInDays) <= 0)) {
+    const expiryProblem = ApiToken.expiryDaysProblem(expiresInDays);
+    if (expiryProblem) {
         return res.status(400).json({
             code: 'rest_invalid_param',
-            message: 'expiresInDays must be a positive number of days.',
+            message: expiryProblem,
             data: { status: 400 }
         });
     }
@@ -2523,7 +2568,11 @@ router.post('/mfa', asyncHandler(async (req: Request, res: Response) => {
             return res.status(401).json({ code: 'rest_mfa_invalid', message: 'Invalid authentication code.', data: { status: 401 } });
         }
         await clearLoginFails(lockKey);
-        await mfa.markChallengeUsed(user.id, challenge);
+        // ONE session per challenge, decided atomically: a concurrent request that also presented a valid
+        // code for the same challenge loses here (core/mfa claimChallenge).
+        if (!(await mfa.claimChallenge(user.id, challenge))) {
+            return res.status(401).json({ code: 'rest_mfa_challenge_invalid', message: 'Your login session expired. Please sign in again.', data: { status: 401 } });
+        }
         // The second half of a 2FA login: THIS is where the session is issued, so this is where the
         // completed login is recorded (POST /auth/login only handed out a challenge).
         await recordAudit(user.id, 'auth.login.success', 'user', user.id, {
@@ -3129,6 +3178,8 @@ router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, unboundSessionOnly
 }));
 
 module.exports = router;
+// The audit digest of an identifier that names no account (tests compare it to the stored rows).
+module.exports.attemptDigest = attemptDigest;
 // Exposed so any other credential-checking endpoint shares the SAME per-account lockout — otherwise it
 // becomes an unthrottled password oracle that bypasses this one (audit MEDIUM).
 module.exports.isLoginLocked = isLoginLocked;

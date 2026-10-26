@@ -909,7 +909,7 @@ test('CHANNEL 3 — the MFA doors answer on the merits even with their own bucke
             prepare: async () => {
                 await mfa.disable(OWNER_ID);
                 const { secret } = await mfa.beginEnroll(OWNER_ID, `${OWNER}@example.com`);
-                assert.ok((await mfa.completeEnroll(OWNER_ID, totp.totp(secret))).ok, 'enrolment must succeed');
+                assert.ok((await mfa.completeEnroll(OWNER_ID, totp.totp(secret, { time: Math.floor(Date.now() / 1000) - 30 }))).ok, 'enrolment must succeed');
                 return secret;
             },
             body: (secret: string) => ({ code: totp.totp(secret), currentPassword: PASSWORD }),
@@ -919,7 +919,7 @@ test('CHANNEL 3 — the MFA doors answer on the merits even with their own bucke
             prepare: async () => {
                 await mfa.disable(OWNER_ID);
                 const { secret } = await mfa.beginEnroll(OWNER_ID, `${OWNER}@example.com`);
-                assert.ok((await mfa.completeEnroll(OWNER_ID, totp.totp(secret))).ok, 'enrolment must succeed');
+                assert.ok((await mfa.completeEnroll(OWNER_ID, totp.totp(secret, { time: Math.floor(Date.now() / 1000) - 30 }))).ok, 'enrolment must succeed');
                 return secret;
             },
             body: (secret: string) => ({ code: totp.totp(secret), currentPassword: PASSWORD }),
@@ -1004,7 +1004,7 @@ test('twelve wrong codes at /auth/mfa/disable do NOT lock the owner out of the i
 
     await mfa.disable(OWNER_ID);
     const { secret } = await mfa.beginEnroll(OWNER_ID, `${OWNER}@example.com`);
-    assert.ok((await mfa.completeEnroll(OWNER_ID, totp.totp(secret))).ok, 'enrolment must succeed');
+    assert.ok((await mfa.completeEnroll(OWNER_ID, totp.totp(secret, { time: Math.floor(Date.now() / 1000) - 30 }))).ok, 'enrolment must succeed');
     await auth.clearLoginFails(auth.lockBucket('mfa', OWNER_ID));
     await auth.clearLoginFails(auth.lockBucket('mfa_manage', OWNER_ID));
     await auth.clearLoginFails(auth.lockBucket('login', OWNER));
@@ -1076,7 +1076,7 @@ test('the escalating wait bounds THROUGHPUT, not just latency: a burst cannot al
 
     await mfa.disable(OWNER_ID);
     const { secret } = await mfa.beginEnroll(OWNER_ID, `${OWNER}@example.com`);
-    assert.ok((await mfa.completeEnroll(OWNER_ID, totp.totp(secret))).ok, 'enrolment must succeed');
+    assert.ok((await mfa.completeEnroll(OWNER_ID, totp.totp(secret, { time: Math.floor(Date.now() / 1000) - 30 }))).ok, 'enrolment must succeed');
 
     // Put the ladder somewhere small but non-zero: enough that a guess must WAIT, little enough that the
     // test is quick. The exact rung does not matter — only that a wait is owed.

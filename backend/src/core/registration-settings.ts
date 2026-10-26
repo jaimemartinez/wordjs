@@ -29,12 +29,12 @@ interface RegistrationSetting {
 }
 
 const REGISTRATION_SETTINGS: ReadonlyMap<string, RegistrationSetting> = new Map<string, RegistrationSetting>([
-    // routes/auth.ts: `if (!registrationAllowed || registrationAllowed == '0')` refuses.
-    ['users_can_register', { fallback: 0, effective: (v) => (!v || v == '0' ? 'off' : 'on') }],
+    // routes/auth.ts reads it with core/options toBooleanOption (unreadable = off).
+    ['users_can_register', { fallback: 0, effective: (v) => (require('./options').toBooleanOption(v, false) ? 'on' : 'off') }],
     // The role User.create receives for a self-registered account.
     ['default_role', { fallback: 'subscriber', effective: (v) => (v === null || v === undefined ? '' : String(v)) }],
-    // routes/auth.ts: `String(await getOption('require_email_verification', '0')) !== '1'` means off.
-    ['require_email_verification', { fallback: '0', effective: (v) => (String(v) === '1' ? 'on' : 'off') }],
+    // routes/auth.ts reads it with core/options toBooleanOption (unreadable = off).
+    ['require_email_verification', { fallback: '0', effective: (v) => (require('./options').toBooleanOption(v, false) ? 'on' : 'off') }],
 ]);
 
 /** The provider's "I can deliver" flag, which require_email_verification depends on (see above). */

@@ -528,6 +528,15 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
  *                 description: >-
  *                   Plugin-declared per-account grants (GET /users/account-capabilities), slug → on/off.
  *                   Only settable here and on PUT /users/{id} by a caller holding edit_users; never self-service.
+ *               currentPassword:
+ *                 type: string
+ *                 description: >-
+ *                   The caller's own password. Required when the new account gets a privileged role
+ *                   (administrator, or a role holding user, role or settings management); without it the
+ *                   answer is 403 rest_sudo_required.
+ *               mfaCode:
+ *                 type: string
+ *                 description: A current code, with currentPassword, when the caller has two-factor authentication (403 rest_mfa_step_up_required).
  *     parameters:
  *       - in: header
  *         name: X-CSRF-Token
@@ -582,6 +591,8 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
     }
 
     if (rejectWeakPassword(res, password)) return;
+    const shownName = displayNameOrRefuse(res, displayName);
+    if (!shownName) return;
 
     // The username rule (models/User.ts) — User.create enforces it too; checked here for a clean 400.
     const usernameProblem = User.usernameError(username);
@@ -605,12 +616,15 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
     const capPlan = await accountCapabilities.planAccountCapabilityWrite(null, withLegacyBodyField(req.body));
     if (capPlan.error) return res.status(400).json(capPlan.error);
 
+    // A new privileged account is authority handed out: the creator proves it is really them first.
+    if (isPrivilegedRole(role) && await requireAccountStepUp(req, res)) return;
+
     try {
         const user = await User.create({
             username,
             email,
             password,
-            displayName,
+            displayName: shownName.value,
             role,
             personalEmail,
             // The user form's plugin toggles. Safe to forward: this route is `isAdmin`, so the caller is by
@@ -673,8 +687,12 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *               currentPassword:
  *                 type: string
  *                 description: >-
- *                   Sudo re-auth. Required only for a SELF edit that changes the password or a
- *                   recovery-bearing address; an edit_users caller acting on someone else never needs it.
+ *                   Sudo re-auth. Required for a SELF edit that changes the password or a recovery-bearing
+ *                   address, and for an edit of SOMEONE ELSE that changes a privileged account's password or
+ *                   address, or moves an account into a privileged role (403 rest_sudo_required without it).
+ *               mfaCode:
+ *                 type: string
+ *                 description: With currentPassword on an edit of someone else, a current code when the caller has two-factor authentication.
  *               role:
  *                 type: string
  *                 description: >-
@@ -831,12 +849,43 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
 // re-auth itself is no longer chained here — it is decided per TOUCHED FIELD by selfEditNeedsSudo below
 // and applied ONCE, just before the write, by both self-service doors. Returns true if it already sent a
 // response (caller must return), false to proceed.
+/**
+ * THE DISPLAY NAME, as every write of it stores it: text (anything else is a 400 — an object or an array
+ * reached the database as "[object Object]"), without markup (tags removed by the HTML parser, never by a
+ * pattern), whitespace trimmed and at most DISPLAY_NAME_MAX characters. undefined/null = not supplied.
+ * Answers a 400 itself and returns undefined when the value is unusable; otherwise `{ value }`.
+ */
+const DISPLAY_NAME_MAX = 250;
+function displayNameOrRefuse(res: Response, raw: any): { value: string | undefined } | undefined {
+    if (raw === undefined || raw === null) return { value: undefined };
+    if (typeof raw !== 'string') {
+        res.status(400).json({ code: 'rest_invalid_param', message: 'displayName must be text.', data: { status: 400, params: ['displayName'] } });
+        return undefined;
+    }
+    // The parser drops every tag and escapes what is left; the escapes are turned back into the characters
+    // a name may contain, except the angle brackets, which a display name never needs.
+    const text = String(require('../core/formatting').stripTags(raw) || '')
+        .split('&lt;').join('').split('&gt;').join('')
+        .split('&quot;').join('"').split('&#39;').join("'").split('&amp;').join('&')
+        .replace(/\s+/g, ' ').trim();
+    if (text.length > DISPLAY_NAME_MAX) {
+        res.status(400).json({ code: 'rest_invalid_param', message: `displayName must be at most ${DISPLAY_NAME_MAX} characters.`, data: { status: 400, params: ['displayName'] } });
+        return undefined;
+    }
+    return { value: text || undefined };
+}
+
 function rejectWeakPassword(res: Response, password: any): boolean {
     // A blank one (absent, empty, whitespace) is "not supplied": the sink skips it (ACCOUNT_SECURITY_FIELDS
     // declares password 'nonblank'), so it is not a weak password either.
     if (!password || !String(password).trim()) return false;
     if (String(password).length < 8) {
         res.status(400).json({ code: 'rest_weak_password', message: 'Password must be at least 8 characters.', data: { status: 400 } });
+        return true;
+    }
+    // ...and short enough for bcrypt to read all of it (72 BYTES — User.passwordTooLong).
+    if (User.passwordTooLong(String(password))) {
+        res.status(400).json({ code: 'rest_password_too_long', message: User.PASSWORD_TOO_LONG_MESSAGE, data: { status: 400 } });
         return true;
     }
     return false;
@@ -1094,7 +1143,8 @@ async function requireSudoPassword(req: Request, res: Response, currentPassword:
         // and the delay would bound latency instead of throughput.
         const wait = sudoDelayMs(await sudoFailCount(userId));
         if (wait > 0) await new Promise((resolve) => setTimeout(resolve, wait));
-        await User.authenticate(req.user.userLogin, String(currentPassword || ''));
+        // Against the hash of the account this session belongs to (by id), never re-resolved by name.
+        await User.verifyPassword(Number(req.user.id), String(currentPassword || ''));
         await sudoClearFails(userId);
         Object.defineProperty(req, SUDO_VERIFIED, { value: true, configurable: true });
         return false;
@@ -1124,6 +1174,72 @@ function isPrivilegedTarget(user: any): boolean {
             user.can('manage_options') || user.can('manage_roles')
         ))
     ));
+}
+
+/** The capabilities that make an account privileged (isPrivilegedTarget), asked of a ROLE before anyone holds it. */
+const PRIVILEGED_CAPS = ['*', 'edit_users', 'promote_users', 'manage_options', 'manage_roles'];
+function isPrivilegedRole(role: unknown): boolean {
+    if (typeof role !== 'string' || !role) return false;
+    if (role === 'administrator') return true;
+    const def = (getRoles() || {})[role];
+    const caps: string[] = (def && Array.isArray(def.capabilities)) ? def.capabilities : [];
+    return caps.some((c) => PRIVILEGED_CAPS.includes(c));
+}
+
+/**
+ * THE STEP-UP FOR AUTHORITY OVER OTHER PRIVILEGED ACCOUNTS: creating one, promoting someone into one,
+ * changing another privileged account's password or sign-in/recovery address, and resetting anyone's
+ * second factor. Each of these hands its caller a privileged account they did not have, so a session
+ * alone (a stolen cookie, an unattended browser) is not enough: the caller re-enters their own password
+ * (`currentPassword`) and, when their account has two-factor authentication, a current code (`mfaCode`)
+ * — the same proof the network switch and Admin → Updates ask for (routes/network.ts requireStepUp).
+ *
+ * A request that carries no password at all is answered 403 `rest_sudo_required`, which the panel turns
+ * into the password field (and then the code field on `rest_mfa_step_up_required`); it is not counted as
+ * a failed attempt. Resolves true when it has answered the request.
+ *
+ * SUDO WINDOW: a successful step-up holds for ACCOUNT_STEP_UP_WINDOW_MS for the same signed-in session
+ * (its `ses` id) on this process, so one confirmation covers a bulk role change — a one-time code cannot
+ * be presented twice. Kept in this process only: a request that lands on another node, or a session
+ * without an id, simply asks again.
+ */
+const ACCOUNT_STEP_UP_WINDOW_MS = 5 * 60 * 1000;
+const _accountStepUps = new Map<string, number>();
+function accountStepUpKey(req: Request): string | null {
+    const ses = require('../middleware/auth').sessionIdOf(req);
+    if (!ses || !req.user) return null;
+    return `${require('../core/site-context').siteKeyPrefix()}${Number(req.user.id)}|${ses}`;
+}
+async function requireAccountStepUp(req: Request, res: Response): Promise<boolean> {
+    const key = accountStepUpKey(req);
+    const now = Date.now();
+    if (key && (_accountStepUps.get(key) || 0) > now) return false;
+    if (await requireSudoConfirmation(req, res)) return true;
+    const proof = await require('./network').requireStepUp(req, res);
+    if (proof === null) return true;
+    if (key) {
+        if (_accountStepUps.size > 1000) for (const [k, until] of _accountStepUps) if (until <= now) _accountStepUps.delete(k);
+        _accountStepUps.set(key, now + ACCOUNT_STEP_UP_WINDOW_MS);
+    }
+    return false;
+}
+
+/**
+ * requireSudoPassword for an action that only SOMETIMES needs it (the panel sends no password until it is
+ * asked for one): no `currentPassword` at all is answered 403 `rest_sudo_required` without counting as a
+ * failed attempt; a wrong one is a failed attempt like everywhere else. Resolves true when it answered.
+ */
+async function requireSudoConfirmation(req: Request, res: Response): Promise<boolean> {
+    const pw = (req.body || {}).currentPassword;
+    if (typeof pw !== 'string' || !pw) {
+        res.status(403).json({
+            code: 'rest_sudo_required',
+            message: 'Confirm this change with your current password.',
+            data: { status: 403 }
+        });
+        return true;
+    }
+    return requireSudoPassword(req, res, pw);
 }
 
 /**
@@ -1217,7 +1333,9 @@ router.put('/me', networkHandoff.refuseHandoffSession, asyncHandler(async (req: 
     // API token could set any account's password to whitespace (a credential the attacker knows and the
     // owner does not), and `[]` reached bcrypt and came back as an unmapped 500. One normalizer, so the
     // value the gate judged is the value that is written.
-    const updateData: any = { email: suppliedText(email), displayName, password: suppliedText(password), url };
+    const shownName = displayNameOrRefuse(res, displayName);
+    if (!shownName) return;
+    const updateData: any = { email: suppliedText(email), displayName: shownName.value, password: suppliedText(password), url };
     // SINK CRITERION: 'presence' (see ACCOUNT_SECURITY_FIELDS) — supplying the field at all is a write,
     // and a blank one is how the address is CLEARED. The VALUE goes through the one normalizer, so what
     // is stored for null/'' is '' and never the string "null".
@@ -1398,7 +1516,9 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     // API token could set any account's password to whitespace (a credential the attacker knows and the
     // owner does not), and `[]` reached bcrypt and came back as an unmapped 500. One normalizer, so the
     // value the gate judged is the value that is written.
-    const updateData: any = { email: suppliedText(email), displayName, password: suppliedText(password), url };
+    const shownName = displayNameOrRefuse(res, displayName);
+    if (!shownName) return;
+    const updateData: any = { email: suppliedText(email), displayName: shownName.value, password: suppliedText(password), url };
 
     // Uniform 400 for a malformed or already-taken primary email (target = the account being edited), the
     // same two halves as PUT /me (primaryEmailMalformed / primaryEmailTakenByAnother): the format here, the
@@ -1534,15 +1654,24 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     // write) and driven by the same helper, so the two self-service doors cannot drift again. Only a real
     // change to a recovery-bearing field (or a new password) demands it; an admin editing SOMEONE ELSE is
     // untouched, because that path is gated on capabilities, not on proving personal ownership.
-    const selfRecoveryChanged = isOwn && await selfRecoveryAddressChanged(user, req.body);
+    const recoveryChanged = await selfRecoveryAddressChanged(user, req.body);
+    const selfRecoveryChanged = isOwn && recoveryChanged;
     // Same normalization as the sink a few lines up — see PUT /me.
     if (isOwn && (suppliedText(password) || selfRecoveryChanged) && await requireSudoPassword(req, res, req.body.currentPassword)) return;
+    // ANOTHER privileged account's credentials or addresses, or promoting an account into a privileged
+    // role: whoever does it ends up able to sign in as (or to be) a privileged account, so the caller
+    // re-authenticates — see requireAccountStepUp.
+    if (!isOwn && ((isPrivilegedTarget(user) && (suppliedText(password) || recoveryChanged))
+        || (updateData.role !== undefined && isPrivilegedRole(updateData.role)))
+        && await requireAccountStepUp(req, res)) return;
 
     // Last gate before the write, after sudo — see primaryEmailTakenByAnother.
     if (await primaryEmailTakenByAnother(email, userId)) return unusableEmail(res);
 
     const updated = await User.update(userId, updateData);
-    if (selfRecoveryChanged) await invalidatePendingPasswordReset(userId);
+    // A reset link already sent to an address that is no longer the account's must die with it, whoever
+    // changed the address.
+    if (recoveryChanged) await invalidatePendingPasswordReset(userId);
 
     // AUDIT: exactly one row per security-relevant change — a role change. No secret material.
     if (updateData.role !== undefined) {
@@ -1581,7 +1710,9 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
  *     description: >-
  *       The way OUT of a 2FA lockout — clears the target's mfa_* meta so they can log in with their
  *       password again and re-enroll. NEVER on your own account: disabling your own second factor still
- *       goes through POST /auth/mfa/disable, which demands a current code.
+ *       goes through POST /auth/mfa/disable, which demands a current code. The caller confirms with their own
+ *       password (currentPassword, 403 rest_sudo_required without it) and, when the caller has two-factor
+ *       authentication, a current code (mfaCode).
  *     tags: [Users]
  *     security:
  *       - bearerAuth: []
@@ -1671,6 +1802,9 @@ router.post('/:id/mfa/reset', can('edit_users'), asyncHandler(async (req: Reques
             data: { status: 403 }
         });
     }
+
+    // Removing a second factor is how an account is opened to its password alone: the caller re-authenticates.
+    if (await requireAccountStepUp(req, res)) return;
 
     // disable() deletes EVERY mfa_* key (secret, pending secret, backup-code hashes, enabled flag and the
     // anti-replay counter), so the account is left exactly as if it had never enrolled.
@@ -1970,6 +2104,9 @@ module.exports = router;
 // keeps paying for. Assigned after the export, exactly like routes/auth.ts does with its lockout helpers.
 module.exports.requireSudoPassword = requireSudoPassword;
 module.exports.sudoPasswordVerified = sudoPasswordVerified;
+module.exports.requireAccountStepUp = requireAccountStepUp;
+module.exports.displayNameOrRefuse = displayNameOrRefuse;
+module.exports.requireSudoConfirmation = requireSudoConfirmation;
 // The sudo delay POLICY, exported so a test can assert the property that matters — that for EVERY
 // failure count it returns a finite, bounded wait and can never mean "refused" — across the whole
 // domain instead of the handful of counts a route-driven test could afford to reach.
