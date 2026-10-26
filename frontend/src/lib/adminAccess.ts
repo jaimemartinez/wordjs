@@ -110,6 +110,9 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     { href: "/admin/audit", label: "nav.audit", icon: "fa-clipboard-list", cap: "manage_options" },
     { href: "/admin/hooks", label: "nav.hooks", icon: "fa-microscope", cap: "manage_options", mainSiteOnly: true, networkWide: true },
     { href: "/admin/db-migration", label: "nav.dbMigration", icon: "fa-database", cap: "manage_options", mainSiteOnly: true, networkWide: true },
+    // Duplicate records (backend routes/database-integrity.ts): the unique rules this site's database
+    // enforces, and resolving the stored duplicates that keep one from being enforced. Every site has its own.
+    { href: "/admin/database-integrity", label: "nav.databaseIntegrity", icon: "fa-clone", cap: "manage_options" },
     // Outgoing webhooks — admin only (they can exfiltrate content changes), mirrors the backend isAdmin gate.
     { href: "/admin/webhooks", label: "nav.webhooks", icon: "fa-bolt", cap: "manage_options" },
     // Multisite: the network screen (the sites of the network) — network administrators, main site only.
