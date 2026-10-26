@@ -4,6 +4,8 @@
  */
 
 const database = require('../config/database');
+// An id no column can hold names no row: findById answers null for it (core/query-params).
+const { isStorableId } = require('../core/query-params');
 const { clampLimit, clampOffset } = require('../core/pagination');
 const { db, dbAsync, getDbType } = database;
 const { doShortcode, doShortcodeAsync, stripShortcodes } = require('../core/shortcodes');
@@ -874,7 +876,8 @@ class Post {
      * Equivalent to get_post()
      */
     static async findById(id: any) {
-        if (!id) return null;
+        // An id no column can hold names no row (core/query-params isStorableId) — never a driver error.
+        if (!id || !isStorableId(id)) return null;
 
         // 1. Try Cache
         const cacheKey = `post:id:${id}`;

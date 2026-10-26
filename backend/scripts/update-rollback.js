@@ -44,9 +44,12 @@ function rollBack({ file, root, log = console.log, spawnSync = require('child_pr
     if (!s) return false;
     log(`↩️  [update] WordJS ${s.to} did not start; putting ${s.fromTag} back...`);
     writeState(file, { ...s, state: 'failed', step: 'rollback', error: `WordJS ${s.to} did not start.` });
-    const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    const r = spawnSync(npx, ['--yes', 'create-wordjs@latest', 'upgrade', root, '--yes', '--version', s.fromTag, '--force'], {
-        cwd: root, stdio: 'inherit', shell: process.platform === 'win32', env: { ...process.env, npm_config_update_notifier: 'false' },
+    // The upgrade CLI the installed release shipped, run by this Node binary with no shell (the same
+    // command core/updater runs) — never a package resolved from the registry at rollback time.
+    const cli = path.join(root, 'packages', 'create-wordjs', 'index.js');
+    const r = spawnSync(process.execPath, [cli, 'upgrade', root, '--yes', '--version', s.fromTag, '--force'], {
+        cwd: root, stdio: 'inherit', shell: false, windowsHide: true,
+        env: { ...process.env, NODE_PATH: path.join(root, 'backend', 'node_modules'), npm_config_update_notifier: 'false' },
     });
     const ok = r && r.status === 0;
     writeState(file, {

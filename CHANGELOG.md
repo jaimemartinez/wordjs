@@ -6,28 +6,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
-### Added
-- **conference-manager 2.36.20: «Cierre de inscripciones».**
-  - **A general date.** The «Campos» section has a new «Cierre de inscripciones» date and hour. From then on the
-    coordinators' portal registers nobody: «Registrar Nuevo» is disabled and the portal says when registration
-    closed. The administration can still register people. Without a date, nothing changes.
-  - **A date per locality.** Each card in «Localidades» shows the date in force for that locality. «Cambiar» gives
-    the locality its own date, earlier or later than the general one, and «Usar la general» drops it again.
-- **conference-manager 2.36.19: filters in «Localidades».**
-  - **Search:** by the locality or its coordinator (name, phone, e-mail). Accents are ignored, every word must match,
-    and a number matches the phone's digits.
-  - **Quick filters with counts:** Hospedaje por validar, Hospedaje validado, Sin encargado, Sin correo del
-    encargado, Bienvenida pendiente (never sent, or sent to an old address), and Cupo lleno. A filter appears only
-    when it would show something.
-  - **The result:** «n de total localidades» with «Quitar filtros», and a message when nothing matches.
-- **conference-manager 2.36.18: meal groups.**
-  - **Companions for minors.** «Turnos» has two new settings: «Edad para contar como menor» (empty = off) and
-    «Acompañantes por menor». A priority member younger than that age brings up to that many family members without
-    points into their group, instead of «Acompañantes por persona prioritaria» (which still applies to adults).
-  - **One approximate time per group.** «Mi inscripción» now says «Grupo C · hacia las 12:15», the start of the
-    group's turn rounded to 5 minutes, instead of an exact «Tu turno: 12:10–12:25». The exact range no longer
-    reaches the phone.
-
 ### Security
 - **Cluster hardening: the gateway, its control plane and the frontend's Content-Security-Policy.**
   - **Each upstream must prove the role it serves.** The gateway now checks that an upstream's cluster certificate
@@ -62,6 +40,185 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     identity skips verification.
 
 ### Fixed
+- **mail-server 3.3.1: a slow destination no longer restarts the mail server.** WordJS gives an isolated plugin
+  30 seconds to answer, and stops it when it takes longer. Delivering straight to a mail server that does not
+  answer can take minutes, so «Retry now» answered «Isolated plugin error» and the mail server was restarted
+  in the middle of the delivery. A site message cut off that way (an account e-mail, a plugin's mail, a
+  notification) stayed «queued» in *System sent*, did not appear in the queue and was never retried.
+  - **«Retry now»** (in *Queue*, *System sent* and a message in *Sent*) answers within 10 seconds. A delivery
+    still running then goes on in the background, the message shows as retrying, and its status updates by
+    itself. A second click while it runs starts nothing. If that delivery never reports back, the queue
+    retries the message 15 minutes later.
+  - **Sending from the mailbox** with the undo window off, **the delivery test** and **site mail** answer within
+    20 seconds. Site mail is reported as accepted and is delivered in the background. The test says the
+    recipient's server has not answered yet, and its result appears on the test message in *Sent*.
+  - **Site messages stuck as «queued»**, whose first delivery was cut off between 15 minutes and 3 days ago, go
+    back to the queue by themselves.
+  - **The queue lists only what is still waiting to go out:** scheduled sends and retries. A permanent failure
+    stays in *System sent* (status «Failed») and on its message in *Sent*, and it is retried from there. The
+    queue figure on the overview and the tab counter count only scheduled sends and retries.
+
+## [2.11.10] - 2026-10-26
+
+### Security
+- **Untrusted input, downloads and the updater, hardened.**
+  - **URLs in shortcodes.** `escUrl` percent-encodes quotes, angle brackets and backticks in every scheme, and the
+    `[embed]`, `[button]`, `[audio]` and `[video]` shortcodes escape each URL for its attribute. Media sources accept
+    `http(s)` only.
+  - **SVG uploads and imports.** URL attributes (`href`, `xlink:href`) are scheme-checked explicitly, `style` keeps
+    presentation properties with plain values or a same-document `url(#id)`, `<image>` no longer accepts `data:`
+    URLs, and camelCase SVG elements (`linearGradient`, `clipPath`, filters) are kept instead of being dropped.
+  - **WordPress import, private source.** "Allow downloads from this site's private address" is offered and honoured
+    on the primary site only (or anywhere with `WORDJS_IMPORT_ALLOW_PRIVATE_SOURCE=1`; elsewhere `403
+    private_source_not_allowed`). Loopback is refused in every numeric spelling, and from a private source only files
+    whose content signature confirms their type are stored.
+  - **Download deadlines.** WordPress-import attachments (`deadlineMs`, default 5 minutes) and marketplace downloads
+    (2 minutes) now have an absolute time limit besides the idle timeout; the update check closes its socket at 10 s.
+  - **Inbound SMTP (`smtp:inbound`).** The host listener reserves every in-progress message from one in-flight byte
+    budget and answers `452` when it is spent; one client address may hold a limited number of connections (`421`
+    beyond it). New listen options: `maxInflightBytes`, `maxClientsPerIp`.
+  - **Admin → Updates.** The panel runs the upgrade CLI shipped inside the installed release with the server's own
+    Node binary and no shell, instead of fetching `create-wordjs@latest`, and refuses a release that publishes no
+    checksum (`409 update_unverified_release`, shown on the screen). The supervisor's rollback does the same.
+  - **`create-wordjs`.** A release without a checksum is refused unless `--allow-unverified` is passed. The release
+    workflow signs the checksum file (`wordjs-<tag>.zip.sha256.sig`, Ed25519) when its signing key is configured, and
+    the CLI verifies a published signature against the public keys embedded in the package.
+  - **Site import.** Custom tables are limited to the `wjp_<slug>_` tables of plugins and themes installed on the
+    site; the export carries plugin and theme tables only.
+  - **Egress guard.** `198.18.0.0/15` and the local-use NAT64 prefix `64:ff9b:1::/48` are treated as internal.
+  - **Removed** the unused JSON-LD and meta-tag builders from `core/seo-helper` (the frontend renders structured
+    data with its own escaping).
+  - **Author ids and names.** Every `id` in post, comment and block HTML is namespaced as `user-content-<id>` (stored
+    by the backend, applied again by both frontend sanitizer paths), and `name` survives only on form controls, so
+    author markup cannot shadow properties the page relies on. In-page links to the plain fragment (`#intro`) still
+    land on the prefixed target.
+  - **Embeds.** Every embedded `<iframe>` gets the site's own `sandbox` and `allow` values, replacing the author's.
+  - **WordPress import.** Entities in text nodes are decoded (titles and attachment URLs come out as WordPress showed
+    them); a file with a `<!DOCTYPE` is refused; a form option sent more than once is refused with `400
+    rest_invalid_param`.
+  - **Multipart limits.** Every upload route (site import, fonts, WordPress import, plugins, themes, media, GraphQL)
+    bounds field count, field and field-name size, parts and header pairs.
+  - **Inbound SMTP.** No reverse-DNS lookup per connection (`clientHostname` is the address literal), a 5-second
+    shutdown grace and a cap on unauthenticated commands.
+
+### Added
+- **conference-manager 2.36.21: rename a locality.** The pencil next to its name on the «Localidades» card edits it in
+  place (Enter saves, Escape cancels). An empty name, or one another locality of the conference already has, is
+  refused with the reason; the new name also reaches that locality's registrations.
+
+## [2.11.9] - 2026-10-26
+
+### Security
+- **Content authorization follows the record it touches.**
+  - **A trashed entry is read-only until it is restored.** Editing it in place (content, meta, language,
+    translations, a revision restore, live collaboration) answers 409 `rest_post_trashed`, and the post and page
+    editors show a «Restore» screen instead of the editor. Deleting a trashed entry for good, or restoring it, is
+    judged by the status it had before the trash. GraphQL's `restoreContent` now goes through
+    `POST /posts/:id/restore`, like the admin, and applies a requested `status` afterwards with an ordinary update.
+  - **Comment moderation is scoped to the entry.** Holding `moderate_comments` / `edit_comments` lets a role
+    moderate the comments of the entries it may edit. The moderation list and its totals, the single-comment read
+    and every moderation action follow that rule, and a comment edit by a role without `moderate_comments` no
+    longer returns the commenter's e-mail and IP.
+  - **`GET /media/:id/usage`** follows the item's read rule and counts only the entries the caller may read.
+  - **Revision history** is read by the people who work on the entry: its author while they still hold the
+    type's edit capability, or whoever edits others' entries of that type.
+  - **`/types`** shows the definition of a type whose entries are not public only to callers who may edit them.
+- **Request bodies are checked before they are used.**
+  - **Ids in a body** (a comment's post and parent, a form's page, a post's parent and menu order, media
+    folders and the media moved into them, a category's or menu item's parent) must be ids an id column can hold;
+    anything else is a 400/404 instead of a database error. The models' lookups by id answer "not found" for such
+    a value.
+  - **`POST /roles`** takes a text name and a list of at most 500 capability names; the capabilities list
+    ignores a malformed role stored earlier.
+  - **`PUT /comments/:id`** normalizes the author and email like a new comment, and answers 400 for an unknown
+    status.
+  - **`PUT /menus/items/:itemId`** writes only a menu item's own fields, each checked, and a menu location must
+    be a name.
+  - **A webhook's `active`** must be `true` or `false`, and a new taxonomy's `public`, `showInRest` and
+    `showInMenu` are always stored as booleans.
+- **Multisite.** `/health/details` and `/health/site` on the main site take a network administrator. A network
+  administrator's handoff account on a site can no longer be deleted by the site's administrators or rewritten by a
+  site import; the network manages it.
+
+## [2.11.8] - 2026-10-26
+
+### Added
+- **conference-manager 2.36.20: «Cierre de inscripciones».**
+  - **A general date.** The «Campos» section has a new «Cierre de inscripciones» date and hour. From then on the
+    coordinators' portal registers nobody: «Registrar Nuevo» is disabled and the portal says when registration
+    closed. The administration can still register people. Without a date, nothing changes.
+  - **A date per locality.** Each card in «Localidades» shows the date in force for that locality. «Cambiar» gives
+    the locality its own date, earlier or later than the general one, and «Usar la general» drops it again.
+- **conference-manager 2.36.19: filters in «Localidades».**
+  - **Search:** by the locality or its coordinator (name, phone, e-mail). Accents are ignored, every word must match,
+    and a number matches the phone's digits.
+  - **Quick filters with counts:** Hospedaje por validar, Hospedaje validado, Sin encargado, Sin correo del
+    encargado, Bienvenida pendiente (never sent, or sent to an old address), and Cupo lleno. A filter appears only
+    when it would show something.
+  - **The result:** «n de total localidades» with «Quitar filtros», and a message when nothing matches.
+- **conference-manager 2.36.18: meal groups.**
+  - **Companions for minors.** «Turnos» has two new settings: «Edad para contar como menor» (empty = off) and
+    «Acompañantes por menor». A priority member younger than that age brings up to that many family members without
+    points into their group, instead of «Acompañantes por persona prioritaria» (which still applies to adults).
+  - **One approximate time per group.** «Mi inscripción» now says «Grupo C · hacia las 12:15», the start of the
+    group's turn rounded to 5 minutes, instead of an exact «Tu turno: 12:10–12:25». The exact range no longer
+    reaches the phone.
+
+### Security
+- **Sign-in, sessions and two-factor authentication hardened.**
+  - **One reading of the `Authorization` header.** The two-factor policy, every authenticator, the AI-agent
+    endpoint and its rate-limit bucket now read the Bearer credential through one shared function, and the policy
+    for API tokens and agent connections is also checked inside the authenticators that accept them.
+  - **Signing out lasts.** A signed-out session stays revoked for a full session lifetime, including copies of it
+    refreshed earlier.
+  - **The live notification stream is re-checked** while it is open, like the collaboration stream: signing out,
+    «sign out everywhere», a password change, a revoked API token, a deleted account or a two-factor requirement
+    closes it. Query tickets carry the session they were issued from.
+  - **Confirming authority over privileged accounts.** Creating an administrator (or an account with a role that
+    manages users, roles or settings), promoting an account into such a role, changing another privileged account's
+    password or address, and resetting anyone's two-factor authentication now ask for your password, plus a current
+    code when your account has 2FA. The admin shows the fields when they are needed; one confirmation covers a
+    bulk role change for a few minutes.
+  - **Stored connection secrets stay with their server.** Testing Redis or S3 media storage against another
+    server, port, database, endpoint, region or bucket with the saved password or secret asks for your password.
+  - **AI agents.** Turning off «require a person to confirm what agents publish» follows the same two-factor rule
+    as granting an agent, and granting an agent is refused to the sessions that cannot create one.
+  - **Passwords and recovery.** The current-password check always uses your own account. Changing a password (or
+    an administrator changing someone's address) cancels a reset link already sent. Password recovery and sign-up
+    with email verification answer at a fixed pace. The code used to turn on two-factor authentication is spent.
+    Expired pending registrations are all pruned.
+  - **Password length is measured the way it is stored.** A new password may be at most 72 bytes (accented
+    letters count as 2, emoji as 4) on every screen and endpoint that sets one; the forms say so before sending.
+    Signing in with an existing password is unchanged.
+  - **Settings and inputs.** «Anyone can register», «require email verification» and the two comment e-mail
+    switches are stored as on/off and read the same way everywhere; any other value is refused. API-token and
+    agent lifetimes are whole days from 1 to 3650. Display names are plain text, trimmed, at most 250 characters.
+  - **Single use means single use.** A password-reset link and a two-factor sign-in challenge are each consumed
+    atomically, so concurrent requests cannot both use them.
+  - **Rate limits and secrets at rest.** The sign-in, registration/recovery and installer rate limits keep
+    counting on each server while Redis is unavailable. The audit digest of unknown sign-in names uses its own
+    derived key. Two-factor backup codes are stored salted and slow-hashed; codes created before keep working.
+
+### Fixed
+- **GraphQL, streams and health probes: tighter resource bounds.**
+  - **Query limits.** A scalar leaf now costs 0.1 in the cost limit, multiplied by the page it sits on like any
+    other field. An operation may select at most 1000 fields once its fragments are expanded
+    (`WORDJS_GRAPHQL_MAX_FIELDS`) and one selection set at most 50 aliased fields (`WORDJS_GRAPHQL_MAX_ALIASES`).
+    A result larger than 16 MiB (`WORDJS_GRAPHQL_MAX_RESPONSE_BYTES`) is answered with a
+    `GRAPHQL_RESPONSE_TOO_LARGE` error; it is measured before it is serialized.
+  - **Rate limiting.** Each REST read a GraphQL query makes after the first now counts against the API rate
+    limiter, so a query costs the budget what the REST calls behind it would.
+  - **Uploads.** A multipart GraphQL request passes `POST /media`'s authentication and `upload_files` check before
+    its body is read. Each file is held to the site's upload limit from Settings → Media, the files of one request
+    together to that same limit, and every file after the first counts once more against the upload limiter.
+  - **Subscriptions.** The per-caller stream cap holds when many streams open at once, a stream abandoned while it
+    is being set up gives its slot back, and a caller without a signed-in user is counted by address (an IPv6 client
+    by its /64). The reads a stream makes while opening (`ids:`, a `Last-Event-ID` resume) count against the API
+    limiter; an anonymous resume replays at most 50 events.
+  - **Hook inspector.** `GET /api/v1/hooks/stream` takes an administrator's interactive session only (not an API
+    token), and at most 3 streams per user and 20 per process (`429 rest_hook_stream_limit`).
+  - **Health probes.** `GET /health` and `GET /api/v1/health` answer from one cached database check (1 s) with the
+    readiness deadline (`WORDJS_READINESS_TIMEOUT_MS`), like `/readyz`.
 - **conference-manager 2.36.20: the cupo editor on a locality card no longer pushes «Cancelar» out of the card.**
 - **conference-manager 2.36.17: «Autorizaciones» shows its list on a computer again.** On a site built before 2.36.16,
   the desktop table and the phone cards were both hidden on a wide screen, so a computer showed no list. The plugin's

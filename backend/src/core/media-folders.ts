@@ -33,9 +33,8 @@ export class MediaFolderError extends Error {
 /** A folder id as the API takes it: a positive integer, or 0/'' for «no folder». Null when malformed. */
 function folderIdParam(raw: unknown): number | null {
     if (raw === undefined || raw === null || raw === '' || raw === 0 || raw === '0') return 0;
-    const s = String(raw);
-    if (!/^[1-9][0-9]{0,9}$/.test(s)) return null;
-    return Number(s);
+    // An id an id column can hold (core/query-params bodyId), not merely ten digits.
+    return require('./query-params').bodyId(raw);
 }
 
 function cleanName(raw: unknown): string {

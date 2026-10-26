@@ -111,6 +111,14 @@ function eventMatches(events: string[], event: string): boolean {
     return false;
 }
 
+/**
+ * `active` is a boolean or absent. Judged by truthiness, the string "false" (a form field, a query
+ * string carried into a body) switched a webhook ON; the caller is told instead.
+ */
+function assertActiveFlag(value: unknown): void {
+    if (value !== undefined && value !== null && typeof value !== 'boolean') throw new Error('active must be true or false.');
+}
+
 function toDisplay(row: any) {
     return {
         id: row.id,
@@ -141,6 +149,7 @@ class Webhook {
 
     /** Create a webhook. Returns display metadata PLUS the plaintext `secret` (shown once). */
     static async create(opts: { userId: number; name?: string; url: string; events?: any; active?: boolean }) {
+        assertActiveFlag(opts.active);
         const url = validateUrl(opts.url);
         const events = normalizeEvents(opts.events);
         const name = String(opts.name || '').slice(0, 200).trim() || 'Webhook';
@@ -172,6 +181,7 @@ class Webhook {
         if (fields.url !== undefined) { sets.push('url = ?'); params.push(validateUrl(fields.url)); }
         if (fields.events !== undefined) { sets.push('events = ?'); params.push(normalizeEvents(fields.events).join(',')); }
         if (fields.active !== undefined) {
+            assertActiveFlag(fields.active);
             sets.push('active = ?'); params.push(fields.active ? 1 : 0);
             // Re-enabling clears the consecutive-failure counter so a fixed endpoint starts fresh.
             if (fields.active) { sets.push('failure_count = 0'); }

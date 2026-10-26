@@ -69,7 +69,7 @@ function updater(): any { return require('../core/updater'); }
  *       403:
  *         description: Not an administrator, a wrong password, or no code from an account with two-factor authentication
  *       409:
- *         description: The panel may not update here (update_docker, update_source_checkout, update_split_mode, update_not_writable, update_no_supervisor, update_not_a_release), an update is running (update_busy), or the release is not newer (update_not_newer)
+ *         description: The panel may not update here (update_docker, update_source_checkout, update_split_mode, update_not_writable, update_no_supervisor, update_not_a_release), an update is running (update_busy), the release is not newer (update_not_newer), or it publishes no checksum for its bundle (update_unverified_release)
  * /system/update/check:
  *   post:
  *     summary: Read the releases again now

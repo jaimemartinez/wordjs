@@ -868,6 +868,22 @@ describe('R2: retiring an address retires the sessions minted on it', () => {
             }
         });
 
+        test('(c2) an alias-bound session may not grant an agent connection either (the twin of creating one); a main-address session still may', async () => {
+            const AgentConnection = require('../models/AgentConnection');
+            const { connection } = await AgentConnection.create({ userId: adminId, name: 'bound-grant', requested: ['content:read'], createdBy: adminId });
+            try {
+                const bound = await onMain('put', `${API}/agents/${connection.id}/grant`, await aliasSession()).send({ granted: ['content:read'] });
+                assert.strictEqual(bound.status, 403, JSON.stringify(bound.body));
+                assert.strictEqual(bound.body.code, 'rest_token_bound_session');
+                assert.deepStrictEqual((await AgentConnection.findById(connection.id)).granted, [], 'nothing was granted');
+                const main = sessionFrom(await login(direct('post', `${API}/auth/login`, 'example.com'), 'http://example.com'));
+                const granted = await onMain('put', `${API}/agents/${connection.id}/grant`, main).send({ granted: ['content:read'] });
+                assert.strictEqual(granted.status, 200, JSON.stringify(granted.body));
+            } finally {
+                await AgentConnection.revoke(connection.id);
+            }
+        });
+
         test('(d) an alias-bound session may not create an account nor change someone else\'s; its own profile and a main-address session still may', async () => {
             const main = sessionFrom(await login(direct('post', `${API}/auth/login`, 'example.com'), 'http://example.com'));
             const stamp = Date.now();
@@ -917,7 +933,7 @@ describe('R2: retiring an address retires the sessions minted on it', () => {
                 const viaMe = await onMain('put', `${API}/users/ME`, bound).send({ displayName: 'Admin via alias' });
                 assert.notStrictEqual(viaMe.body && viaMe.body.code, 'rest_account_bound_session', '/users/me is its own account');
                 // A main-address session still may.
-                const reset = await onMain('post', `${API}/users/${otherId}/mfa/reset`, main).send({});
+                const reset = await onMain('post', `${API}/users/${otherId}/mfa/reset`, main).send({ currentPassword: PASSWORD });
                 assert.strictEqual(reset.status, 200, JSON.stringify(reset.body));
             } finally {
                 const deleted = await onMain('delete', `${API}/users/${otherId}`, main);

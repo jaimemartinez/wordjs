@@ -1278,3 +1278,24 @@ describe('conference-manager 2.36.20 — «Cierre de inscripciones»', () => {
         expect(page).toContain('<div className="flex flex-wrap items-center gap-2 mt-1" data-capacity-edit={loc.id}>');
     });
 });
+
+describe('conference-manager 2.36.21 — rename a locality', () => {
+    const tx = (_k: string, fb: string) => fb;
+    it('the card shows the name with a pencil for whoever manages localities, and only for them', async () => {
+        const { LocationName } = await import('../../../../../marketplace/plugins/conference-manager/client/admin/LocationName');
+        const html = renderToStaticMarkup(<LocationName loc={{ id: 7, name: 'Chocó' }} canEdit tx={tx} addToast={() => {}} onSaved={() => {}} />);
+        expect(html).toContain('Chocó');
+        expect(html).toContain('data-location-rename="7"');
+        expect(html).toContain('aria-label="Editar nombre"');
+        expect(renderToStaticMarkup(<LocationName loc={{ id: 7, name: 'Chocó' }} canEdit={false} tx={tx} addToast={() => {}} onSaved={() => {}} />)).not.toContain('data-location-rename');
+    });
+    it('wired on the «Localidades» card; the editor wraps, uses no breakpoint class and no required bubble; strings in every language', () => {
+        expect(src('client/admin/page.tsx')).toContain('<LocationName loc={loc} canEdit={canManage}');
+        const comp = src('client/admin/LocationName.tsx');
+        expect(comp).toContain('flex flex-wrap items-center gap-2');
+        expect(comp).not.toMatch(/\b(sm|md|lg|xl):(hidden|block|flex|grid|inline)\b/);
+        expect(comp).not.toMatch(/\brequired\b/);
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of ['loc.rename.edit', 'loc.rename.label', 'loc.rename.saved', 'loc.rename.empty'])
+            expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+});

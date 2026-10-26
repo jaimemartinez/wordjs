@@ -6,6 +6,7 @@ import { useRouter, useParams } from "next/navigation";
 import EditorBootFallback, { EditorSkeleton } from "@/components/verso/editor/EditorBootFallback";
 import { postsApi, settingsApi } from "@/lib/api";
 import EditorLoadError from "@/components/EditorLoadError";
+import EditorTrashedNotice from "@/components/EditorTrashedNotice";
 import VersoEditor from "@/components/verso/editor/VersoEditor";
 import { rootFieldsPage } from "@/lib/verso/coreBlocks";
 import { serializeContentFallback } from "@/lib/verso/contentFallback";
@@ -71,6 +72,8 @@ export default function PageEditorPage() {
     // Último estado CONFIRMADO por el servidor — ver el editor de posts: "publicar ya" un registro
     // programado exige mandar date=now o el modelo re-programaría con la fecha futura almacenada.
     const lastServerStatusRef = useRef("draft");
+    // The loaded entry is in the trash: the Restore screen replaces the editor (EditorTrashedNotice).
+    const [trashed, setTrashed] = useState(false);
     // The author's per-page theme-template pick (`_wjs_template` meta). State (not just a root prop
     // read at save time) because the canvas preview re-wraps on it live — VersoThemeTemplate reads the
     // pick straight from the store root, so the canvas follows the dropdown without a save.
@@ -166,6 +169,7 @@ export default function PageEditorPage() {
             contentRef.current = page.content;
             setStatus(page.status);
             lastServerStatusRef.current = page.status;
+            setTrashed(page.status === "trash");
             if (page.status === "future") setScheduleDate(dbDateToLocalInput(page.dateGmt, page.date));
             // The saved template assignment. META is the source of truth (it may have been set via the
             // API, or before this field existed), so it is injected into root.props below rather than
@@ -392,6 +396,11 @@ export default function PageEditorPage() {
     // silently overwrite the real page on the next save/autosave.
     if (loadError) {
         return <EditorLoadError onRetry={loadPage} onBack={() => router.back()} />;
+    }
+
+    // In the trash → no editor: the server refuses edits there until the entry is restored.
+    if (trashed && pageId) {
+        return <EditorTrashedNotice postId={Number(pageId)} onRestored={loadPage} onBack={() => router.push("/admin/pages")} />;
     }
 
     return (

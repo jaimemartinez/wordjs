@@ -1,6 +1,6 @@
 /**
  * WordJS - SEO Helper
- * Generates meta tags, sitemaps, and structured data
+ * Generates sitemaps, robots.txt and the RSS feed (structured data and meta tags are rendered by the frontend)
  */
 
 const { toLanguageTag } = require('./language-tag');
@@ -11,142 +11,6 @@ interface SeoOptions {
     siteDescription?: string;
     /** Archive URLs (categories, tags, authors) printed after the entries. */
     extraEntries?: Array<{ loc: string; lastmod?: string | null; changefreq?: string; priority?: string }>;
-}
-
-/**
- * Generate HTML meta tags for a post/page
- */
-function generateMetaTags(post: any, options: SeoOptions = {}) {
-    const siteUrl = options.siteUrl || '';
-    const siteName = options.siteName || 'WordJS';
-
-    const title = post.seo_title || post.title;
-    const description = post.seo_description || post.excerpt || '';
-    const canonicalUrl = `${siteUrl}/${post.slug}`; // live canonical is /<slug> for posts AND pages
-    const ogImage = post.og_image || post.featured_image || `${siteUrl}/images/default-og.jpg`;
-
-    const tags: string[] = [];
-
-    // Basic meta
-    tags.push(`<title>${escapeHtml(title)} | ${escapeHtml(siteName)}</title>`);
-    tags.push(`<meta name="description" content="${escapeHtml(description)}">`);
-
-    // Canonical
-    tags.push(`<link rel="canonical" href="${canonicalUrl}">`);
-
-    // Robots
-    if (post.noindex) {
-        tags.push(`<meta name="robots" content="noindex, nofollow">`);
-    } else {
-        tags.push(`<meta name="robots" content="index, follow">`);
-    }
-
-    // Open Graph
-    tags.push(`<meta property="og:type" content="article">`);
-    tags.push(`<meta property="og:title" content="${escapeHtml(title)}">`);
-    tags.push(`<meta property="og:description" content="${escapeHtml(description)}">`);
-    tags.push(`<meta property="og:url" content="${canonicalUrl}">`);
-    tags.push(`<meta property="og:site_name" content="${escapeHtml(siteName)}">`);
-    tags.push(`<meta property="og:image" content="${ogImage}">`);
-
-    // Twitter Card
-    tags.push(`<meta name="twitter:card" content="summary_large_image">`);
-    tags.push(`<meta name="twitter:title" content="${escapeHtml(title)}">`);
-    tags.push(`<meta name="twitter:description" content="${escapeHtml(description)}">`);
-    tags.push(`<meta name="twitter:image" content="${ogImage}">`);
-
-    // Article specific
-    if (post.type === 'post') {
-        tags.push(`<meta property="article:published_time" content="${post.created_at}">`);
-        tags.push(`<meta property="article:modified_time" content="${post.updated_at}">`);
-    }
-
-    return tags.join('\n    ');
-}
-
-/**
- * Generate JSON-LD structured data
- */
-function generateJsonLd(post: any, options: SeoOptions = {}) {
-    const siteUrl = options.siteUrl || '';
-    const siteName = options.siteName || 'WordJS';
-    // (no siteDescription here: the Article's "description" comes from the POST, and the publisher
-    //  Organization node has no description field — the local was read and then never used.)
-
-    const canonicalUrl = `${siteUrl}/${post.slug}`; // live canonical is /<slug> for posts AND pages
-
-    // Article schema
-    const articleSchema: Record<string, any> = {
-        "@context": "https://schema.org",
-        "@type": post.type === 'post' ? "Article" : "WebPage",
-        "headline": post.seo_title || post.title,
-        "description": post.seo_description || post.excerpt || '',
-        "url": canonicalUrl,
-        "datePublished": post.created_at,
-        "dateModified": post.updated_at,
-        "author": {
-            "@type": "Person",
-            "name": post.author_name || "Unknown"
-        },
-        "publisher": {
-            "@type": "Organization",
-            "name": siteName,
-            "logo": {
-                "@type": "ImageObject",
-                "url": `${siteUrl}/images/logo.png`
-            }
-        }
-    };
-
-    if (post.og_image || post.featured_image) {
-        articleSchema.image = post.og_image || post.featured_image;
-    }
-
-    return `<script type="application/ld+json">${JSON.stringify(articleSchema)}</script>`;
-}
-
-/**
- * Generate WebSite schema for homepage
- */
-function generateWebsiteSchema(options: SeoOptions = {}) {
-    const siteUrl = options.siteUrl || '';
-    const siteName = options.siteName || 'WordJS';
-    const siteDescription = options.siteDescription || '';
-
-    const schema = {
-        "@context": "https://schema.org",
-        "@type": "WebSite",
-        "name": siteName,
-        "description": siteDescription,
-        "url": siteUrl,
-        "potentialAction": {
-            "@type": "SearchAction",
-            "target": `${siteUrl}/search?q={search_term_string}`,
-            "query-input": "required name=search_term_string"
-        }
-    };
-
-    return `<script type="application/ld+json">${JSON.stringify(schema)}</script>`;
-}
-
-/**
- * Generate breadcrumb schema
- */
-function generateBreadcrumbSchema(breadcrumbs: any[], siteUrl = '') {
-    const items = breadcrumbs.map((crumb: any, index: number) => ({
-        "@type": "ListItem",
-        "position": index + 1,
-        "name": crumb.name,
-        "item": crumb.url ? `${siteUrl}${crumb.url}` : undefined
-    }));
-
-    const schema = {
-        "@context": "https://schema.org",
-        "@type": "BreadcrumbList",
-        "itemListElement": items
-    };
-
-    return `<script type="application/ld+json">${JSON.stringify(schema)}</script>`;
 }
 
 /**
@@ -320,10 +184,6 @@ ${items}  </channel>
 }
 
 module.exports = {
-    generateMetaTags,
-    generateJsonLd,
-    generateWebsiteSchema,
-    generateBreadcrumbSchema,
     generateSitemap,
     generateRobotsTxt,
     generateRssFeed,

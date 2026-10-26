@@ -153,6 +153,8 @@ export default function AgentsPage() {
     // never sent with the other.
     const createStepUp = useMfaStepUp();
     const grantStepUp = useMfaStepUp();
+    // Turning publish confirmation OFF lets granted agents publish on their own: same step-up as a grant.
+    const confirmationStepUp = useMfaStepUp();
     const [auditFor, setAuditFor] = useState<number | null>(null);
     const [audit, setAudit] = useState<AuditEntry[]>([]);
     const [publishConfirmation, setPublishConfirmation] = useState(false);
@@ -269,14 +271,15 @@ export default function AgentsPage() {
         }
     };
 
-    const toggleConfirmation = async () => {
-        const next = !publishConfirmation;
+    const toggleConfirmation = async (next = !publishConfirmation) => {
         setSavingConfirmation(true);
         try {
-            const res = await agentsApi.setPublishConfirmation(next);
+            const res = await agentsApi.setPublishConfirmation(next, next ? {} : confirmationStepUp.payload());
+            confirmationStepUp.reset();
             setPublishConfirmation(res.publishConfirmation);
             addToast(t(res.publishConfirmation ? "agents.confirmationOn" : "agents.confirmationOff"), "success");
         } catch (e: any) {
+            if (confirmationStepUp.absorb(e)) return;
             addToast(e?.message || t("agents.confirmationFailed"), "error");
         } finally {
             setSavingConfirmation(false);
@@ -397,6 +400,15 @@ export default function AgentsPage() {
                                     onChange={() => toggleConfirmation()}
                                 />
                             </div>
+                            {publishConfirmation && (confirmationStepUp.needsCode || confirmationStepUp.needsPassword) && (
+                                <div className="mt-4 space-y-3" data-testid="agent-confirmation-step-up">
+                                    <MfaStepUpFields stepUp={confirmationStepUp} codeHelp={t("agents.stepUpHelp")} />
+                                    <div className="flex gap-2">
+                                        <Button size="sm" onClick={() => toggleConfirmation(false)} loading={savingConfirmation}>{t("agents.confirmationTurnOff")}</Button>
+                                        <Button size="sm" variant="ghost" onClick={() => confirmationStepUp.reset()}>{t("common.cancel")}</Button>
+                                    </div>
+                                </div>
+                            )}
                             {(publishConfirmation || queue.length > 0) && (
                                 <div className="mt-5 border-t border-gray-100 pt-4" data-testid="agent-publish-queue">
                                     <h3 className="text-[11px] font-black uppercase tracking-widest text-gray-400 mb-3">

@@ -24,13 +24,16 @@ const { attachmentReadable } = require('../core/attachment-visibility');
 // A MEMBERS-ONLY ENTRY'S COMMENTS ARE GATED WITH IT (core/content-access): listed, read and written only by
 // a viewer who reads the entry in full.
 const { canReadGatedContent } = require('../core/content-access');
+// MODERATION IS SCOPED TO THE ENTRY (core/comment-scope): holding moderate_comments / edit_comments says
+// that a role moderates; the parent entry's edit gate says where. Every moderator path below asks it.
+const { canModerateCommentOn } = require('../core/comment-scope');
 const { getOption, getBooleanOption } = require('../core/options');
 const { authenticate, optionalAuth } = require('../middleware/auth');
 const { can } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params. A parameter this router declares scalar arrives
 // once, as a string, or the request is a 400 (the same answer routes/posts.ts already gives).
-const { scalarQueryParam, requireScalarQuery, requireRouteId } = require('../core/query-params');
+const { scalarQueryParam, requireScalarQuery, requireRouteId, bodyId } = require('../core/query-params');
 const { perPageParam, pageOffset } = require('../core/pagination');
 const { stripTags, escUrl, sanitizeContent } = require('../core/formatting');
 // THE COMMENT ABUSE POSTURE (see the block below the query-field table) needs three more things: the
@@ -87,6 +90,9 @@ const COMMENT_STATUS_ALIASES: Record<string, string> = Object.assign(Object.crea
     all: 'any', approve: '1', approved: '1', hold: '0', pending: '0',
 });
 
+/** The statuses PUT /comments/:id may store (models/Comment update's own allowlist). */
+const EDITABLE_COMMENT_STATUSES: ReadonlySet<string> = new Set(['1', '0', 'spam', 'trash']);
+
 /** A list `?status=` value in the stored spelling (WordPress aliases folded; anything else as given). */
 function normalizeCommentStatusQuery(status: unknown): unknown {
     if (typeof status !== 'string') return status;
@@ -112,6 +118,35 @@ async function recordCommentAudit(actorId: any, commentId: number, from: any, to
  * Validate a guest-supplied author URL: only http/https are permitted, and the value must be a
  * well-formed absolute URL. escUrl returns '' for anything else (javascript:, data:, mailto:, etc.).
  */
+/**
+ * May this caller read `comment` as the PUBLIC read path answers it (approved, on an entry they may read
+ * in full, members-only and attachment rules included)? The non-moderator rule of GET /comments/:id.
+ */
+async function commentPubliclyReadable(user: any, comment: any, parentPost: any): Promise<boolean> {
+    if (!comment || comment.commentApproved !== '1') return false;
+    if (!parentPost || isInternalPostType(parentPost.type || parentPost.postType || 'post')) return false;
+    if (!canReadPostContent(user, parentPost) || !(await canReadGatedContent(user, parentPost))) return false;
+    return attachmentReadable(user, parentPost);
+}
+
+/**
+ * THE GATE OF EVERY SINGLE-COMMENT MODERATION ROUTE (PUT, DELETE, approve, unapprove, spam), after the
+ * route's capability middleware: the caller must also pass the parent entry's edit gate
+ * (canModerateCommentOn). Refused with 403 when the caller can read the comment anyway, and with the
+ * same 404 as a missing comment when they cannot, so a moderation route is never an existence oracle
+ * over the comments of entries the caller may not read. Answers true when it has sent the refusal.
+ */
+async function refuseCommentModeration(req: Request, res: Response, comment: any): Promise<boolean> {
+    const parentPost = await Post.findById(comment.commentPostId);
+    if (await canModerateCommentOn(req.user, parentPost)) return false;
+    if (await commentPubliclyReadable(req.user, comment, parentPost)) {
+        res.status(403).json({ code: 'rest_forbidden', message: 'You cannot moderate the comments of this entry.', data: { status: 403 } });
+    } else {
+        res.status(404).json({ code: 'rest_comment_invalid_id', message: 'Invalid comment ID.', data: { status: 404 } });
+    }
+    return true;
+}
+
 function safeAuthorUrl(raw: any) {
     if (!raw) return '';
     const cleaned = escUrl(String(raw).trim());
@@ -595,7 +630,15 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
 
     // Only comment moderators can see non-approved comments AND the private commenter PII (email/IP
     // are gated in toJSON(canModerate) below).
-    const canModerate = !!(req.user && req.user.can('moderate_comments'));
+    // A moderator's view (every status, the commenter's email and IP) covers only the entries they may
+    // moderate (core/comment-scope): one named entry they may not moderate is listed as anyone else sees
+    // it, and the site-wide list is filtered to their entries in the query (moderatorViewer below).
+    const postFilterId = post ? parseInt(String(post), 10) : undefined;
+    let canModerate = !!(req.user && req.user.can('moderate_comments'));
+    if (canModerate && postFilterId) {
+        const named = await Post.findById(postFilterId);
+        if (named && !(await canModerateCommentOn(req.user, named))) canModerate = false;
+    }
     // Only the NON-moderator branch overwrites this, so a MODERATOR's value flows straight through to
     // the two `commentStatus === 'any'` reads below and into the model. It is a string here because
     // requireScalarQuery refused anything else at the top of the handler — not because `status` is
@@ -627,7 +670,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // which case that entry's approved comments are theirs to see. A `?post=` naming an entry they
     // may NOT read falls through to the public filter and therefore answers an empty list, exactly
     // like a nonexistent id.
-    const postFilter = post ? parseInt(String(post), 10) : undefined;
+    const postFilter = postFilterId;
     // The public filter is a POSITIVE list of the types whose published entries anyone may read
     // (publicPostTypes): written as "every type except the non-public registered ones", it served the
     // comments of every entry whose type the registry does not know (core/post-capabilities
@@ -639,6 +682,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
     // above judges the commented row's own status, and an attachment row can be 'publish' (through
     // PUT /posts/:id) under an entry this caller may not read; each of its comments names its id.
     let attachmentViewer: { user: any } | undefined;
+    const moderatorViewer = canModerate ? { user: req.user } : undefined;
     if (!canModerate) {
         attachmentViewer = { user: req.user || null };
         const target = postFilter ? await Post.findById(postFilter) : null;
@@ -666,6 +710,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
         searchAuthorEmail: canModerate,
         publicOnlyTypes,
         attachmentViewer,
+        moderatorViewer,
         limit,
         offset,
         orderBy: orderByMap[String(orderby)] || 'comment_date',
@@ -681,6 +726,7 @@ router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) =
         searchAuthorEmail: canModerate,
         publicOnlyTypes,
         attachmentViewer,
+        moderatorViewer,
     });
     const totalPages = Math.ceil(total / limit);
 
@@ -732,28 +778,22 @@ router.get('/:id', optionalAuth, asyncHandler(async (req: Request, res: Response
         });
     }
 
-    const canModerate = !!(req.user && req.user.can('moderate_comments'));
     const notFound = () => res.status(404).json({
         code: 'rest_comment_invalid_id',
         message: 'Invalid comment ID.',
         data: { status: 404 }
     });
 
-    if (!canModerate) {
-        // Check if user can view non-approved comments
-        if (comment.commentApproved !== '1') return notFound();
-        // The parent entry gate — the same 404 as a missing comment, so walking ids does not reveal
-        // that a draft, private or protected entry has comments (or exists).
-        const parentPost = await Post.findById(comment.commentPostId);
-        if (!parentPost || isInternalPostType(parentPost.type || parentPost.postType || 'post')
-            || !canReadPostContent(req.user, parentPost)
-            || !(await canReadGatedContent(req.user, parentPost))) {
-            return notFound();
-        }
-        // A comment on an attachment this caller may not see is "no such comment" too: the comment
-        // names the item's id.
-        if (!(await attachmentReadable(req.user, parentPost))) return notFound();
-    }
+    // The moderator's view only on an entry this moderator may moderate (core/comment-scope); anywhere
+    // else they read the comment as anyone else does.
+    const parentPost = await Post.findById(comment.commentPostId);
+    const canModerate = !!(req.user && req.user.can('moderate_comments'))
+        && await canModerateCommentOn(req.user, parentPost);
+
+    // Not approved, on an entry the caller may not read in full, or on an attachment they may not see:
+    // the same 404 as a missing comment, so walking ids does not reveal that a draft, private or
+    // protected entry has comments (or exists).
+    if (!canModerate && !(await commentPubliclyReadable(req.user, comment, parentPost))) return notFound();
 
     res.json(comment.toJSON(canModerate));
 }));
@@ -901,7 +941,9 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
     // that takes comments ('publish', or 'private' for those who may read it). It used to be "exists",
     // so anyone could attach comments to a draft, a trashed entry or a menu item, and the 404/403
     // split told them which ids existed. Every refusal here is the SAME 404.
-    const post = await Post.findById(parseInt(postId, 10));
+    // The id must be one an id column can hold (core/query-params bodyId): `post: 9999999999` is no post.
+    const postNum = bodyId(postId);
+    const post = postNum === null ? null : await Post.findById(postNum);
     const commentable = !!(post
         && !isInternalPostType(post.type || post.postType || 'post')
         && (post.postStatus === 'publish' || post.postStatus === 'private')
@@ -990,10 +1032,10 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
     // SECURITY (VAL-01): a reply must point at a real parent comment on the SAME post. Without this an
     // attacker can thread a reply under an unrelated post's comment (thread spoofing / cross-post linking)
     // or reference a non-existent id. Top-level comments (no parent) are still allowed.
-    const parentId = parent ? parseInt(parent, 10) : 0;
-    if (parentId) {
-        const parentComment = await Comment.findById(parentId);
-        if (!parentComment || parentComment.commentPostId !== parseInt(postId, 10)) {
+    const parentId = !parent || String(parent).trim() === '0' ? 0 : bodyId(parent);
+    if (parentId !== 0) {
+        const parentComment = parentId === null ? null : await Comment.findById(parentId);
+        if (!parentComment || Number(parentComment.commentPostId) !== postNum) {
             return res.status(400).json({
                 code: 'rest_comment_invalid_parent',
                 message: 'Invalid parent comment.',
@@ -1004,7 +1046,7 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
 
     // Determine initial status. Read once, and BEFORE the honeypot, so the discarded branch can report
     // exactly the status the honest one would have.
-    const canModerate = !!(req.user && req.user.can('moderate_comments'));
+    const canModerate = !!(req.user && req.user.can('moderate_comments')) && await canModerateCommentOn(req.user, post);
     const status = canModerate || await commentAutoApproved(rawContent, email, userId) ? '1' /* approved */ : '0'; /* pending */
 
     // The row this request would insert, described ONCE, so the honeypot's success payload, the repeat
@@ -1012,7 +1054,7 @@ router.post('/', optionalAuth, commentLimiter, asyncHandler(async (req: Request,
     // `content` stays RAW here: Comment.create runs sanitizeContent itself, and sanitize-html escapes
     // entities, so pre-sanitizing would double-escape every `&` in the stored body.
     const draft = {
-        postId: parseInt(postId, 10),
+        postId: postNum,
         author,
         authorEmail: email,
         authorUrl: url,
@@ -1154,6 +1196,8 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req: 
         });
     }
 
+    if (await refuseCommentModeration(req, res, comment)) return;
+
     const { author, author_email, author_url, content, status } = req.body;
 
     // SECURITY: changing a comment's MODERATION status (approve '1' / unapprove '0' / spam / trash) is a
@@ -1175,16 +1219,46 @@ router.put('/:id', authenticate, can('edit_comments'), asyncHandler(async (req: 
     // undefined preserves Comment.update's "field omitted → stored value unchanged" behavior.
     const safeUrl = author_url === undefined ? undefined : safeAuthorUrl(author_url);
 
+    // THE SAME NORMALIZERS AS THE CREATE PATH for every field that arrives: the name as plain text, the
+    // email as an address (or empty), the body as text within the same bound, and a status the model
+    // stores (WordPress aliases folded) — anything else is a 400 here, not an exception in the model.
+    const invalid = (field: string, message: string) => res.status(400).json({
+        code: 'rest_invalid_param', message, data: { status: 400, params: { [field]: message } }
+    });
+    let safeAuthor: string | undefined;
+    if (author !== undefined) {
+        safeAuthor = typeof author === 'string' ? stripTags(author).trim() : '';
+        if (!safeAuthor) return invalid('author', 'The author name is required text.');
+    }
+    let safeEmail: string | undefined;
+    if (author_email !== undefined) {
+        if (typeof author_email !== 'string') return invalid('author_email', 'A valid author email is required.');
+        safeEmail = author_email.trim();
+        if (safeEmail && !isValidAddress(safeEmail)) return invalid('author_email', 'A valid author email is required.');
+    }
+    if (content !== undefined && (typeof content !== 'string' || Buffer.byteLength(content, 'utf8') > MAX_COMMENT_BYTES)) {
+        return invalid('content', 'The comment is text within the comment size limit.');
+    }
+    let safeStatus: string | undefined;
+    if (status !== undefined) {
+        const folded = normalizeCommentStatusQuery(status);
+        if (typeof folded !== 'string' || !EDITABLE_COMMENT_STATUSES.has(folded)) {
+            return invalid('status', 'status is one of 1 (approved), 0 (pending), spam or trash.');
+        }
+        safeStatus = folded;
+    }
+
     const updated = await Comment.update(commentId, {
-        author,
-        authorEmail: author_email,
+        author: safeAuthor,
+        authorEmail: safeEmail,
         authorUrl: safeUrl,
         content,
-        status
+        status: safeStatus
     });
 
     await recordCommentAudit(req.user.id, commentId, comment.commentApproved, updated.commentApproved);
-    res.json(updated.toJSON(true)); // moderation route (edit/approve/spam) — moderator sees full PII
+    // edit_comments alone is not moderate_comments: the commenter's email and IP go to a moderator only.
+    res.json(updated.toJSON(req.user.can('moderate_comments')));
 }));
 
 /**
@@ -1249,6 +1323,8 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
             data: { status: 404 }
         });
     }
+
+    if (await refuseCommentModeration(req, res, comment)) return;
 
     // Twin of DELETE /posts/:id: `?force=true&force=true` is an Array, which is not 'true', so the
     // permanent delete quietly became a trash — and then the re-read below could not find the trashed
@@ -1327,7 +1403,8 @@ router.delete('/:id', authenticate, can('moderate_comments'), asyncHandler(async
 router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
     const commentId = parseInt(String(req.params.id), 10);
     const before = await Comment.findById(commentId);
-    const updated = await Comment.approve(commentId);
+    if (before && await refuseCommentModeration(req, res, before)) return;
+    const updated = before ? await Comment.approve(commentId) : null;
 
     if (!updated) {
         return res.status(404).json({
@@ -1394,6 +1471,7 @@ router.post('/:id/approve', authenticate, can('moderate_comments'), asyncHandler
 router.post('/:id/unapprove', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
     const commentId = parseInt(String(req.params.id), 10);
     const before = await Comment.findById(commentId);
+    if (before && await refuseCommentModeration(req, res, before)) return;
     const updated = before ? await Comment.unapprove(commentId) : null;
 
     if (!updated) {
@@ -1460,7 +1538,8 @@ router.post('/:id/unapprove', authenticate, can('moderate_comments'), asyncHandl
 router.post('/:id/spam', authenticate, can('moderate_comments'), asyncHandler(async (req: Request, res: Response) => {
     const commentId = parseInt(String(req.params.id), 10);
     const before = await Comment.findById(commentId);
-    const updated = await Comment.spam(commentId);
+    if (before && await refuseCommentModeration(req, res, before)) return;
+    const updated = before ? await Comment.spam(commentId) : null;
 
     if (!updated) {
         return res.status(404).json({

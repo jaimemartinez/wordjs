@@ -91,7 +91,8 @@ function TrafficChart({ series, t, locale }: any) {
 function Overview({ t, locale, data, settings, go, reload }: any) {
     if (!data) return <div className="py-20 text-center"><Spinner className="text-2xl" /></div>;
     const sum = (k: string) => data.series.reduce((a: number, d: any) => a + (d[k] || 0), 0);
-    const queueCount = data.totals.retrying + data.totals.failed + data.totals.scheduled;
+    // Final failures are not waiting for anything: they stay on their Sent copy and in the system log.
+    const queueCount = data.totals.retrying + data.totals.scheduled;
     const dkim = settings?.mail_security_dkim_enabled === '1';
     // Where inbound SMTP actually listens: this node's addresses (a multi-machine install runs the plugin
     // on the backend node, which is NOT the address visitors reach the site on).
@@ -125,7 +126,7 @@ function Overview({ t, locale, data, settings, go, reload }: any) {
             <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
                 <Kpi icon="fa-solid fa-inbox" label={`${t('srv.received')} · ${t('srv.last14')}`} value={sum('received')} />
                 <Kpi icon="fa-solid fa-paper-plane" label={`${t('srv.sent')} · ${t('srv.last14')}`} value={sum('sent')} tone="blue" />
-                <Kpi icon="fa-solid fa-clock-rotate-left" label={t('srv.queue')} value={queueCount} sub={`${data.totals.failed} ${t('srv.failed').toLowerCase()} · ${data.totals.retrying} ${t('srv.retrying').toLowerCase()}`} tone={data.totals.failed ? 'red' : 'slate'} onClick={() => go('queue')} />
+                <Kpi icon="fa-solid fa-clock-rotate-left" label={t('srv.queue')} value={queueCount} sub={`${data.totals.retrying} ${t('srv.retrying').toLowerCase()} · ${data.totals.scheduled} ${t('srv.scheduledShort')}`} tone={data.totals.retrying ? 'orange' : 'slate'} onClick={() => go('queue')} />
                 <Kpi icon="fa-solid fa-hard-drive" label={t('srv.storage')} value={formatBytes(data.totals.bytes)} sub={`${data.totals.messages} ${t('srv.messages').toLowerCase()} · ${t('srv.attachments', { n: data.totals.attachments })}`} tone="green" />
             </div>
             <div className="grid gap-4 sm:gap-6 xl:grid-cols-3">
@@ -504,7 +505,8 @@ function Queue({ t, locale, toast, confirm }: any) {
         setBusy(it.id);
         try {
             const r = await api(`/plugin/mail-server/admin/queue/${it.id}/retry`, { method: 'POST' }) as any;
-            if (r && r.success) toast('success', t('read.delivered')); else toast('error', r?.message || t('read.stillFailing'));
+            if (r && r.pending) toast('progress', t('read.retryPending'));
+            else if (r && r.success) toast('success', t('read.delivered')); else toast('error', r?.message || t('read.stillFailing'));
             load();
         } catch (e: any) { toast('error', errorText(e, t)); }
         finally { setBusy(null); }
@@ -1076,8 +1078,8 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
                         <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
                             className={cx('flex shrink-0 items-center gap-2 border-b-2 px-3 pb-2.5 pt-1 text-sm transition-colors', tab === id ? 'border-violet-600 font-semibold text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-800')}>
                             <i className={cx(icon, 'text-xs')}></i>{t(`srv.${id}`)}
-                            {id === 'queue' && overview && (overview.totals.failed + overview.totals.retrying) > 0 && (
-                                <span className="rounded-full bg-red-100 px-1.5 text-[10px] font-bold text-red-700">{overview.totals.failed + overview.totals.retrying}</span>
+                            {id === 'queue' && overview && overview.totals.retrying > 0 && (
+                                <span className="rounded-full bg-amber-100 px-1.5 text-[10px] font-bold text-amber-800">{overview.totals.retrying}</span>
                             )}
                         </button>
                     ))}

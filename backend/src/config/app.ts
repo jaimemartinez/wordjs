@@ -77,7 +77,7 @@ export interface AppConfig {
         /** Global per-IP budget for /api/v1/*. Operator-tunable; consumed by apiLimiter in index.ts. */
         rateLimit: { max: number; windowMs: number };
         /** Limits of the GraphQL endpoint (core/graphql). Operator-tunable, clamped. */
-        graphql: { maxDepth: number; maxCost: number; maxTokens: number; maxMutations: number; maxStreams: number; maxStreamsPerClient: number };
+        graphql: { maxDepth: number; maxCost: number; maxTokens: number; maxMutations: number; maxFields: number; maxAliases: number; maxResponseBytes: number; maxStreams: number; maxStreamsPerClient: number };
     };
 
     // Site
@@ -493,6 +493,11 @@ const config: AppConfig = {
             maxTokens: envInt('WORDJS_GRAPHQL_MAX_TOKENS', 5000, 100, 100_000),
             // Mutation fields per document: the API limiter counts a GraphQL request once.
             maxMutations: envInt('WORDJS_GRAPHQL_MAX_MUTATIONS', 10, 1, 100),
+            // Fields per operation once fragments are expanded, and aliased fields per selection set.
+            maxFields: envInt('WORDJS_GRAPHQL_MAX_FIELDS', 1000, 50, 100_000),
+            maxAliases: envInt('WORDJS_GRAPHQL_MAX_ALIASES', 50, 1, 10_000),
+            // The largest serialized response (or subscription event) the endpoint writes.
+            maxResponseBytes: envInt('WORDJS_GRAPHQL_MAX_RESPONSE_BYTES', 16 * 1024 * 1024, 64 * 1024, 512 * 1024 * 1024),
             // Open subscription streams (GraphQL over SSE): per process, and per caller (user, else address).
             maxStreams: envInt('WORDJS_GRAPHQL_MAX_STREAMS', 500, 1, 100_000),
             maxStreamsPerClient: envInt('WORDJS_GRAPHQL_MAX_STREAMS_PER_CLIENT', 5, 1, 1000),
