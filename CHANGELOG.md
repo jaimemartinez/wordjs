@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.12] - 2026-10-26
+
 ### Security
 - **Cluster hardening: the gateway, its control plane and the frontend's Content-Security-Policy.**
   - **Each upstream must prove the role it serves.** The gateway now checks that an upstream's cluster certificate
