@@ -58,7 +58,7 @@ test('bridge blocks SQL touching core tables (incl. regex-evasion bypasses)', as
         await assert.rejects(() => api.db.run("UPDATE user_meta SET meta_value='administrator'"), /off-limits/);
         // Evasions that slipped past the old `FROM <table>` matcher:
         await assert.rejects(() => api.db.all('SELECT * FROM plugin_t, users'), /off-limits|comma join|not owned/i);   // comma join: first table isn't prefix-owned → blocked before `users` can attach
-        await assert.rejects(() => api.db.all('SELECT * FROM/**/users'), /off-limits/);            // comment-as-whitespace
+        await assert.rejects(() => api.db.all('SELECT * FROM/**/users'), /off-limits|comments/);  // comment-as-whitespace (comments are refused)
         await assert.rejects(() => api.db.all("SELECT option_value FROM options WHERE option_name='jwt_secret'"), /off-limits/); // secret exfil via options table
     });
 });
@@ -73,7 +73,7 @@ test('bridge blocks the MySQL comment-divergence SQL-scoping bypass (--0 / /*! *
         const api = createPluginApi(SLUG);
         const PFX = api.db.tablePrefix;
         // `--0` is NOT a comment (no following whitespace) → the UNION + `users` stay visible → denied.
-        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE 2=1--0 UNION SELECT user_pass FROM users`), /off-limits|not owned/i);
+        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE 2=1--0 UNION SELECT user_pass FROM users`), /off-limits|not owned|comments/i);
         // MySQL executable comment: content runs on MySQL, blanked by the generic lexer → denied by marker.
         await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE 1=1/*! UNION SELECT user_pass FROM users */`), /executable comment|off-limits|not owned/i);
         // Backslash-escape divergence (re-verify): `'\''` desyncs MySQL's string-lexing from the guard's,
@@ -85,7 +85,7 @@ test('bridge blocks the MySQL comment-divergence SQL-scoping bypass (--0 / /*! *
         // Non-ASCII dollar-quote tag ($café$) — Postgres accepts it; the deny-all-$ structural fix catches it.
         await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE b=$café$'$café$ UNION SELECT user_pass FROM users`), /\$|dollar|off-limits|not owned/i);
         // Postgres ends a `--` comment at a bare CR (\r), not just \n; the tail after it must stay visible.
-        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE b=1 -- x\rUNION SELECT user_pass FROM users`), /off-limits|not owned/i);
+        await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t WHERE b=1 -- x\rUNION SELECT user_pass FROM users`), /off-limits|not owned|comments/i);
         // Postgres `[...]` array-subscript can hold a subquery that reads another plugin's table, laundered
         // past the walker as an opaque token. Square brackets are denied outright.
         await assert.rejects(() => api.db.all(`SELECT v[(SELECT total FROM wjp_other_orders)] FROM ${PFX}t`), /bracket|square|off-limits|not owned/i);
@@ -93,11 +93,11 @@ test('bridge blocks the MySQL comment-divergence SQL-scoping bypass (--0 / /*! *
         // + prefix-checked, so a core (users) or another plugin's table can't be read through it.
         await assert.rejects(() => api.db.all(`SELECT * FROM ${PFX}t STRAIGHT_JOIN users`), /off-limits|not owned/i);
         await assert.rejects(() => api.db.all(`SELECT * FROM ${PFX}t STRAIGHT_JOIN wjp_other_orders`), /off-limits|not owned/i);
-        // A LEGIT trailing `-- comment` (dash-dash-space) must still be stripped and the query scoped-OK
-        // (it may fail on a real "no such table" DB error, but must NOT be a scoping denial).
-        let err: any = null;
-        try { await api.db.all(`SELECT a FROM ${PFX}t -- fetch the rows`); } catch (e) { err = e; }
-        assert.ok(!err || !/off-limits|not owned|executable/i.test(String(err.message)), `a real "-- " comment must still work: ${err && err.message}`);
+        // A comment of any spelling is refused outright: every engine reads comments differently, so none is
+        // left for the guard to interpret.
+        for (const c of ['-- fetch the rows', '/* rows */', '# rows']) {
+            await assert.rejects(() => api.db.all(`SELECT a FROM ${PFX}t ${c}`), /comments/);
+        }
     });
 });
 

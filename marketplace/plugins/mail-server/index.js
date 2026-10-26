@@ -77,7 +77,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.3.3',
+    version: '3.3.4',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -3572,6 +3572,12 @@ const SECRET_OPTION_RE = /secret|passw(or)?d|pwd|priv(ate)?[_-]?key|privatekey|d
 const SECRET_OPTION_NAMES = new Set(['mail_user', 'mail_pass']);
 const isSecretOption = (key) => SECRET_OPTION_RE.test(String(key)) || SECRET_OPTION_NAMES.has(String(key).toLowerCase());
 
+// Where a setting lives in the site's options (see getOption): under this plugin's own name, except the
+// values the core reads under a shared name.
+const SHARED_OPTION_NAMES = new Set(['mail_domain', 'mail_delivery_ready', 'blogname']);
+const OPTION_UNSET = '\u0000mail-server:unset';
+const optionName = (key) => (SHARED_OPTION_NAMES.has(String(key).toLowerCase()) ? String(key) : 'mail_server_' + String(key));
+
 // THE HOST'S ANSWER BUDGET. Every call the host makes into this worker — an HTTP route, the core's mail
 // hand-off (provideMail), a notification — must answer within the host's 30 s RPC timeout, or the host
 // treats the worker as wedged and KILLS it: the caller gets "Isolated plugin error" and a delivery cut
@@ -3767,12 +3773,23 @@ exports.init = async function (bridge) {
     // getOption/updateOption transparently route secret/security-critical keys to the plugin's own
     // secrets table (the host blocks those via the generic options bridge) and everything else to
     // wordjs.options. admin_email is also protected by the host → served from the site bridge.
+    //
+    // The host lets a plugin write only options named after it ('mail_server_…'), so every setting is
+    // kept under that name. Two values are the exception, published under the names the core reads from
+    // the site's mail provider: 'mail_domain' and 'mail_delivery_ready'; and 'blogname' is the site's own.
+    // A setting an earlier version kept under its bare name is read from there once and carried over.
     getOption = async (key, def) => {
         if (String(key).toLowerCase() === 'admin_email') {
             try { return (await wordjs.site.adminEmail()) || def; } catch (e) { return def; }
         }
         if (isSecretOption(key)) return await Email.getSecret(key, def === undefined ? '' : def);
-        const v = await wordjs.options.get(key, def);
+        const name = optionName(key);
+        let v = await wordjs.options.get(name, OPTION_UNSET);
+        if (v === OPTION_UNSET && name !== key) {
+            v = await wordjs.options.get(key, OPTION_UNSET);
+            if (v !== OPTION_UNSET) { try { await wordjs.options.set(name, v); } catch (e) { /* read it again next time */ } }
+        }
+        if (v === OPTION_UNSET) v = def;
         // Every setting of this plugin is a string ('0'/'1', '587', …), but the host hands back what it
         // parsed: a stored '0' arrives as the NUMBER 0, and `0 !== '0'` read every switched-off toggle
         // (Require STARTTLS, SPF, forwarding, …) as on. Normalize scalars to the string this file compares.
@@ -3780,7 +3797,7 @@ exports.init = async function (bridge) {
     };
     updateOption = async (key, value) => {
         if (isSecretOption(key)) return await Email.setSecret(key, value);
-        return await wordjs.options.set(key, value);
+        return await wordjs.options.set(optionName(key), value);
     };
 
     // Schema first so the secrets table exists before getOption/updateOption touch it.

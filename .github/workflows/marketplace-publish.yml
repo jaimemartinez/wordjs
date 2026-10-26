@@ -65,6 +65,15 @@ jobs:
       - name: Verify the catalog matches the artifacts it publishes
         run: npm run verify:marketplace
 
+      # Detached Ed25519 signatures over both index files (<index>.sig). Sites verify them against the
+      # public key embedded in backend/src/routes/marketplace.ts (OFFICIAL_CATALOG_PUBLIC_KEY). Runs AFTER
+      # the verify step, because that gate treats any file the catalogs do not reference as an orphan.
+      # Without the MARKETPLACE_SIGNING_KEY secret the script signs nothing and exits 0.
+      - name: Sign the catalog
+        env:
+          MARKETPLACE_SIGNING_KEY: ${{ secrets.MARKETPLACE_SIGNING_KEY }}
+        run: node backend/scripts/sign-marketplace-catalog.js marketplace/dist/marketplace-index.json marketplace/dist/marketplace-themes-index.json
+
       - name: Publish to the latest release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -77,7 +86,17 @@ jobs:
           # not there yet.
           zips=(*.zip)
           gh release upload "$tag" "${zips[@]}" --clobber
-          gh release upload "$tag" marketplace-index.json marketplace-themes-index.json --clobber
+          # The signatures go up WITH their indexes. When this run did not sign, any .sig left on the
+          # release by an earlier signed publish no longer matches the new index, so it is removed: an
+          # unsigned catalog must read as unsigned, not as "signature invalid".
+          if [[ -f marketplace-index.json.sig && -f marketplace-themes-index.json.sig ]]; then
+            gh release upload "$tag" marketplace-index.json marketplace-themes-index.json marketplace-index.json.sig marketplace-themes-index.json.sig --clobber
+          else
+            gh release upload "$tag" marketplace-index.json marketplace-themes-index.json --clobber
+            for sig in marketplace-index.json.sig marketplace-themes-index.json.sig; do
+              gh release delete-asset "$tag" "$sig" --yes 2>/dev/null || true
+            done
+          fi
           # Drop plugin zips the new catalog no longer lists (older versions). The core bundle, its
           # checksum, the SBOM and the catalogs are never candidates.
           for asset in $(gh release view "$tag" --json assets --jq '.assets[].name'); do

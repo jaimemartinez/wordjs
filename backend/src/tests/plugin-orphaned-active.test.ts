@@ -323,7 +323,14 @@ describe('orphaned active plugins', () => {
             writeDistOnlyResidue('ghost', { withData: true });
             await updateOption('active_plugins', ['ghost']);
 
-            const res = await installPluginFromZip(buildZip('ghost'), 'ghost.zip', undefined, 1);
+            // Reconnecting to preserved data is an explicit choice (plugin-existing-data.test.ts): without
+            // it the install asks (409 existing_plugin_data) and the data stays as it was.
+            const asked = await installPluginFromZip(buildZip('ghost'), 'ghost.zip', undefined, 1);
+            assert.strictEqual(asked.status, 409, JSON.stringify(asked.body));
+            assert.strictEqual(asked.body.code, 'existing_plugin_data');
+            assert.strictEqual(fs.readFileSync(path.join(dirOf('ghost'), 'data', 'secret.key'), 'utf8'), 'PRESERVE-ME');
+
+            const res = await installPluginFromZip(buildZip('ghost'), 'ghost.zip', undefined, 1, { existingData: 'adopt' });
 
             assert.strictEqual(res.ok, true, res.body && res.body.error);
             assert.strictEqual(fs.readFileSync(path.join(dirOf('ghost'), 'data', 'secret.key'), 'utf8'), 'PRESERVE-ME');

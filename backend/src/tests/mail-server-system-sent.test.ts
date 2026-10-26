@@ -241,7 +241,7 @@ describe('retention', () => {
             let s = await call(b, 'post /settings', { body: { mail_system_sent_retention: '7' } });
             assert.strictEqual(s.status, 200, JSON.stringify(s.body));
             assert.strictEqual(s.body.systemSentPurged, 1);
-            assert.strictEqual(b.options.mail_system_sent_retention, '7');
+            assert.strictEqual(b.options.mail_server_mail_system_sent_retention, '7');
             assert.deepStrictEqual((await logRows(b)).map((r: any) => r.subject), ['today']);
             assert.strictEqual((await call(b, 'get /settings')).body.mail_system_sent_retention, '7');
 

@@ -44,6 +44,12 @@ function tagsHere(): string[] {
     return tags;
 }
 
+/** A plugin/theme shortcode's return value, sanitized. null/undefined stay as they are (render as empty). */
+function sanitizePluginShortcodeHtml(out: any): any {
+    if (out == null) return out;
+    return require('./formatting').sanitizeShortcodeOutput(String(out));
+}
+
 // Resolve the effective plugin (or null = core) of the CURRENT call, lazily to avoid an init-time cycle.
 function currentOwner(): string | null {
     try { return require('./plugin-context').getEffectivePlugin() || null; }
@@ -70,7 +76,16 @@ function addShortcode(tag: string, callback: (...args: any[]) => any) {
     }
     // A plugin's handler always runs in that plugin's context (its sandbox), even when the shortcode
     // is expanded from host code — mirrors how plugin-registered hooks are wrapped (hooks.ts).
-    const stored = function (this: any, ...a: any[]) { const { runWithContext } = require('./plugin-context'); return runWithContext(owner, () => (callback as any).apply(this, a)); };
+    //
+    // The HTML it returns is plugin-controlled and lands inside a post, on public pages — so it passes
+    // the host's sanitizer here, on the host side, exactly once for every kind of owner: an in-process
+    // plugin, an isolated one (its registration is a shim that resolves the worker's reply — see
+    // plugin-isolate 'register-shortcode') and a theme. Plugin widgets get the same treatment.
+    const stored = function (this: any, ...a: any[]) {
+        const { runWithContext } = require('./plugin-context');
+        const out = runWithContext(owner, () => (callback as any).apply(this, a));
+        return out && typeof out.then === 'function' ? Promise.resolve(out).then(sanitizePluginShortcodeHtml) : sanitizePluginShortcodeHtml(out);
+    };
     pluginTable(true)!.set(tag, { callback: stored, owner });
 }
 

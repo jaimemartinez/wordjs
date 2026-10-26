@@ -147,7 +147,15 @@ function scanSpans(sql: string): Span[] {
             if (m) { push('ident', i, i + m[0].length); i += m[0].length; continue; }
             i++; continue;
         }
-        if (c === '-' && s[i + 1] === '-') {
+        // MySQL's own comment rules: `--` opens a line comment only when the second dash is followed by
+        // whitespace, a control character or the end of the input (`--1` is `- -1`), and `#` opens one
+        // anywhere outside a literal. Both run to the newline. Read any other way, live code would be
+        // classified as comment text (or comment text as code) unlike the server reads it.
+        if (c === '-' && s[i + 1] === '-' && (i + 2 >= n || s.charCodeAt(i + 2) <= 0x20)) {
+            let j = i; while (j < n && s[j] !== '\n') j++;
+            push('comment', i, j); i = j; continue;
+        }
+        if (c === '#') {
             let j = i; while (j < n && s[j] !== '\n') j++;
             push('comment', i, j); i = j; continue;
         }

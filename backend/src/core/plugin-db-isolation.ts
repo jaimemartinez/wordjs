@@ -12,10 +12,14 @@
  *     GRANTed its prefix; queries run on a small pool authenticated AS that user (driver.runAsUser). Its
  *     password is generated fresh per process boot and kept only in memory.
  *
- * Fails GRACEFULLY: if the pool user can't provision (no CREATEROLE / CREATE USER), or the driver is
- * SQLite, provisioning is a no-op and the plugin falls back to the text-guard alone — never broken. DDL
- * (CREATE/ALTER/DROP) always runs as the admin user (a scoped principal has no CREATE), prefix-scoped by
- * the text-guard, and each new table is GRANTed to the principal afterward.
+ * DDL (CREATE/ALTER/DROP) runs under the same principal (runDdl): on Postgres the role holds CREATE on its
+ * schema and OWNS its plugin's tables; on MySQL the user is granted, just before the statement, ALL on
+ * exactly the objects the SQL guard proved the plugin owns. The database therefore judges plugin DDL by
+ * the plugin's own rights, and a view or trigger it creates runs as the plugin, never as the admin.
+ *
+ * Fails GRACEFULLY: if the pool user can't provision (no CREATEROLE / CREATE USER / GRANT OPTION), or
+ * the driver is SQLite, the plugin falls back to the text-guard alone on the admin connection — never
+ * broken — and the fallback is recorded (degradedPrincipals) so Site Health can tell the administrator.
  */
 const config = require('../config/app');
 const crypto = require('crypto');
@@ -42,6 +46,18 @@ function principalKey(slug: string): string {
 const provisioned = new Set<string>();
 // MySQL only: the per-process password for each principal's login user (never persisted).
 const pluginPasswords = new Map<string, string>();
+// Postgres only: principals whose role may run its plugin's DDL (enablePluginDdl succeeded).
+const ddlCapable = new Set<string>();
+// Principal key → why it could not be set up (or lost its DDL scope) on Postgres/MySQL. Read by Site Health.
+const degraded = new Map<string, { slug: string; reason: string }>();
+function markDegraded(slug: string, reason: string, e?: any): void {
+    degraded.set(principalKey(slug), { slug, reason: clean(String((e && e.message) || reason)).slice(0, 300) });
+}
+
+/** Does `table` (under the plugin's prefix) really belong to `slug`? A longer sibling prefix owns its own. */
+function ownsTable(slug: string, table: string): boolean {
+    try { return require('./plugin-api').isTableOwnedBy(table, slug); } catch { return false; }
+}
 
 // Strip line breaks before logging an untrusted value (a plugin slug, or a driver error echoing one),
 // so a crafted slug can't forge or split log entries.
@@ -108,13 +124,25 @@ async function provisionImpl(slug: string): Promise<void> {
     const pg = pgDriver();
     if (pg) {
         const role = roleName(slug);
+        const owns = (t: string) => ownsTable(slug, t);
         try {
             await pg.ensurePluginRole(role);
-            await pg.grantPluginPrefix(role, tablePrefix(slug));
+            await pg.grantPluginPrefix(role, tablePrefix(slug), owns);
             provisioned.add(principalKey(slug));
         } catch (e: any) {
             provisioned.delete(principalKey(slug));
+            markDegraded(slug, 'provision', e);
             log.warn({ slug: clean(slug), err: e }, `[plugin-db-roles] could not provision role for '${clean(slug)}' (falling back to the SQL text-guard)`);
+            return;
+        }
+        try {
+            await pg.enablePluginDdl(role, tablePrefix(slug), owns);
+            ddlCapable.add(principalKey(slug));
+            degraded.delete(principalKey(slug));
+        } catch (e: any) {
+            ddlCapable.delete(principalKey(slug));
+            markDegraded(slug, 'ddl', e);
+            log.warn({ slug: clean(slug), err: e }, `[plugin-db-roles] could not hand '${clean(slug)}' its own tables (its DDL runs on the SQL text-guard)`);
         }
         return;
     }
@@ -124,12 +152,14 @@ async function provisionImpl(slug: string): Promise<void> {
         const pw = crypto.randomBytes(24).toString('hex');
         try {
             await my.ensurePluginUser(user, pw);
-            await my.grantPluginPrefixToUser(user, tablePrefix(slug));
+            await my.grantPluginPrefixToUser(user, tablePrefix(slug), (t: string) => ownsTable(slug, t));
             pluginPasswords.set(principalKey(slug), pw);
             provisioned.add(principalKey(slug));
+            degraded.delete(principalKey(slug));
         } catch (e: any) {
             provisioned.delete(principalKey(slug));
             pluginPasswords.delete(principalKey(slug));
+            markDegraded(slug, 'provision', e);
             log.warn({ slug: clean(slug), err: e }, `[plugin-db-users] could not provision user for '${clean(slug)}' (falling back to the SQL text-guard)`);
         }
     }
@@ -149,6 +179,8 @@ async function deprovision(slug: string): Promise<void> {
 async function deprovisionImpl(slug: string): Promise<void> {
     provisioned.delete(principalKey(slug));
     pluginPasswords.delete(principalKey(slug));
+    ddlCapable.delete(principalKey(slug));
+    degraded.delete(principalKey(slug));
     const pg = pgDriver();
     if (pg) {
         try { await pg.dropPluginRole(roleName(slug)); }
@@ -183,11 +215,18 @@ async function grantNewTableImpl(slug: string, table: string): Promise<void> {
     const my = pg ? null : mysqlDriver();
     if (!pg && !my) return;
     try {
-        if (pg) await pg.grantPluginTable(roleName(slug), tbl);
+        if (pg) {
+            await pg.grantPluginTable(roleName(slug), tbl);
+            // A table the HOST created for the plugin (createTable) goes to the role like the rest, so the
+            // plugin's later ALTER/INDEX on it run under the role too.
+            if (ddlCapable.has(principalKey(slug))) await pg.ownPluginTable(roleName(slug), tbl);
+        }
         else await my.grantPluginTableToUser(userName(slug), tbl);
     } catch (e: any) {
         provisioned.delete(principalKey(slug));
         pluginPasswords.delete(principalKey(slug));
+        ddlCapable.delete(principalKey(slug));
+        markDegraded(slug, 'grant', e);
         log.warn({ table: clean(table), slug: clean(slug), err: e },
             `[plugin-db-${pg ? 'roles' : 'users'}] grant new table '${clean(table)}' to '${clean(slug)}' failed (falling back to the SQL text-guard)`);
     }
@@ -195,8 +234,7 @@ async function grantNewTableImpl(slug: string, table: string): Promise<void> {
 
 /**
  * Run a plugin's DML/SELECT under its DB principal when provisioned; otherwise the normal (text-guard-only)
- * path. NOTE: DDL is NOT routed here — a scoped principal has no CREATE, so the caller runs CREATE/ALTER/DROP
- * as the admin user (prefix-scoped by the text-guard) and then GRANTs the new table via grantNewTable().
+ * path. DDL goes through runDdl below.
  */
 async function runScoped(slug: string, method: 'all' | 'get' | 'run', sql: string, params: any[]): Promise<any> {
     const { dbAsync } = require('../config/database');
@@ -211,6 +249,50 @@ async function runScoped(slug: string, method: 'all' | 'get' | 'run', sql: strin
         if (my && pw) return runAsHost(() => my.runAsUser(userName(slug), pw, method, sql, params));
     }
     return dbAsync[method](sql, params);
+}
+
+/**
+ * Run a plugin's DDL (CREATE/ALTER/DROP) under its DB principal. `owned` is what the SQL guard proved the
+ * plugin owns in this statement; on MySQL exactly those names are granted to the user first. A statement the
+ * database refuses under the principal FAILS — it is never retried with the admin's rights. Only a plugin
+ * with no usable principal (SQLite, or a database user that cannot create one: see degradedPrincipals) runs
+ * its DDL on the shared connection, on the text-guard alone.
+ */
+async function runDdl(slug: string, sql: string, params: any[], owned: string[]): Promise<any> {
+    const { dbAsync } = require('../config/database');
+    const key = principalKey(slug);
+    if (provisioned.has(key)) {
+        const pg = pgDriver();
+        if (pg) {
+            if (ddlCapable.has(key)) return asHost(() => pg.runDdlAsRole(roleName(slug), sql, params));
+        } else {
+            const my = mysqlDriver();
+            const pw = pluginPasswords.get(key);
+            if (my && pw) {
+                let granted = true;
+                try { await asHost(() => my.grantPluginDdlToUser(userName(slug), owned)); }
+                catch (e: any) {
+                    granted = false;
+                    markDegraded(slug, 'ddl', e);
+                    log.warn({ slug: clean(slug), err: e }, `[plugin-db-users] could not grant '${clean(slug)}' its DDL objects (this statement runs on the SQL text-guard)`);
+                }
+                if (granted) return asHost(() => my.runDdlAsUser(userName(slug), pw, sql, params));
+            }
+        }
+    }
+    return dbAsync.run(sql, params);
+}
+
+/**
+ * The plugins whose queries run WITHOUT their own DB principal on an engine that has principals (Postgres /
+ * MySQL), and why — Site Health's warning. Empty on SQLite and when isolation was switched off on purpose.
+ */
+function degradedPrincipals(): { slug: string; reason: string }[] {
+    if (!enabled() || (!pgDriver() && !mysqlDriver())) return [];
+    const suffix = principalSuffix();
+    return Array.from(degraded.entries())
+        .filter(([k]) => (suffix ? k.endsWith(suffix) : !k.includes('__s')))
+        .map(([, v]) => ({ ...v }));
 }
 
 /**
@@ -241,7 +323,7 @@ async function dropSitePrincipals(slugs: string[]): Promise<void> {
         } catch { /* no read access to mysql.user: the names above are still dropped */ }
     }
     for (const key of Array.from(provisioned)) {
-        if (key.endsWith(suffix)) { provisioned.delete(key); pluginPasswords.delete(key); }
+        if (key.endsWith(suffix)) { provisioned.delete(key); pluginPasswords.delete(key); ddlCapable.delete(key); degraded.delete(key); }
     }
     for (const name of names) {
         try {
@@ -261,11 +343,12 @@ function forgetSiteProvisioning(siteId: number): void {
     const suffix = principalSuffix(siteId);
     for (const key of Array.from(provisioned)) {
         const mine = suffix ? key.endsWith(suffix) : !key.includes('__s');
-        if (mine) { provisioned.delete(key); pluginPasswords.delete(key); }
+        if (mine) { provisioned.delete(key); pluginPasswords.delete(key); ddlCapable.delete(key); degraded.delete(key); }
     }
 }
 
 module.exports = {
-    provision, reconcile, deprovision, grantNewTable, runScoped, dropSitePrincipals, forgetSiteProvisioning,
-    roleName, userName, tablePrefix, isProvisioned: (s: string) => provisioned.has(principalKey(s)),
+    provision, reconcile, deprovision, grantNewTable, runScoped, runDdl, dropSitePrincipals, forgetSiteProvisioning,
+    degradedPrincipals, roleName, userName, tablePrefix, isProvisioned: (s: string) => provisioned.has(principalKey(s)),
+    isDdlScoped: (s: string) => ddlCapable.has(principalKey(s)),
 };

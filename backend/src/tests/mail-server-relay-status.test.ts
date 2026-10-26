@@ -277,7 +277,7 @@ test('relay settings saved by another process take effect at the next delivery (
         assert.match(r.body.failed[0].error, /^Relay unavailable: /);
 
         // Another process clears the relay: only the shared setting changes here.
-        b.options.mail_server = '';
+        b.options.mail_server_mail_server = '';
         const lookupsBefore = b.mxLookups.length;
         r = await b.call('post', '/test', { to: 'someone@example.org' });
         assert.doesNotMatch(String(r.body.failed && r.body.failed[0] && r.body.failed[0].error), /Relay unavailable/, JSON.stringify(r.body));
@@ -290,8 +290,8 @@ test('relay settings saved by another process take effect at the next delivery (
 test('a relay configured by another process is used at the next delivery', async () => {
     const b = await boot({});
     try {
-        b.options.mail_server = 'relay.lan';
-        b.options.mail_port = '587';
+        b.options.mail_server_mail_server = 'relay.lan';
+        b.options.mail_server_mail_port = '587';
         const r = await b.call('post', '/test', { to: 'someone@example.org' });
         assert.strictEqual(r.body.success, true, JSON.stringify(r.body));
         assert.strictEqual(r.body.delivered[0].via, 'relay');
