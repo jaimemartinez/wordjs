@@ -29,6 +29,8 @@ export interface ReadinessResult {
 export interface ReadinessDeps {
     isInstalled: () => boolean;
     isBooted: () => boolean;
+    /** The process received a termination signal (core/graceful-shutdown): out of rotation at once. */
+    isDraining?: () => boolean;
     checkDatabase: (opts: { timeoutMs: number }) => Promise<{ status: string }>;
     onError?: (err: unknown) => void;
     ttlMs?: number;
@@ -97,6 +99,11 @@ export function createReadinessProbe(deps: ReadinessDeps): () => Promise<Readine
     }
 
     return async function readiness(): Promise<ReadinessResult> {
+        // Draining is answered before the cache: a verdict cached a moment before the signal must not
+        // keep this instance in rotation for another TTL.
+        if (deps.isDraining && deps.isDraining()) {
+            return { statusCode: 503, body: { status: 'draining', checks: { draining: true } } };
+        }
         if (cached && now() - cached.at < ttlMs) return cached.result;
         if (inflight) return inflight;
         inflight = evaluate().then((result) => {

@@ -29,6 +29,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     reaches the phone.
 
 ### Fixed
+- **Stopping the server no longer cuts the requests it is serving.** `SIGTERM`/`SIGINT` used to flush the
+  database and exit at once, so every deploy, scale-down or restart by the orchestrator answered errors, and
+  `/readyz` stayed 200 until the process vanished. Now `/readyz` answers 503 `draining` at once, the listeners stop
+  accepting (after `WORDJS_SHUTDOWN_DRAIN_DELAY_MS`, 5 s under Kubernetes), the requests in flight finish for up to
+  `WORDJS_SHUTDOWN_TIMEOUT_MS` (10 s), and only then does the process exit. The monolith closes its internal API
+  listener last, so pages still rendering can finish. The split-mode supervisor (`npm start`) now passes the signal
+  on to the app instead of dying under it.
 - **conference-manager 2.36.20: the cupo editor on a locality card no longer pushes «Cancelar» out of the card.**
 - **conference-manager 2.36.17: «Autorizaciones» shows its list on a computer again.** On a site built before 2.36.16,
   the desktop table and the phone cards were both hidden on a wide screen, so a computer showed no list. The plugin's

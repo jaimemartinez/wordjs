@@ -41,6 +41,11 @@ const RESTART_EXIT_CODE = 75;
 
 let consecutiveCrashes = 0;
 let startedAt = Date.now();
+// The running app, and whether a termination signal asked this supervisor to stop: the signal is passed
+// on to the app, which drains its requests (core/graceful-shutdown), and its exit ends the supervisor
+// instead of starting it again.
+let child = null;
+let stopping = false;
 
 /** Delay before the next start after `crashes` crashes in a row. */
 function backoffMs(crashes) {
@@ -52,14 +57,18 @@ function startApp() {
     console.log(`🚀 Supervisor: Launching WordJS Core (${RUN_COMPILED ? 'compiled dist/' : 'ts-node'})...`);
 
     // Spawn the actual server
-    const child = spawn('node', APP_ARGS, {
+    child = spawn('node', APP_ARGS, {
         stdio: 'inherit', // Pipe logs directly to console
         // Pass environment variables, and tell the app a supervisor restarts it (core/restart.ts).
         env: { ...process.env, WORDJS_SUPERVISED: '1' },
         cwd: __dirname
     });
 
-    child.on('exit', (code) => {
+    child.on('exit', (code, signal) => {
+        if (stopping) {
+            console.log('🛑 Supervisor: App stopped. Exiting.');
+            process.exit(code === null ? (signal ? 1 : 0) : code);
+        }
         if (code === RESTART_EXIT_CODE) {
             console.log('🔄 Supervisor: App asked for a restart. Starting it again...');
             setTimeout(startApp, 250);
@@ -87,5 +96,20 @@ function startApp() {
 
 module.exports = { backoffMs, MAX_BACKOFF_MS, STABLE_AFTER_MS };
 
+/** Pass a termination signal on to the app and stop with it. */
+function installSignalForwarding() {
+    for (const sig of ['SIGTERM', 'SIGINT', 'SIGHUP']) {
+        process.on(sig, () => {
+            stopping = true;
+            // Ctrl+C in a Windows console already reaches the child (same console); a kill there is not graceful.
+            if (process.platform === 'win32' && sig === 'SIGINT') return;
+            try { if (child) child.kill(sig); } catch { /* already gone */ }
+        });
+    }
+}
+
 // Start the loop (not when a test requires the file for backoffMs).
-if (require.main === module) startApp();
+if (require.main === module) {
+    installSignalForwarding();
+    startApp();
+}
