@@ -524,21 +524,23 @@ function Queue({ t, locale, toast, confirm }: any) {
         : it.delivery_status === 'retry' ? ['amber', t('badge.retrying'), 'fa-solid fa-rotate']
             : ['violet', t('badge.scheduled'), 'fa-regular fa-clock'];
 
+    // One column whose children may shrink below their content: a long unbroken token (an address glued to
+    // a colon in a delivery error) must wrap inside the card, not widen the page on a phone.
     return (
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="max-w-xl text-sm text-slate-500">{t('srv.queue.hint')}</p>
+                <p className="min-w-0 max-w-xl text-sm text-slate-500">{t('srv.queue.hint')}</p>
                 <IconBtn icon="fa-solid fa-rotate-right" label={t('common.refresh')} onClick={load} />
             </div>
             <SendRateCard t={t} toast={toast} pacing={pacing} onSaved={load} />
             {!items ? <div className="py-16 text-center"><Spinner className="text-2xl" /></div> : items.length === 0 ? (
                 <Card><EmptyState icon="fa-solid fa-circle-check" title={t('srv.queue.empty')} /></Card>
             ) : (
-                <ul className="grid gap-3">
+                <ul className="grid grid-cols-1 gap-3">
                     {items.map(it => {
                         const [tone, label, icon] = status(it);
                         return (
-                            <li key={it.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                            <li key={it.id} className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                                 <div className="flex flex-wrap items-start gap-3">
                                     <Pill tone={tone}><i className={icon}></i>{label}</Pill>
                                     <div className="min-w-0 flex-1 basis-60">
@@ -551,12 +553,12 @@ function Queue({ t, locale, toast, confirm }: any) {
                                             {!it.delivery_status && it.scheduled_at && <span>{t('srv.queue.at', { when: relativeTime(it.scheduled_at, locale) })}</span>}
                                         </div>
                                     </div>
-                                    <div className="flex gap-1.5">
+                                    <div className="flex flex-wrap gap-1.5">
                                         {(it.delivery_status === 'failed' || it.delivery_status === 'retry') && <Button size="sm" icon="fa-solid fa-paper-plane" loading={busy === it.id} onClick={() => retry(it)}>{t('srv.queue.retryNow')}</Button>}
                                         {it.delivery_status !== 'failed' && <Button size="sm" variant="dangerGhost" icon="fa-solid fa-ban" disabled={busy === it.id} onClick={() => cancel(it)}>{t('srv.queue.cancel')}</Button>}
                                     </div>
                                 </div>
-                                {it.last_error && Number(it.paced) !== 1 && <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2.5 font-mono text-[11px] text-slate-600">{it.last_error}</pre>}
+                                {it.last_error && Number(it.paced) !== 1 && <pre className="mt-3 whitespace-pre-wrap wrap-anywhere rounded-lg bg-slate-50 p-2.5 font-mono text-[11px] text-slate-600">{it.last_error}</pre>}
                             </li>
                         );
                     })}
