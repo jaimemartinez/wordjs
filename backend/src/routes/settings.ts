@@ -411,6 +411,13 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
     large_size_w: (v: any) => integerSettingProblem('large_size_w', v, 0, 4000),
     large_size_h: (v: any) => integerSettingProblem('large_size_h', v, 0, 4000),
     comment_registration: (v: any) => booleanishSetting(v) === null ? 'comment_registration must be a boolean ("1" or "0").' : null,
+    // Who may sign up and whether they must prove their address, and the two comment e-mail switches: the
+    // same closed vocabulary, stored as '1'/'0' (SETTING_NORMALIZERS), so no spelling reads one way here
+    // and another way in POST /auth/register.
+    users_can_register: (v: any) => booleanishSetting(v) === null ? 'users_can_register must be a boolean ("1" or "0").' : null,
+    require_email_verification: (v: any) => booleanishSetting(v) === null ? 'require_email_verification must be a boolean ("1" or "0").' : null,
+    comments_notify: (v: any) => booleanishSetting(v) === null ? 'comments_notify must be a boolean ("1" or "0").' : null,
+    moderation_notify: (v: any) => booleanishSetting(v) === null ? 'moderation_notify must be a boolean ("1" or "0").' : null,
     // Interruptor de la caché de objetos: booleano cerrado (ver booleanishSetting arriba).
     redis_cache_enabled: (v: any) => booleanishSetting(v) === null
         ? 'redis_cache_enabled must be a boolean ("1" or "0").'
@@ -531,6 +538,11 @@ const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
     // Stored as the canonical "1"/"0" so every reader agrees on what was saved.
     comments_enabled: (v: any) => booleanishSetting(v) ?? '1',
     comment_registration: (v: any) => booleanishSetting(v) ?? '0',
+    // Registration closed and verification required are the safe sides when in doubt.
+    users_can_register: (v: any) => booleanishSetting(v) ?? '0',
+    require_email_verification: (v: any) => booleanishSetting(v) ?? '1',
+    comments_notify: (v: any) => booleanishSetting(v) ?? '1',
+    moderation_notify: (v: any) => booleanishSetting(v) ?? '1',
     blog_public: (v: any) => booleanishSetting(v) ?? '1',
     comment_moderation: (v: any) => booleanishSetting(v) ?? '1',
     comment_previously_approved: (v: any) => booleanishSetting(v) ?? '1',

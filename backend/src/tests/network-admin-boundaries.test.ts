@@ -167,7 +167,7 @@ describe('a network administrator account is out of reach of a main-site-only ad
         assert.strictEqual(peer.status, 200, JSON.stringify(peer.body));
         const down = await as('net', 'put', `${API}/users/${U.mainadmin}`).send({ displayName: 'Main Admin' });
         assert.strictEqual(down.status, 200, JSON.stringify(down.body));
-        const reset = await as('net', 'post', `${API}/users/${U.netadmin2}/mfa/reset`).send({});
+        const reset = await as('net', 'post', `${API}/users/${U.netadmin2}/mfa/reset`).send({ currentPassword: PASSWORD });
         assert.strictEqual(reset.status, 200, JSON.stringify(reset.body));
     });
 

@@ -131,6 +131,41 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     group's turn rounded to 5 minutes, instead of an exact «Tu turno: 12:10–12:25». The exact range no longer
     reaches the phone.
 
+### Security
+- **Sign-in, sessions and two-factor authentication hardened.**
+  - **One reading of the `Authorization` header.** The two-factor policy, every authenticator, the AI-agent
+    endpoint and its rate-limit bucket now read the Bearer credential through one shared function, and the policy
+    for API tokens and agent connections is also checked inside the authenticators that accept them.
+  - **Signing out lasts.** A signed-out session stays revoked for a full session lifetime, including copies of it
+    refreshed earlier.
+  - **The live notification stream is re-checked** while it is open, like the collaboration stream: signing out,
+    «sign out everywhere», a password change, a revoked API token, a deleted account or a two-factor requirement
+    closes it. Query tickets carry the session they were issued from.
+  - **Confirming authority over privileged accounts.** Creating an administrator (or an account with a role that
+    manages users, roles or settings), promoting an account into such a role, changing another privileged account's
+    password or address, and resetting anyone's two-factor authentication now ask for your password, plus a current
+    code when your account has 2FA. The admin shows the fields when they are needed; one confirmation covers a
+    bulk role change for a few minutes.
+  - **Stored connection secrets stay with their server.** Testing Redis or S3 media storage against another
+    server, port, database, endpoint, region or bucket with the saved password or secret asks for your password.
+  - **AI agents.** Turning off «require a person to confirm what agents publish» follows the same two-factor rule
+    as granting an agent, and granting an agent is refused to the sessions that cannot create one.
+  - **Passwords and recovery.** The current-password check always uses your own account. Changing a password (or
+    an administrator changing someone's address) cancels a reset link already sent. Password recovery and sign-up
+    with email verification answer at a fixed pace. The code used to turn on two-factor authentication is spent.
+    Expired pending registrations are all pruned.
+  - **Password length is measured the way it is stored.** A new password may be at most 72 bytes (accented
+    letters count as 2, emoji as 4) on every screen and endpoint that sets one; the forms say so before sending.
+    Signing in with an existing password is unchanged.
+  - **Settings and inputs.** «Anyone can register», «require email verification» and the two comment e-mail
+    switches are stored as on/off and read the same way everywhere; any other value is refused. API-token and
+    agent lifetimes are whole days from 1 to 3650. Display names are plain text, trimmed, at most 250 characters.
+  - **Single use means single use.** A password-reset link and a two-factor sign-in challenge are each consumed
+    atomically, so concurrent requests cannot both use them.
+  - **Rate limits and secrets at rest.** The sign-in, registration/recovery and installer rate limits keep
+    counting on each server while Redis is unavailable. The audit digest of unknown sign-in names uses its own
+    derived key. Two-factor backup codes are stored salted and slow-hashed; codes created before keep working.
+
 ### Fixed
 - **GraphQL, streams and health probes: tighter resource bounds.**
   - **Query limits.** A scalar leaf now costs 0.1 in the cost limit, multiplied by the page it sits on like any

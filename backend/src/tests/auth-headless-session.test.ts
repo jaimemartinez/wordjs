@@ -200,7 +200,11 @@ test('the legitimate owner (password + code) still enrolls end to end', async ()
 test('an administrator can reset another account\'s 2FA, clearing every mfa_* key', async () => {
     // 'enroller' is enrolled by the test above; without this route the only exits were a code the victim
     // no longer has, or deleting the account.
-    const res = await request(app).post(`${B}/users/${U.enroller}/mfa/reset`).set('Authorization', asUser('admin2'));
+    // The administrator confirms with their own password (users.ts requireAccountStepUp)…
+    const bare = await request(app).post(`${B}/users/${U.enroller}/mfa/reset`).set('Authorization', asUser('admin2'));
+    assert.strictEqual(bare.status, 403, JSON.stringify(bare.body));
+    assert.strictEqual(bare.body.code, 'rest_sudo_required');
+    const res = await request(app).post(`${B}/users/${U.enroller}/mfa/reset`).set('Authorization', asUser('admin2')).send({ currentPassword: PASSWORD });
     assert.strictEqual(res.status, 200, JSON.stringify(res.body));
     assert.strictEqual(res.body.reset, true);
     for (const key of ['mfa_enabled', 'mfa_totp_secret', 'mfa_recovery_codes', 'mfa_totp_last_step', 'mfa_pending_secret']) {
@@ -220,7 +224,7 @@ test('an edit_users delegate cannot reset an ADMINISTRATOR\'s 2FA (privilege hie
     assert.strictEqual(res.status, 403, JSON.stringify(res.body));
     assert.strictEqual(res.body.code, 'rest_forbidden');
     // …but the same delegate may reset a non-privileged account — the hatch still works for its purpose.
-    const ok = await request(app).post(`${B}/users/${U.sub}/mfa/reset`).set('Authorization', asUser('delegate'));
+    const ok = await request(app).post(`${B}/users/${U.sub}/mfa/reset`).set('Authorization', asUser('delegate')).send({ currentPassword: PASSWORD });
     assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
 });
 

@@ -30,8 +30,11 @@ const log = require('./module-logger').moduleLogger('core/pending-registrations'
 const PREFIX = 'registration_pending_token_';
 /** The raw token the link carries: 32 random bytes, hex. Anything else is refused before any lookup. */
 const RAW_TOKEN_RE = /^[a-f0-9]{64}$/;
-/** At most this many rows are examined per prune — registration is rate-limited, so this keeps up. */
+/** Rows read per page while pruning; a prune walks every page (keyset on the name), not just the first. */
 const PRUNE_BATCH = 200;
+/** The prune a new registration triggers runs at most this often per site (an explicit call always runs). */
+const PRUNE_INTERVAL_MS = 60 * 1000;
+const lastPruneBySite = new Map<string, number>();
 
 interface PendingRegistration {
     username: string;
@@ -56,22 +59,33 @@ function isRecord(v: any): v is PendingRegistration {
  * Drop expired registrations (best effort — never fails the request that triggered it). Names are
  * matched in JavaScript as well as by LIKE, so `_` acting as a wildcard (and MySQL's case-insensitive
  * LIKE) can never select a row this module did not write.
+ *
+ * The expiry lives inside the row's value, so SQL cannot select the expired rows by itself: the prune
+ * walks EVERY row of this module, a page at a time in name order (keyset: each page starts after the last
+ * name of the previous one). Reading only the first page left every expired row behind it in place for
+ * good once that page was full of live ones.
  */
 async function prunePendingRegistrations(now: number = Date.now()): Promise<number> {
     let removed = 0;
     try {
         const { dbAsync } = require('../config/database');
         const { deleteOption } = require('./options');
-        const rows = await dbAsync.all(
-            `SELECT option_name, option_value FROM options WHERE option_name LIKE ? LIMIT ${PRUNE_BATCH}`,
-            [`${PREFIX}%`]);
-        for (const row of rows || []) {
-            const name = String(row && row.option_name);
-            if (!name.startsWith(PREFIX)) continue;
-            let rec: any = null;
-            try { rec = JSON.parse(String(row.option_value)); } catch { rec = null; }
-            if (isRecord(rec) && rec.expires > now) continue;
-            if (await deleteOption(name)) removed++;
+        let after = '';
+        for (;;) {
+            const rows = await dbAsync.all(
+                `SELECT option_name, option_value FROM options WHERE option_name LIKE ? AND option_name > ? ORDER BY option_name LIMIT ${PRUNE_BATCH}`,
+                [`${PREFIX}%`, after]);
+            if (!rows || !rows.length) break;
+            for (const row of rows) {
+                const name = String(row && row.option_name);
+                if (name > after) after = name;
+                if (!name.startsWith(PREFIX)) continue;
+                let rec: any = null;
+                try { rec = JSON.parse(String(row.option_value)); } catch { rec = null; }
+                if (isRecord(rec) && rec.expires > now) continue;
+                if (await deleteOption(name)) removed++;
+            }
+            if (rows.length < PRUNE_BATCH) break;
         }
     } catch (e: any) {
         log.warn({ err: e }, '[registration] pruning expired pending registrations failed');
@@ -94,7 +108,12 @@ async function createPendingRegistration(rec: Omit<PendingRegistration, 'expires
         // 256 random bits do not collide; if the row is somehow there, nothing was stored for THIS link.
         throw new Error('Could not store the pending registration');
     }
-    await prunePendingRegistrations();
+    const site = String(require('./site-context').currentSiteIdOrNull());
+    const last = lastPruneBySite.get(site) || 0;
+    if (Date.now() - last >= PRUNE_INTERVAL_MS) {
+        lastPruneBySite.set(site, Date.now());
+        await prunePendingRegistrations();
+    }
     return raw;
 }
 

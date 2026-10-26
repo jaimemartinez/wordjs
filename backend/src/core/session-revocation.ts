@@ -25,6 +25,21 @@ const SESSION_ID_CLAIM = 'ses';
 /** Bound on the list: past it the oldest-expiring entries go first (they are the next to die anyway). */
 const MAX_REVOKED_SESSIONS = 200;
 
+/**
+ * How long, in seconds, a session token issued NOW lives (`config.jwt.expiresIn`, read the way the JWT
+ * library itself reads it). Falls back to a week when the setting cannot be read.
+ */
+function sessionLifetimeSeconds(): number {
+    try {
+        const jwt = require('jsonwebtoken');
+        const config = require('../config/app');
+        const probe = jwt.decode(jwt.sign({}, 'lifetime-probe', { expiresIn: config.jwt.expiresIn }));
+        const life = Number(probe && probe.exp) - Number(probe && probe.iat);
+        if (Number.isFinite(life) && life > 0) return life;
+    } catch { /* fall through */ }
+    return 7 * 24 * 3600;
+}
+
 function newSessionId(): string {
     return crypto.randomBytes(16).toString('base64url');
 }
@@ -83,7 +98,11 @@ async function revokeSession(userId: number, decoded: any): Promise<'session' | 
         return 'all';
     }
     const user = await User.findById(userId);
-    const exp = Number(decoded.exp) > now ? Number(decoded.exp) : now + 7 * 24 * 3600;
+    // The entry must outlive EVERY token that carries this id, not only the copy presented here: the
+    // sliding refresh keeps the id and issues a full new lifetime, so a refreshed copy made just before
+    // sign-out can expire up to one lifetime from now. Pruning at the presented copy's `exp` would let
+    // that copy authenticate again once the entry was gone.
+    const exp = Math.max(Number(decoded.exp) || 0, now + sessionLifetimeSeconds());
     const next = withRevokedSession(readRevokedSessions(user), ses, exp, now);
     await User.updateMeta(userId, REVOKED_SESSIONS_META, JSON.stringify(next));
     return 'session';
@@ -97,4 +116,5 @@ module.exports = {
     isSessionRevoked,
     withRevokedSession,
     revokeSession,
+    sessionLifetimeSeconds,
 };
