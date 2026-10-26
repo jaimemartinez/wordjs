@@ -14,6 +14,7 @@ import {
     type MediaStorageTestResult,
     type MediaStorageView,
 } from "@/lib/mediaStorage";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 /**
  * Settings → Media storage. Where public media is stored and served from: this server's disk (the
@@ -44,6 +45,8 @@ export default function MediaStoragePage() {
     const [saving, setSaving] = useState(false);
     const [testing, setTesting] = useState(false);
     const [test, setTest] = useState<MediaStorageTestResult | null>(null);
+    // Testing another endpoint, region or bucket with the SAVED secret: the server asks for your password.
+    const testStepUp = useMfaStepUp();
     const [deleteLocal, setDeleteLocal] = useState(false);
 
     const load = useCallback(async (resetForm: boolean) => {
@@ -103,8 +106,10 @@ export default function MediaStoragePage() {
         setTesting(true);
         setTest(null);
         try {
-            setTest(await mediaStorageApi.test(form));
+            setTest(await mediaStorageApi.test(form, testStepUp.payload()));
+            testStepUp.reset();
         } catch (e: any) {
+            if (testStepUp.absorb(e)) return;
             setTest({ ok: false, steps: [{ step: "write", ok: false, detail: e?.message || String(e) }] });
         } finally {
             setTesting(false);
@@ -256,6 +261,7 @@ export default function MediaStoragePage() {
                             <Button variant="secondary" onClick={runTest} loading={testing} icon="fa-plug-circle-check">{t("mediaStorage.test")}</Button>
                         )}
                     </div>
+                    {s3 && <MfaStepUpFields stepUp={testStepUp} withCode={false} />}
 
                     {test && (
                         <ul className="space-y-1 text-sm" aria-live="polite" data-testid="media-storage-test">

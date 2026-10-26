@@ -342,9 +342,21 @@ export function buildMutationFields(): Record<string, Field> {
             extensions: WRITE,
             resolve: async (_r, a, ctx) => ({ node: await write(ctx, 'DELETE', `/posts/${a.id}`) }),
         },
-        restoreContent: contentTransition('PUT /posts/:id out of the trash (status draft unless given).',
-            { status: { type: ContentStatusType } },
-            (a) => ({ status: a.status || 'draft' })),
+        // Out of the trash ONLY through POST /posts/:id/restore, as on REST: it returns the entry to the
+        // status it had before the trash under the restore and publish gates. A trashed entry refuses every
+        // in-place write (PUT answers 409), so a status given here is applied AFTER the restore, by a PUT
+        // that takes the ordinary edit and publish gates.
+        restoreContent: {
+            type: ContentPayloadType,
+            description: 'POST /posts/:id/restore (back to the status it had before the trash), then PUT /posts/:id {status} when a status is given.',
+            args: { id, status: { type: ContentStatusType } },
+            extensions: WRITE,
+            resolve: async (_r, a, ctx) => {
+                const restored = await write(ctx, 'POST', `/posts/${a.id}/restore`);
+                if (!a.status || (restored && restored.status === a.status)) return { node: restored };
+                return { node: await write(ctx, 'PUT', `/posts/${a.id}`, { body: { status: a.status } }) };
+            },
+        },
         deleteContent: {
             type: DeletePayloadType,
             description: 'DELETE /posts/:id?force=true — permanent.',
@@ -572,7 +584,7 @@ export const MUTATION_REST_TWINS: Readonly<Record<string, string>> = Object.free
     scheduleContent: 'PUT /posts/:id',
     unpublishContent: 'PUT /posts/:id',
     trashContent: 'DELETE /posts/:id',
-    restoreContent: 'PUT /posts/:id',
+    restoreContent: 'POST /posts/:id/restore',
     deleteContent: 'DELETE /posts/:id',
     setContentMeta: 'POST /posts/:id/meta',
     restoreRevision: 'POST /revisions/:id/restore',

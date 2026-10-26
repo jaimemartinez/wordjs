@@ -4,7 +4,7 @@ const http = require('node:http');
 const https = require('node:https');
 const x509 = require('../src/x509');
 
-const { createProxyServer, createUpstreamAgent } = require('../src/proxy-config');
+const { createProxyServer, createUpstreamAgent, upstreamAgents } = require('../src/proxy-config');
 const routing = require('../src/routing');
 
 // --- Cert helpers (src/x509) ----------------------------------------------------
@@ -82,7 +82,7 @@ test('changeOrigin rewrites upstream Host and xfwd preserves original', async (t
 // Shared CA + client for the mTLS cases
 const realCA = makeCA();
 const clientLeaf = makeLeaf(realCA, 'gateway-internal');
-const agent = createUpstreamAgent({ ca: realCA.pem, key: clientLeaf.key, cert: clientLeaf.cert });
+const agent = createUpstreamAgent({ ca: realCA.pem, key: clientLeaf.key, cert: clientLeaf.cert }, ['backend']);
 
 function httpsGet(port, agent) {
     return new Promise((resolve, reject) => {
@@ -154,10 +154,54 @@ test('mTLS wrong-CN negative: disallowed CN is rejected by checkServerIdentity',
     await assert.rejects(
         () => httpsGet(port, agent),
         (err) => {
-            assert.match(err.message, /not in allowed identities|evil-service/);
+            assert.match(err.message, /not the expected identity|evil-service/);
             return true;
         }
     );
+});
+
+// =============================================================================
+// 4b. mTLS ROLE BINDING: every node's cert chains to the same CA, so the CN must be the ROLE the
+// gateway meant to reach. A frontend certificate answering where the backend was expected (a node on
+// the path between the gateway and the backend) is refused — and the reverse — while each role's own
+// agent still reaches its own node.
+// =============================================================================
+test('mTLS role binding: a valid cluster cert of ANOTHER role is refused', async (t) => {
+    const agents = upstreamAgents({ ca: realCA.pem, key: clientLeaf.key, cert: clientLeaf.cert });
+    const serve = async (cn) => {
+        const leaf = makeLeaf(realCA, cn);
+        const srv = https.createServer(
+            { key: leaf.key, cert: leaf.cert, ca: realCA.pem, requestCert: true, rejectUnauthorized: true },
+            (req, res) => { res.writeHead(200); res.end(cn); }
+        );
+        const port = await listen(srv);
+        t.after(async () => { await close(srv); });
+        return port;
+    };
+    const frontendPort = await serve('frontend');
+    const backendPort = await serve('backend');
+    const gatewayPort = await serve('gateway');
+
+    await assert.rejects(() => httpsGet(frontendPort, agents.forRole('backend')), /not the expected identity/);
+    await assert.rejects(() => httpsGet(backendPort, agents.forRole('frontend')), /not the expected identity/);
+    await assert.rejects(() => httpsGet(gatewayPort, agents.forRole('backend')), /not the expected identity/);
+    assert.strictEqual((await httpsGet(backendPort, agents.forRole('backend'))).body, 'backend');
+    assert.strictEqual((await httpsGet(frontendPort, agents.forRole('frontend'))).body, 'frontend');
+    // No role, no agent: the caller refuses instead of verifying against "anyone in the cluster".
+    assert.strictEqual(agents.forRole(null), null);
+    assert.strictEqual(agents.forRole('gateway'), null);
+    assert.strictEqual(agents.forRole('__proto__'), null);
+    assert.throws(() => createUpstreamAgent({ ca: realCA.pem, key: clientLeaf.key, cert: clientLeaf.cert }), /expected upstream identity/);
+});
+
+test('routing.resolveUpstream names the role the chosen upstream must prove', () => {
+    const registry = new Map([
+        ['/', { name: 'frontend', targets: new Set(['https://10.0.0.5:3001']), metrics: {} }],
+        ['/api', { name: 'backend', targets: new Set(['https://10.0.0.6:4000']), metrics: {} }],
+    ]);
+    assert.deepStrictEqual(routing.resolveUpstream(registry, '/api/v1/auth/login'), { target: 'https://10.0.0.6:4000', role: 'backend' });
+    assert.deepStrictEqual(routing.resolveUpstream(registry, '/about'), { target: 'https://10.0.0.5:3001', role: 'frontend' });
+    assert.deepStrictEqual(routing.resolveUpstream(registry, '/api/revalidate'), { target: 'https://10.0.0.5:3001', role: 'frontend' });
 });
 
 // =============================================================================

@@ -14,7 +14,7 @@ const slugifyLib = require('slugify');
 // dangerouslySetInnerHTML, and `class="fixed inset-0 z-50 w-full h-full bg-white"` around an
 // attacker-chosen <a href> is a full-screen credential-phishing overlay inside /admin.
 // sanitize-meta.ts requires nothing from this module, so there is no cycle.
-const { withClassBound } = require('./sanitize-meta');
+const { withClassBound, withNamedPropsBound } = require('./sanitize-meta');
 
 /**
  * The longest slug this function will produce.
@@ -135,7 +135,8 @@ function sanitizeContent(content: string, allowedTags: any = null) {
     // `allowedTags` parameter replaces the whole configuration, so a caller that passes its own would
     // otherwise re-open the channel this function exists to close. withClassBound preserves whatever
     // transformTags that config declares.
-    return sanitizeHtml(content, withClassBound(allowedTags || defaultAllowed));
+    // The same holds for ids (DOM clobbering): every author id is namespaced, whichever config is used.
+    return sanitizeHtml(content, withNamedPropsBound(withClassBound(allowedTags || defaultAllowed)));
 }
 
 /**
@@ -181,18 +182,27 @@ function escAttr(text: any) {
  * Escape URL
  * Equivalent to esc_url()
  */
-function escUrl(url: string) {
+function escUrl(url: string, allowedProtocols: readonly string[] = ['http:', 'https:', 'mailto:', 'tel:']) {
     if (!url) return '';
     try {
         const parsed = new URL(url);
-        const allowedProtocols = ['http:', 'https:', 'mailto:', 'tel:'];
         if (!allowedProtocols.includes(parsed.protocol)) {
             return '';
         }
-        return parsed.href;
+        // WHATWG URL serialisation leaves quotes, angle brackets and backticks raw in opaque paths
+        // (mailto:, tel:) and in some components of http(s) URLs. Percent-encode them so the result
+        // can never close or open an HTML attribute, whatever sink it lands in.
+        return parsed.href.replace(/["'<>`\s]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
     } catch {
         return '';
     }
+}
+
+/**
+ * Escape a URL used as a media source (img/audio/video src, poster): only http(s), never mailto:/tel:.
+ */
+function escMediaUrl(url: string) {
+    return escUrl(url, ['http:', 'https:']);
 }
 
 /**
@@ -317,6 +327,7 @@ module.exports = {
     escHtml,
     escAttr,
     escUrl,
+    escMediaUrl,
     nl2br,
     autop,
     trimWords,

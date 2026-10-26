@@ -101,7 +101,10 @@ const upload = multer({
         // SECURITY: Prevent CVE-2025-47935/47944 DoS
         files: 1,           // Only 1 plugin zip per request
         fields: 10,         // Minimal fields needed
-        parts: 15           // Limited total parts
+        fieldSize: 16 * 1024,
+        fieldNameSize: 100,
+        parts: 15,          // Limited total parts
+        headerPairs: 200
     },
     fileFilter: (req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
@@ -1421,6 +1424,11 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  *                         type: boolean
  *                       strategy:
  *                         type: string
+ *                       origins:
+ *                         type: array
+ *                         description: The https origins the script loads code from (e.g. an analytics provider); the public pages' Content-Security-Policy allows exactly these.
+ *                         items:
+ *                           type: string
  *                 styles:
  *                   type: array
  *                   items:

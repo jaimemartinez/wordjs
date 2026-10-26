@@ -60,7 +60,7 @@ const { default: SiteLoginLayout } = await import("@/app/wjs-site/[siteHost]/log
 const { default: PublicRootLayout, generateMetadata: publicRootMetadata } = await import("@/app/(public)/layout");
 const { default: LoginLayout, generateMetadata: loginMetadata } = await import("@/app/login/layout");
 const { default: RegisterLayout, generateMetadata: registerMetadata } = await import("@/app/register/layout");
-const { proxy } = await import("@/proxy");
+const { routeRequest: proxy } = await import("@/proxy");
 
 const params = (siteHost: string) => ({ params: Promise.resolve({ siteHost }) });
 const htmlTag = (markup: string) => /^<html\b[^>]*>/.exec(markup)?.[0] ?? "";

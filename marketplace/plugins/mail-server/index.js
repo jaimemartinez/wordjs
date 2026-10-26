@@ -77,7 +77,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.3.1',
+    version: '3.3.4',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -2147,6 +2147,7 @@ async function systemSentRetentionDays() {
 }
 function forgetSystemSentRetention() { _retentionCache = { at: 0, value: null }; }
 let _lastSystemSentPurge = 0; // last retention sweep of the system Sent log (at most hourly)
+let _lastInterruptedSweep = 0; // last sweep for interrupted first deliveries (at most every 5 min)
 
 /** Mark a message as handed over by `source` (see SYSTEM_SOURCE). Returns the same object. */
 function fromSource(msg, source) {
@@ -2731,6 +2732,7 @@ async function sendMail(data) {
                     html: data.html,
                     text: data.text,
                 });
+                if (systemLogId && sentRecordId) firstDeliveriesInFlight.set(sentRecordId, Date.now());
             }
         } catch (e) {
             // Never in the way of the delivery, and never the message itself in the log.
@@ -3014,6 +3016,7 @@ async function sendMail(data) {
     // Update the retry queue state on the Sent record (Feature: retry temporary failures).
     // Only meaningful when we actually attempted external delivery and have a record to track.
     await updateRetryState(sentRecordId, data, externalRecipients, failed);
+    firstDeliveriesInFlight.delete(sentRecordId);
     // A logged system message with no queue row to follow: its outcome is final here.
     if (systemLogId && !sentRecordId) {
         await Admin.setSystemSentStatus(systemLogId, failed.length === 0 ? 'delivered' : 'failed',
@@ -3026,6 +3029,12 @@ async function sendMail(data) {
 }
 
 const MAX_DELIVERY_ATTEMPTS = 5;
+
+// Logged system messages whose FIRST delivery this worker is running (row id → start), so the sweep
+// for interrupted deliveries (Admin.requeueInterruptedSystemMail) never re-queues one still going out.
+const firstDeliveriesInFlight = new Map();
+const INTERRUPTED_AFTER_MS = 15 * 60 * 1000;
+const INTERRUPTED_MAX_AGE_MS = 3 * 24 * 60 * 60 * 1000;
 
 /**
  * Persist outbound retry state on the Sent record based on this attempt's outcome.
@@ -3151,25 +3160,46 @@ async function getHeloName() {
  * is not the address visitors reach the site on, so the console names the address it listens on
  * instead of leaving the operator to guess. Best effort: an unreadable interface list is empty.
  */
-/** The addresses the HOST reported with the listener status, else what this process can see. */
+/**
+ * The addresses the HOST reported with the listener status, else what this process can see. The host
+ * reports IPv4 only; the public IPv6 addresses (`public6`) are this node's own — the same node, since
+ * the plugin and its listener run together.
+ */
 function nodeAddressesKnown() {
     const a = inboundStatus && inboundStatus.addresses;
-    if (a && ((a.public && a.public.length) || (a.private && a.private.length))) return a;
-    return serverAddresses();
+    const local = serverAddresses();
+    if (a && ((a.public && a.public.length) || (a.private && a.private.length))) {
+        return { ...a, public6: (a.public6 && a.public6.length) ? a.public6 : local.public6 };
+    }
+    return local;
 }
 
 function serverAddresses() {
-    const out = { public: [], private: [] };
+    const out = { public: [], private: [], public6: [] };
     try {
         for (const list of Object.values(os.networkInterfaces() || {})) {
             for (const a of list || []) {
-                if (!a || a.internal || (a.family !== 'IPv4' && a.family !== 4)) continue;
+                if (!a || a.internal) continue;
+                if (a.family === 'IPv6' || a.family === 6) {
+                    // Only a global address can send to the internet: link-local, ULA and the like are blocked.
+                    const ip = canonicalIp(a.address);
+                    if (!isBlockedIp(ip) && !out.public6.includes(ip)) out.public6.push(ip);
+                    continue;
+                }
+                if (a.family !== 'IPv4' && a.family !== 4) continue;
                 const bucket = isBlockedIp(a.address) ? out.private : out.public;
                 if (!bucket.includes(a.address)) bucket.push(a.address);
             }
         }
     } catch (e) { /* interfaces unavailable in this sandbox */ }
     return out;
+}
+
+/** One spelling per address, so a DNS answer and an interface address compare equal (IPv6 has many). */
+function canonicalIp(ip) {
+    const v = String(ip || '').trim();
+    if (!net.isIPv6(v)) return v;
+    try { return new URL(`http://[${v}]/`).hostname.slice(1, -1); } catch (e) { return v.toLowerCase(); }
 }
 
 /**
@@ -3211,6 +3241,16 @@ function buildDnsRecords(domain, selector, publicKeyPem, ctx = {}) {
                     ` (Skip if MX points at the bare domain and it already has an A record.)`
             };
         })(),
+        // The mail host's IPv6, when this node has a public one: direct delivery also leaves over IPv6
+        // (see pickDeliveryAddresses), and the name remote servers check must resolve to it too.
+        aaaa: (() => {
+            const pub6 = (ctx.addresses && ctx.addresses.public6) || [];
+            if (!pub6.length) return undefined;
+            return {
+                host: mailHost, type: 'AAAA', value: pub6[0], detected: true,
+                note: `${pub6[0]} is this mail server's public IPv6. Point ${mailHost} at it too: mail also leaves over IPv6.`
+            };
+        })(),
         dkim: {
             host: `${selector}._domainkey.${domain}`,
             type: 'TXT',
@@ -3218,12 +3258,20 @@ function buildDnsRecords(domain, selector, publicKeyPem, ctx = {}) {
             valueChunked: dkimValue.length > 255 ? chunkTxt(dkimValue) : dkimValue,
             note: dkimValue.length > 255 ? 'Exceeds the 255-char DNS TXT limit. Most providers auto-split; if yours does not, paste the quoted-segment form.' : undefined
         },
-        spf: {
-            host: domain,
-            type: 'TXT',
-            value: 'v=spf1 a mx ~all',
-            note: 'Add the sending host/IP if it is not the A/MX record (e.g. ip4:YOUR.IP).'
-        },
+        spf: (() => {
+            // Name every detected sending address outright: `a mx` only covers them while the A/AAAA records
+            // above stay in place.
+            const ips = [
+                ...((ctx.addresses && ctx.addresses.public) || []).slice(0, 1).map(ip => `ip4:${ip}`),
+                ...((ctx.addresses && ctx.addresses.public6) || []).slice(0, 1).map(ip => `ip6:${ip}`),
+            ];
+            return {
+                host: domain,
+                type: 'TXT',
+                value: ['v=spf1 a mx', ...ips, '~all'].join(' '),
+                note: 'Add the sending host/IP if it is not the A/MX record (e.g. ip4:YOUR.IP).'
+            };
+        })(),
         dmarc: {
             host: `_dmarc.${domain}`,
             type: 'TXT',
@@ -3232,6 +3280,8 @@ function buildDnsRecords(domain, selector, publicKeyPem, ctx = {}) {
         ptr: {
             type: 'PTR (reverse DNS)',
             value: ctx.heloHost || mailHost,
+            // Every public address mail can leave from needs its own reverse record (IPv4 and IPv6).
+            addresses: [...((ctx.addresses && ctx.addresses.public) || []), ...((ctx.addresses && ctx.addresses.public6) || [])],
             note: `Reverse DNS for your sending IP MUST resolve to ${ctx.heloHost || mailHost} — the name this server announces (HELO) — and that name must resolve back to the same IP. Without rDNS, Gmail/Outlook reject or spam your mail. Set this with your IP/hosting provider.`
         }
     };
@@ -3330,6 +3380,39 @@ async function deliverViaRelay(relay, recipient, mail, dkimOptions) {
     });
 }
 
+// The address family (4 or 6) that last reached a remote MX on port 25. Some providers filter or throttle
+// outbound port 25 on one family only (a VPS that rate-limits IPv4 SMTP while IPv6 gets through): after one
+// success the next deliveries try that family first instead of waiting out a connection timeout each time.
+let outboundFamilyHint = 4;
+
+/** One validated address per family, the family that last worked first (at most two connection attempts per MX). */
+function pickDeliveryAddresses(addrs) {
+    const v4 = addrs.find(a => net.isIPv4(a));
+    const v6 = addrs.find(a => net.isIPv6(a));
+    const ordered = outboundFamilyHint === 6 ? [v6, v4] : [v4, v6];
+    return ordered.filter(Boolean);
+}
+
+function noteOutboundFamily(ip) {
+    const family = net.isIPv6(ip) ? 6 : 4;
+    if (family !== outboundFamilyHint) console.log(`[MailServer] Outbound SMTP now prefers IPv${family}: it reached a remote MX where IPv${outboundFamilyHint} did not.`);
+    outboundFamilyHint = family;
+}
+
+/** An SMTP refusal aimed at the IPv6 sending address itself (missing PTR, IPv6 sender rules), not at the message. */
+function isIpv6PolicyRefusal(e) {
+    const text = String((e && (e.response || e.message)) || '');
+    return !!(e && e.responseCode) && /IPv6|PTR|reverse DNS/i.test(text);
+}
+
+/** The connection never got an SMTP reply (timeout, refused, unreachable): another address may work. */
+function isUnreachable(e) {
+    if (!e || e.responseCode) return false;
+    if (['ETIMEDOUT', 'ECONNECTION', 'ECONNREFUSED', 'EHOSTUNREACH', 'ENETUNREACH', 'EADDRNOTAVAIL'].includes(e.code)) return true;
+    // nodemailer reports every socket error as ESOCKET (see isTlsVerifyError): only a failed CONNECT counts.
+    return e.code === 'ESOCKET' && /\bconnect (ECONNREFUSED|EHOSTUNREACH|ENETUNREACH|EADDRNOTAVAIL|ETIMEDOUT)\b/.test(String(e.message || ''));
+}
+
 /**
  * Deliver ONE message to ONE recipient by connecting directly to its domain's MX servers.
  * Resolves on success ({ ok, mx, response }); rejects with err.permanent set (5xx = permanent,
@@ -3397,62 +3480,80 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
 
     let lastErr = null;
     let permanent = false;
+    mxLoop:
     for (const mx of mxRecords) {
         // SECURITY (M2-SSRF): resolve this MX host and reject if it points at an internal/private IP
         // (loopback/RFC1918/link-local incl. cloud metadata/CGNAT/ULA). Skip to the next MX on a
         // blocked/unresolvable host rather than connecting. PIN the validated address: we connect the
         // socket to this exact IP below (not the hostname) so there is no second, attacker-controlled
         // DNS resolution at connect time (M2 DNS-rebinding/TOCTOU defense).
-        let pinnedIp;
+        let candidates;
         try {
-            const publicAddrs = await assertPublicHost(mx.exchange);
-            pinnedIp = publicAddrs[0]; // first validated public A/AAAA — all returned addrs were checked
+            // All returned addresses were checked; one per family, the family that last worked first.
+            candidates = pickDeliveryAddresses(await assertPublicHost(mx.exchange));
         } catch (e) {
             lastErr = e;
             console.warn(`[MailServer][SSRF] Skipping MX ${mx.exchange} for ${recipient}: ${e.message}`);
             continue;
         }
 
-        try {
-            // M2-TLS: try with full certificate verification first. Connect to the pinned IP, verify the
-            // cert against the real MX hostname (mx.exchange) via servername.
-            const info = await sendVia(pinnedIp, mx.exchange, true);
-            return { ok: true, mx: mx.exchange, response: info.response };
-        } catch (e) {
-            // On a TLS *verification* failure (and only that), retry THIS host once with verification
-            // disabled, logging the downgrade explicitly. Other failures fall through to the next MX.
-            if (isTlsVerifyError(e)) {
-                console.warn(`[MailServer][TLS] STARTTLS verification FAILED for ${mx.exchange} (${e.message}) — retrying with verification DISABLED (downgraded, opportunistic encryption only).`);
-                try {
-                    const info = await sendVia(pinnedIp, mx.exchange, false);
-                    return { ok: true, mx: mx.exchange, response: info.response, tlsDowngraded: true };
-                } catch (e2) {
-                    lastErr = e2;
-                    const code = e2.responseCode || 0;
-                    permanent = code >= 500 && code < 600;
-                    if (permanent) break;
+        for (let i = 0; i < candidates.length; i++) {
+            const pinnedIp = candidates[i];
+            const delivered = (info, extra = {}) => {
+                noteOutboundFamily(pinnedIp);
+                return { ok: true, mx: mx.exchange, response: info.response, ...extra };
+            };
+            try {
+                // M2-TLS: try with full certificate verification first. Connect to the pinned IP, verify the
+                // cert against the real MX hostname (mx.exchange) via servername.
+                return delivered(await sendVia(pinnedIp, mx.exchange, true));
+            } catch (e) {
+                // On a TLS *verification* failure (and only that), retry THIS host once with verification
+                // disabled, logging the downgrade explicitly. Other failures fall through to the next MX.
+                if (isTlsVerifyError(e)) {
+                    console.warn(`[MailServer][TLS] STARTTLS verification FAILED for ${mx.exchange} (${e.message}) — retrying with verification DISABLED (downgraded, opportunistic encryption only).`);
+                    try {
+                        return delivered(await sendVia(pinnedIp, mx.exchange, false), { tlsDowngraded: true });
+                    } catch (e2) {
+                        lastErr = e2;
+                        const code = e2.responseCode || 0;
+                        permanent = code >= 500 && code < 600;
+                        if (permanent) break mxLoop;
+                        continue mxLoop;
+                    }
+                }
+                // The host refused STARTTLS with a reply: deliver to it without TLS, as opportunistic TLS
+                // does, and say so in the log.
+                if (isStartTlsRefused(e)) {
+                    console.warn(`[MailServer][TLS] ${mx.exchange} refused STARTTLS (${e.responseCode}) — retrying WITHOUT TLS (opportunistic, plaintext).`);
+                    try {
+                        return delivered(await sendVia(pinnedIp, mx.exchange, false, true), { tlsDowngraded: true, plaintext: true });
+                    } catch (e2) {
+                        lastErr = e2;
+                        const code2 = e2.responseCode || 0;
+                        permanent = code2 >= 500 && code2 < 600;
+                        if (permanent) break mxLoop;
+                        continue mxLoop;
+                    }
+                }
+                lastErr = e;
+                const code = e.responseCode || 0;
+                // A receiver that refuses IPv6 senders it cannot verify (Gmail's IPv6 sending guidelines: no
+                // PTR record) may accept the same message over IPv4: that refusal is about the address.
+                if (net.isIPv6(pinnedIp) && i + 1 < candidates.length && isIpv6PolicyRefusal(e)) {
+                    console.warn(`[MailServer] ${mx.exchange} refused IPv6 delivery (${e.message}) — trying ${candidates[i + 1]}.`);
                     continue;
                 }
-            }
-            // The host refused STARTTLS with a reply: deliver to it without TLS, as opportunistic TLS
-            // does, and say so in the log.
-            if (isStartTlsRefused(e)) {
-                console.warn(`[MailServer][TLS] ${mx.exchange} refused STARTTLS (${e.responseCode}) — retrying WITHOUT TLS (opportunistic, plaintext).`);
-                try {
-                    const info = await sendVia(pinnedIp, mx.exchange, false, true);
-                    return { ok: true, mx: mx.exchange, response: info.response, tlsDowngraded: true, plaintext: true };
-                } catch (e2) {
-                    lastErr = e2;
-                    const code2 = e2.responseCode || 0;
-                    permanent = code2 >= 500 && code2 < 600;
-                    if (permanent) break;
+                permanent = code >= 500 && code < 600;
+                if (permanent) break mxLoop; // a hard 5xx reject won't differ on another MX
+                // This address could not be reached at all (no SMTP reply): the same host over the other
+                // family may be — a provider that filters outbound port 25 on IPv4 but not on IPv6.
+                if (isUnreachable(e) && i + 1 < candidates.length) {
+                    console.warn(`[MailServer] ${mx.exchange} unreachable at ${pinnedIp} (${e.message}) — trying ${candidates[i + 1]}.`);
                     continue;
                 }
+                continue mxLoop;
             }
-            lastErr = e;
-            const code = e.responseCode || 0;
-            permanent = code >= 500 && code < 600;
-            if (permanent) break; // a hard 5xx reject won't differ on another MX
         }
     }
     const err = new Error(`Direct delivery to ${recipient} failed: ${lastErr ? lastErr.message : 'no MX reachable'}`);
@@ -3477,17 +3578,56 @@ const SHARED_OPTION_NAMES = new Set(['mail_domain', 'mail_delivery_ready', 'blog
 const OPTION_UNSET = '\u0000mail-server:unset';
 const optionName = (key) => (SHARED_OPTION_NAMES.has(String(key).toLowerCase()) ? String(key) : 'mail_server_' + String(key));
 
+// THE HOST'S ANSWER BUDGET. Every call the host makes into this worker — an HTTP route, the core's mail
+// hand-off (provideMail), a notification — must answer within the host's 30 s RPC timeout, or the host
+// treats the worker as wedged and KILLS it: the caller gets "Isolated plugin error" and a delivery cut
+// off mid-SMTP is neither sent nor re-queued. Direct-to-MX delivery to a server that does not answer
+// takes up to connection + greeting + socket timeouts per MX, i.e. minutes. So these callers wait at
+// most this long and let the delivery finish in the background (it writes its own outcome to the row).
+const HANDOFF_ANSWER_MS = 20000;
+// A manual "Retry now" answers sooner: a quick verdict (delivered, DNS failure) is still reported as
+// such, a slow one is reported as "retrying in the background".
+const RETRY_ANSWER_MS = 10000;
+// A manually retried row is re-armed for the automatic queue this far ahead BEFORE the attempt, so a
+// background attempt that never reports back (worker restart) is retried later instead of lost.
+const RETRY_SAFETY_NET_MS = 15 * 60 * 1000;
+// Rows with a manual retry running in this worker: a second click must not start a second delivery.
+const retriesInFlight = new Set();
+
+/**
+ * Settle `promise` within `ms`: `{ done: true, value }` when it settled in time (a rejection in time
+ * rejects), `{ done: false }` when it is still running — it keeps running, and a later failure is
+ * logged as `label` instead of becoming an unhandled rejection.
+ */
+function settleWithin(promise, ms, label) {
+    return new Promise((resolve, reject) => {
+        let answered = false;
+        const timer = setTimeout(() => { answered = true; resolve({ done: false }); }, ms);
+        Promise.resolve(promise).then(
+            (value) => { if (answered) return; answered = true; clearTimeout(timer); resolve({ done: true, value }); },
+            (e) => {
+                if (answered) { console.error(`[MailServer] ${label} failed in the background: ${e && e.message}`); return; }
+                answered = true; clearTimeout(timer); reject(e);
+            });
+    });
+}
+
 /**
  * Re-attempt a message whose delivery FAILED (or is mid-retry), NOW, instead of waiting for the
  * backoff. On a failed/retry row, to_address holds exactly the still-failed recipients
  * (updateRetryState rewrites it), so they are re-sent through sendMail with isRetry:true — reusing the
  * same Sent record (no duplicate copy). A manual retry resets the attempt counter (fresh cycle).
  * The CALLER has already authorized the row (owner, or an administrator).
+ *
+ * Answers within RETRY_ANSWER_MS: an attempt still running then is reported as 202 `pending` and goes
+ * on in the background (see HANDOFF_ANSWER_MS for why a route must never wait it out).
  */
 async function retryFailedDelivery(email, rateKey, { force = false } = {}) {
     if (email.delivery_status !== 'failed' && email.delivery_status !== 'retry') {
         return { status: 409, body: { error: 'This message is not in a failed state — nothing to retry.' } };
     }
+    const pending = { status: 202, body: { success: true, pending: true, id: email.id, status: 'retry', message: 'Still trying — delivery continues in the background.' } };
+    if (retriesInFlight.has(email.id)) return pending;
     const recipients = splitAddresses(email.to_address);
     if (recipients.length === 0) return { status: 400, body: { error: 'No recipients to retry.' } };
 
@@ -3495,6 +3635,17 @@ async function retryFailedDelivery(email, rateKey, { force = false } = {}) {
     if (!outboundRateLimitOk(rateKey, recipients.length)) {
         return { status: 429, body: { error: 'Outbound mail rate limit exceeded. Please try again later.' } };
     }
+    retriesInFlight.add(email.id);
+    // NOT-A-USER-PATH: the row the caller authorized. Shown as "retrying" from now on, and the queue's
+    // safety net if this attempt never writes its outcome back.
+    await Email.markRetry(email.id, email.delivery_attempts || 0,
+        new Date(Date.now() + RETRY_SAFETY_NET_MS).toISOString(), email.last_error).catch(() => null);
+    const attempt = deliverRetry(email, recipients, force).finally(() => retriesInFlight.delete(email.id));
+    const r = await settleWithin(attempt, RETRY_ANSWER_MS, `The retry of message ${email.id}`);
+    return r.done ? r.value : pending;
+}
+
+async function deliverRetry(email, recipients, force) {
     try {
         // NOT-A-USER-PATH: a continuation of a route that already authorized this row (the owner's
         // POST /emails/:id/retry through canAccessEmail, or an administrator's queue retry).
@@ -3874,6 +4025,19 @@ exports.init = async function (bridge) {
             }
         } catch (e) {
             console.error('[MailServer] Spam purge error:', e);
+        }
+
+        // Logged system messages whose first delivery was cut off (see requeueInterruptedSystemMail).
+        try {
+            const now = Date.now();
+            if (Admin && now - _lastInterruptedSweep > 5 * 60 * 1000) {
+                _lastInterruptedSweep = now;
+                for (const [id, at] of firstDeliveriesInFlight) if (now - at > 60 * 60 * 1000) firstDeliveriesInFlight.delete(id);
+                const ids = await Admin.requeueInterruptedSystemMail(INTERRUPTED_AFTER_MS, INTERRUPTED_MAX_AGE_MS, new Set(firstDeliveriesInFlight.keys()));
+                if (ids.length > 0) console.warn(`[MailServer] Re-queued ${ids.length} system message(s) whose first delivery was interrupted: ${ids.join(', ')}.`);
+            }
+        } catch (e) {
+            console.error('[MailServer] Interrupted-delivery sweep error:', e && e.message);
         }
 
         // The system Sent log's retention (see SYSTEM SENT LOG), at most hourly.
@@ -4496,8 +4660,9 @@ exports.init = async function (bridge) {
                 return res.json({ success: true, queued: true, undoSeconds, id: email.id, message: 'Sending…' });
             }
 
-            // Undo window disabled (mail_undo_send_seconds = 0) → immediate synchronous delivery.
-            const result = await sendMail({
+            // Undo window disabled (mail_undo_send_seconds = 0) → immediate delivery, answered within
+            // HANDOFF_ANSWER_MS (a slow MX finishes in the background; the Sent copy shows the outcome).
+            const sending = sendMail({
                 to: toList,
                 cc: ccList,
                 bcc: bccList,
@@ -4513,6 +4678,11 @@ exports.init = async function (bridge) {
                 draftId: sendAsNew ? 0 : id,
                 attachments: attachments || []
             });
+            const settled = await settleWithin(sending, HANDOFF_ANSWER_MS, 'A message sent from the mailbox');
+            if (!settled.done) {
+                return res.status(202).json({ success: true, pending: true, message: 'Still sending — delivery continues in the background.' });
+            }
+            const result = settled.value;
             if (result.failed && result.failed.length > 0) {
                 // Partial/total external delivery failure — report it (the Sent copy is still saved).
                 return res.status(207).json({
@@ -4766,14 +4936,22 @@ exports.init = async function (bridge) {
             // NOT-A-DELIVERY-PATH: a DIAGNOSTIC probe for the admin-only test route. It only decides the
             // wording of the answer; sendMail below performs the real (guarded) delivery.
             const localUser = await User.findByEmail(to).catch(() => null);
-            const result = await sendMail({
+            const settled = await settleWithin(sendMail({
                 to,
                 subject: 'WordJS Mail Server — delivery test',
                 text: 'If you received this, outbound delivery is working.',
                 html: '<p>If you received this, <strong>outbound delivery</strong> is working.</p>',
                 userId: req.user.id,
                 noRetry: true
-            });
+            }), HANDOFF_ANSWER_MS, 'The delivery test');
+            if (!settled.done) {
+                // Not a verdict either way: the recipient's server has not answered yet (see HANDOFF_ANSWER_MS).
+                return res.status(202).json({
+                    success: false, pending: true, to, relay: relayStatus, delivered: [], failed: [],
+                    message: `The recipient's mail server has not answered after ${HANDOFF_ANSWER_MS / 1000} s. The test goes on in the background; its result appears on the test message in your Sent folder. A server this slow usually means outbound port 25 is blocked or filtered.`
+                });
+            }
+            const result = settled.value;
             const externalAttempted = (result.delivered && result.delivered.length) || (result.failed && result.failed.length);
             const localOnly = !!localUser && !externalAttempted;
             let message;
@@ -4876,7 +5054,34 @@ exports.init = async function (bridge) {
             results.dkim = { status: 'nokey', found: null, detail: 'Generate a DKIM key first, then publish and re-check.' };
         }
 
-        // PTR (reverse DNS) is set with the IP/hosting provider, not the domain's zone — not checkable here.
+        // AAAA → when this node has a public IPv6, the mail host must resolve to it as well.
+        const addrs = nodeAddressesKnown();
+        const pub4 = (addrs.public || []).filter(ip => net.isIPv4(ip));
+        const pub6 = addrs.public6 || [];
+        const resolvedSet = async (host) => new Set([
+            ...(await dns.resolve4(host).catch(() => [])),
+            ...(await dns.resolve6(host).catch(() => [])),
+        ].map(canonicalIp));
+        const mailHostIps = await resolvedSet(mailHost);
+        if (pub6.length) {
+            const found = [...mailHostIps].filter(ip => net.isIPv6(ip));
+            results.aaaa = { status: found.length === 0 ? 'missing' : (pub6.some(ip => mailHostIps.has(canonicalIp(ip))) ? 'ok' : 'mismatch'), found: found.join(', ') || null };
+        }
+
+        // Each public address mail can leave from, IPv4 and IPv6 alike — remote servers judge the one a
+        // message actually came from: the mail host points at it, SPF authorizes it, and the HELO name
+        // resolves back to it (the forward half of the reverse-DNS check). The PTR itself is set with the
+        // IP provider and cannot be looked up from here (the host bridge offers no reverse lookups).
+        const heloHost = await getHeloName();
+        const heloIps = await resolvedSet(heloHost);
+        results.senders = await Promise.all([...pub4, ...pub6].map(async (ip) => ({
+            ip,
+            family: net.isIPv6(ip) ? 6 : 4,
+            host: mailHostIps.has(canonicalIp(ip)) ? 'ok' : 'missing',
+            spf: await evaluateSPF(domain, ip).catch(() => 'temperror'),
+            helo: heloIps.has(canonicalIp(ip)) ? 'ok' : 'mismatch',
+            heloHost,
+        })));
 
         // Persist the GENERIC `mail_delivery_ready` flag that core's password-recovery feature
         // ("olvidé mi contraseña") gates on — it is NOT a mail-server-specific option; any mail plugin
@@ -5536,7 +5741,13 @@ exports.init = async function (bridge) {
 
     // Expose sendMail utility for other plugins (host installs a shim for wordjs.mail / global.wordjs_send_mail).
     // The host does not say WHICH caller handed a message over, so the system Sent log names it 'core'.
-    wordjs.provideMail((msg) => sendMail(fromSource(msg, 'core')));
+    // Answered within HANDOFF_ANSWER_MS: the core waits on this call (a test from Settings → Emails, a
+    // plugin's wordjs.mail), and a host RPC that outlives its timeout kills this worker mid-delivery.
+    // A delivery still running then is reported as accepted and finishes in the background.
+    wordjs.provideMail(async (msg) => {
+        const settled = await settleWithin(sendMail(fromSource(msg, 'core')), HANDOFF_ANSWER_MS, 'A site message');
+        return settled.done ? settled.value : { success: true, pending: true, delivered: [], failed: [] };
+    });
 
     // Register as a Notification Transport
     wordjs.notify.registerTransport('email', async (notification) => {
@@ -5548,12 +5759,13 @@ exports.init = async function (bridge) {
 
         if (targetEmail) {
             try {
-                await sendMail(fromSource({
+                // Within the host's RPC budget, like provideMail above.
+                await settleWithin(sendMail(fromSource({
                     to: targetEmail,
                     subject: notification.title,
                     text: notification.message,
                     html: `<p>${notification.message}</p>`
-                }, 'notifications'));
+                }, 'notifications')), HANDOFF_ANSWER_MS, 'A notification email');
             } catch (e) {
                 console.error('❌ Mail Server Transport Failed:', e.message);
             }

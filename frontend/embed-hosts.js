@@ -18,7 +18,7 @@
  * READERS:
  *   · src/lib/sanitize.ts — ALLOWED_IFRAME_HOSTS (what survives HTML sanitizing) and
  *     ALLOWED_EMBED_HOSTS (what the VideoEmbed block may build an iframe src for);
- *   · next.config.ts — the CSP `frame-src` directive, DERIVED from ALLOWED_EMBED_HOSTS.
+ *   · src/lib/contentSecurityPolicy.ts — the CSP `frame-src` directive, DERIVED from ALLOWED_EMBED_HOSTS.
  *   · backend/src/core/sanitize-meta.ts consumes its own generated artifact from the same contract.
  *
  * ADDING A PROVIDER: change contracts/visual-contract.v1.json and regenerate. The test

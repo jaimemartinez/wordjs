@@ -55,6 +55,13 @@ describe("dashboardSections", () => {
         expect(s.systemHealth).toBe(false);
     });
 
+    it("in a network, system health is the main site's network administrators' (GET /health/details)", () => {
+        const admin = can([], "administrator");
+        expect(dashboardSections({ role: "administrator", network: { mainSite: true, networkAdmin: true } }, admin).systemHealth).toBe(true);
+        expect(dashboardSections({ role: "administrator", network: { mainSite: true, networkAdmin: false } }, admin).systemHealth).toBe(false);
+        expect(dashboardSections({ role: "administrator", network: { mainSite: false, networkAdmin: false } }, admin).systemHealth).toBe(false);
+    });
+
     it("the dashboard page asks for system health through dashboardSections, and a failure there cannot reject the load", async () => {
         const fs = await import("node:fs");
         const path = await import("node:path");

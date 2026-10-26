@@ -5,7 +5,7 @@ import { themesApi, themesMarketplaceApi, settingsApi, Theme, ThemeMarketplaceEn
 import ThemePermissionsDialog from "./ThemePermissionsDialog";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader, Button, EmptyState } from "@/components/ui";
+import { PageHeader, Button, EmptyState, Input } from "@/components/ui";
 import CreateThemeDialog from "./CreateThemeDialog";
 import ThemeCheckDialog from "./ThemeCheckDialog";
 
@@ -434,15 +434,15 @@ export default function ThemesPage() {
                                         </div>
                                         {st && !st.ok && st.error && <p className="pl-6 text-[11px] text-rose-600 break-words">{st.error}</p>}
                                         <div className="pl-6">
-                                            <input
-                                                type="text"
+                                            <Input
+                                                size="sm"
+                                                className="font-mono"
                                                 value={srcKeys[u] || ""}
                                                 onChange={(e) => setSrcKeys((k) => ({ ...k, [u]: e.target.value }))}
                                                 placeholder={t('themes.sources.publicKey')}
                                                 aria-label={`${t('themes.sources.publicKey')} — ${u}`}
                                                 spellCheck={false}
                                                 autoComplete="off"
-                                                className="w-full px-3 py-1.5 bg-white border border-gray-200 rounded-lg outline-none font-mono text-[11px] focus:border-gray-400 transition-colors"
                                             />
                                         </div>
                                     </div>

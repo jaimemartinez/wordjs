@@ -187,6 +187,24 @@ class NotificationService {
     }
 
     /**
+     * Re-authorize the open streams NOW, after an account-security fact (sign-out, password change,
+     * revoked token, role or 2FA change, deleted account) on this node or, through the collaboration
+     * recheck bus, on another one. `userId` limits it to that user's streams on the current site; without
+     * it every stream on the current site is checked (a policy change). Each stream carries its own
+     * re-authorization (see routes/notifications.ts), bound to the request that opened it.
+     */
+    recheck(userId?: number) {
+        const siteId = siteContext.currentSiteIdOrNull();
+        for (const c of [...this.clients]) {
+            if (c._wordjs_site_id !== siteId) continue;
+            if (userId !== undefined && Number(c._wordjs_user_id) !== Number(userId)) continue;
+            if (typeof c._wordjs_reauthorize === 'function') {
+                try { c._wordjs_reauthorize(); } catch { /* the stream's own periodic check still applies */ }
+            }
+        }
+    }
+
+    /**
      * Remove a client manually
      */
     removeClient(userId: any, res: any) {

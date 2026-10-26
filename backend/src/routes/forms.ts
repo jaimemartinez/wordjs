@@ -29,7 +29,7 @@ const { stripTags } = require('../core/formatting');
 // THE SCALAR QUERY RULE — see core/query-params.
 // routeIdOrNull is THE ROUTE-ID CONTRACT — see core/query-params: one definition of "a route id"
 // for the whole route tree, so this router's 400 cannot drift from what every other router refuses.
-const { requireScalarQuery, routeIdOrNull } = require('../core/query-params');
+const { requireScalarQuery, routeIdOrNull, bodyId } = require('../core/query-params');
 const { perPageParam, pageOffset } = require('../core/pagination');
 
 /**
@@ -108,9 +108,9 @@ router.post('/submit', asyncHandler(async (req: Request, res: Response) => {
     // ---- pageId (optional soft reference to the page the form lives on) -------------------------
     let pageId: number | null = null;
     if (body.pageId !== undefined && body.pageId !== null) {
-        const n = typeof body.pageId === 'number' ? body.pageId : parseInt(body.pageId, 10);
-        if (!Number.isInteger(n) || n <= 0) return badRequest(res, 'pageId must be a positive integer.');
-        pageId = n;
+        // An id an id column can hold (core/query-params bodyId), not merely a positive integer.
+        pageId = bodyId(body.pageId);
+        if (pageId === null) return badRequest(res, 'pageId must be a positive integer.');
     }
 
     // ---- fields: a flat string→string map under HARD bounds --------------------------------------

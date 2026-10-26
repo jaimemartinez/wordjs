@@ -11,7 +11,7 @@
  * NO `'unsafe-eval'` in `script-src` — and that is now PART of the mirror: the backend does not grant it
  * either (backend/src/index.ts), so the two policies agree here. It was there for the Puck
  * editor, which is gone; the real production frontend build has no `eval`/`new Function`, and the frontend
- * header (frontend/next.config.ts) dropped it as well, so putting it back here would only re-widen the
+ * header (frontend/src/lib/contentSecurityPolicy.ts) dropped it as well, so putting it back here would only re-widen the
  * gateway's own pages. Test: test/security-headers.test.js asserts the absence, so it stays gone.
  *
  * Note on precedence: for PROXIED responses the upstream (backend/frontend) writes its own headers last,
@@ -25,7 +25,9 @@ const helmetOptions = {
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            scriptSrc: ["'self'", "'unsafe-inline'"], // unsafe-inline for the Next bootstrap + CMS themes; NO unsafe-eval (see header)
+            // No inline script: nothing the gateway answers itself (error, refusal and status pages) carries
+            // a <script>, and a proxied page brings its own policy. NO unsafe-eval either (see header).
+            scriptSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'", 'https://fonts.googleapis.com'],
             fontSrc: ["'self'", 'https://fonts.gstatic.com', 'data:'],
             imgSrc: ["'self'", 'data:', 'blob:', 'https:', '*'], // Allow images from everywhere (CMS content)

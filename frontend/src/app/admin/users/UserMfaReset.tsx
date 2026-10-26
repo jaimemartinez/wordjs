@@ -6,6 +6,7 @@ import { useAuth } from "@/contexts/AuthContext";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { apiErrorText } from "@/lib/apiErrorText";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 /**
  * ADMIN ESCAPE HATCH from a two-factor lockout — the client half of POST /users/:id/mfa/reset.
@@ -46,6 +47,9 @@ export default function UserMfaReset({ userId, username, targetRole, className =
     const { alert, confirm } = useModal();
     const [busy, setBusy] = useState(false);
     const [wasReset, setWasReset] = useState(false);
+    // The server asks for the administrator's own password (and a current code with 2FA) before it
+    // removes anyone's second factor: the fields appear under the button, the next click sends them.
+    const stepUp = useMfaStepUp();
 
     if (!user || !can("edit_users")) return null;
     if (user.id === userId) return null;
@@ -54,13 +58,18 @@ export default function UserMfaReset({ userId, username, targetRole, className =
     const handleReset = async () => {
         // The confirmation NAMES the account: this screen is reachable with a user already loaded into a
         // form, and "are you sure?" on the wrong row silently disarms the wrong person's second factor.
-        const ok = await confirm(withUser("userMfa.confirm"), t("userMfa.confirmTitle"), true);
-        if (!ok) return;
+        // Asked once: a click that only completes the step-up fields was already confirmed.
+        if (!stepUp.needsPassword && !stepUp.needsCode) {
+            const ok = await confirm(withUser("userMfa.confirm"), t("userMfa.confirmTitle"), true);
+            if (!ok) return;
+        }
         setBusy(true);
         try {
-            await mfaApi.resetForUser(userId);
+            await mfaApi.resetForUser(userId, stepUp.payload());
+            stepUp.reset();
             setWasReset(true);
         } catch (e: any) {
+            if (stepUp.absorb(e)) return;
             // The server's refusal, translated: it distinguishes the refusals that matter (privileged
             // target, self, an API token instead of a session) and a generic line here would hide them.
             await alert(apiErrorText(t, e, "userMfa.failed"));
@@ -82,6 +91,7 @@ export default function UserMfaReset({ userId, username, targetRole, className =
             ) : (
                 <>
                     <p className="text-[11px] text-gray-400 leading-relaxed mb-3">{withUser("userMfa.help")}</p>
+                    {(stepUp.needsPassword || stepUp.needsCode) && <div className="mb-3 max-w-sm"><MfaStepUpFields stepUp={stepUp} /></div>}
                     <button
                         type="button"
                         onClick={handleReset}

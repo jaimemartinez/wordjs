@@ -1050,9 +1050,8 @@ function createPluginApi(slug: string) {
             // avoid offering "Create account" on a site whose registration is closed.
             async registrationOpen() {
                 verifyPermission('settings', 'read');
-                const { getOption } = require('./options');
-                const v = await getOption('users_can_register', 0);
-                return !!v && v !== '0' && v !== 'false';
+                const { getOption, toBooleanOption } = require('./options');
+                return toBooleanOption(await getOption('users_can_register', 0), false);
             },
         },
 

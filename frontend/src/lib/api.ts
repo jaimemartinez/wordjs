@@ -786,8 +786,11 @@ export const usersApi = {
         return apiGetPaged<User[]>(`/users?${params.toString()}`);
     },
     get: (id: number) => apiGet<User>(`/users/${id}`),
-    create: (data: UserWrite & { password: string }) => apiPost<User>("/users", data),
-    update: (id: number, data: UserWrite & { currentPassword?: string }) => apiPut<User>(`/users/${id}`, data),
+    // `currentPassword` / `mfaCode`: the step-up the server asks for (403 rest_sudo_required, then
+    // rest_mfa_step_up_required) before it creates a privileged account, promotes one, or changes another
+    // privileged account's password or address — see components/MfaStepUp.
+    create: (data: UserWrite & { password: string; currentPassword?: string; mfaCode?: string }) => apiPost<User>("/users", data),
+    update: (id: number, data: UserWrite & { currentPassword?: string; mfaCode?: string }) => apiPut<User>(`/users/${id}`, data),
     /** What the user screen renders as plugin toggles (edit_users only). */
     accountCapabilities: () => apiGet<AccountCapabilityDeclaration[]>("/users/account-capabilities"),
     // Self-service update for the logged-in user (any role). Changing the password OR either recovery
@@ -1633,7 +1636,7 @@ export const importApi = {
     analyze: (file: File) => {
         const fd = new FormData();
         fd.append("file", file);
-        return api<{ success: boolean; analysis: WxrAnalysis }>("/import/wordpress/analyze", {
+        return api<{ success: boolean; analysis: WxrAnalysis; privateSourceAllowed?: boolean }>("/import/wordpress/analyze", {
             method: "POST",
             body: fd,
             headers: {}, // let the browser set the multipart boundary
@@ -1736,7 +1739,9 @@ export interface AgentPublishRequest {
 }
 export const agentsApi = {
     list: () => apiGet<{ connections: AgentConnection[]; capabilities: AgentCapability[]; canGrant: boolean; mcpUrl: string; publishConfirmation?: boolean }>("/agents"),
-    setPublishConfirmation: (publishConfirmation: boolean) => apiPut<{ publishConfirmation: boolean }>("/agents/settings", { publishConfirmation }),
+    // Turning confirmation OFF follows the agent-grant MFA rule: `mfaCode` / `currentPassword` as agentsApi.grant.
+    setPublishConfirmation: (publishConfirmation: boolean, stepUp: { mfaCode?: string; currentPassword?: string } = {}) =>
+        apiPut<{ publishConfirmation: boolean }>("/agents/settings", { publishConfirmation, ...stepUp }),
     publishQueue: () => apiGet<{ entries: AgentPublishRequest[] }>("/agents/publish-queue"),
     dismissPublishRequest: (postId: number) => apiDelete<{ dismissed: boolean; id: number }>(`/agents/publish-queue/${postId}`),
     // Creating and granting follow the API-token MFA rule: `mfaCode` / `currentPassword` exactly as tokensApi.create.
@@ -2163,5 +2168,7 @@ export const mfaApi = {
      * session-only, never on yourself, and only an administrator may reset a privileged account.
      * Clears every mfa_* key on the target, so they sign in with their password alone and can re-enrol.
      */
-    resetForUser: (userId: number) => apiPost<{ reset: boolean; id: number }>(`/users/${userId}/mfa/reset`, {}),
+    // Always asks for the caller's password (and a current code when the caller has 2FA): see components/MfaStepUp.
+    resetForUser: (userId: number, stepUp: { currentPassword?: string; mfaCode?: string } = {}) =>
+        apiPost<{ reset: boolean; id: number }>(`/users/${userId}/mfa/reset`, stepUp),
 };

@@ -98,11 +98,11 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword', 'doorDeleteMe'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorEmailTemplateSave', 'doorEmailTemplateReset', 'doorNetworkEnable', 'doorServerSettings', 'doorRedisSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorEmailTemplateSave', 'doorEmailTemplateReset', 'doorNetworkEnable', 'doorServerSettings', 'doorRedisSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate', 'doorRedisTest', 'doorMediaTest', 'doorUserCreateAdmin', 'doorUserMfaReset'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
 const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkAddress', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
-const CEILING_DOOR_PERSONAS = ['doorMfaDisable', 'doorMfaBackup', 'doorTokenStepUp', 'doorAgentCreate', 'doorAgentGrant'];
+const CEILING_DOOR_PERSONAS = ['doorMfaDisable', 'doorMfaBackup', 'doorTokenStepUp', 'doorAgentCreate', 'doorAgentGrant', 'doorAgentSettings'];
 
 before(async () => {
     await database.init({ driver: 'sqlite-native' });
@@ -731,6 +731,11 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
     };
     const unenrolled = async (p: string) => { await User.updateMeta(U[p], mfa.META.enabled, '0'); };
     let grantTarget = 0;
+    // The stored server settings a "test another server" door compares against (core/configManager).
+    const configManager = require('../core/configManager');
+    const originalGetConfig = configManager.getConfig;
+    const stubConfig = (extra: Record<string, unknown>) => { configManager.getConfig = () => ({ ...(originalGetConfig() || {}), ...extra }); };
+    const restoreConfig = () => { configManager.getConfig = originalGetConfig; };
 
     // One row per door that calls requireSudoPassword — and the rows are CHECKED AGAINST THE SOURCE
     // below, so this list cannot quietly fall behind the routers again.
@@ -1029,6 +1034,51 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             send: (p: string, pw: string) => withMultisite(() => request(app).post(`${B}/network/admins`).set('Authorization', asUser(p))
                 .send({ currentPassword: pw, userId: 999999 })),
             alsoExpect: (r: any) => r.status === 400 && r.body.code === 'network_admin_not_administrator',
+        },
+        // Turning agent publish confirmation OFF follows the agent-grant step-up (past the ceiling: the password too).
+        {
+            site: 'agents.ts PUT /settings', name: 'PUT /agents/settings {publishConfirmation:false} (step-up past the ceiling)', persona: 'doorAgentSettings',
+            prepare: async (p: string) => {
+                await require('../core/options').updateOption(require('../core/agent-publishing').AGENT_PUBLISH_CONFIRMATION_OPTION, '1');
+                await atCeiling(p, true);
+            },
+            cleanup: ceilingCleanup,
+            send: (p: string, pw: string) => request(app).put(`${B}/agents/settings`).set('Authorization', asUser(p))
+                .send({ publishConfirmation: false, mfaCode: '000000', currentPassword: pw }),
+            alsoExpect: refusedOnTheMerits,
+        },
+        // Testing another Redis server with the SAVED password: the administrator's own password first; the
+        // test then simply finds nothing listening.
+        {
+            site: 'redis-settings.ts POST /test', name: 'POST /system/redis/test (another server, saved password)', persona: 'doorRedisTest',
+            prepare: async () => { stubConfig({ redis: { enabled: true, host: '127.0.0.1', port: 1, db: 0, password: 'stored' } }); },
+            cleanup: async () => { restoreConfig(); },
+            send: (p: string, pw: string) => request(app).post(`${B}/system/redis/test`).set('Authorization', asUser(p))
+                .send({ host: '127.0.0.1', port: 2, currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 200 && r.body.ok === false,
+        },
+        // ...and its S3 twin: past the password, a private endpoint is refused on the merits.
+        {
+            site: 'media-storage.ts POST /test', name: 'POST /media-storage/test (another endpoint, saved secret)', persona: 'doorMediaTest',
+            prepare: async () => { stubConfig({ mediaStorage: { driver: 's3', bucket: 'media', region: 'us-east-1', endpoint: 'https://10.0.0.10', accessKeyId: 'AK', secretAccessKey: 'stored' } }); },
+            cleanup: async () => { restoreConfig(); },
+            send: (p: string, pw: string) => request(app).post(`${B}/media-storage/test`).set('Authorization', asUser(p))
+                .send({ driver: 's3', bucket: 'media', endpoint: 'https://10.0.0.11', currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 400,
+        },
+        // Creating an administrator: the creator's own password (this account has no 2FA, so nothing more).
+        {
+            site: 'users.ts POST /', name: 'POST /users {role:administrator}', persona: 'doorUserCreateAdmin',
+            send: (p: string, pw: string) => request(app).post(`${B}/users`).set('Authorization', asUser(p))
+                .send({ username: `made_by_${p}_${Date.now()}`, email: `made_${Date.now()}@example.com`, password: 'Str0ng-Passw0rd-xyz!', role: 'administrator', currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 201,
+        },
+        // Resetting someone's second factor: the caller's password first.
+        {
+            site: 'users.ts POST /:id/mfa/reset', name: 'POST /users/:id/mfa/reset', persona: 'doorUserMfaReset',
+            send: (p: string, pw: string) => request(app).post(`${B}/users/${U.nsvictim}/mfa/reset`).set('Authorization', asUser(p))
+                .send({ currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 200,
         },
         {
             site: 'network.ts DELETE /admins/:id', name: 'DELETE /network/admins/:id', persona: 'doorNetworkAdminRemove',

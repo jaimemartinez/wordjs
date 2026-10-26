@@ -19,7 +19,7 @@
 
 exports.metadata = {
     name: 'Analytics Tag',
-    version: '1.0.3',
+    version: '1.1.0',
     description: 'Site-wide analytics tag (GA4, Plausible or Matomo) with cookie-consent gating',
     author: 'WordJS',
 };
@@ -40,6 +40,18 @@ const DEFAULTS = {
     matomoSiteId: '',
     respectConsent: true,
 };
+
+/** The origin the configured provider's tag is loaded from (what the loader injects), or none. */
+function originsFor(cfg) {
+    if (!cfg || !cfg.enabled) return [];
+    if (cfg.provider === 'ga4') return ['https://www.googletagmanager.com'];
+    if (cfg.provider === 'plausible') return ['https://plausible.io'];
+    if (cfg.provider === 'matomo' && cfg.matomoUrl) {
+        try { return [new URL(cfg.matomoUrl).origin]; } catch (e) { return []; }
+    }
+    return [];
+}
+exports.originsFor = originsFor;
 
 exports.init = async function (wordjs) {
     const { options, http, adminMenu, assets } = wordjs;
@@ -136,17 +148,24 @@ exports.init = async function (wordjs) {
             return;
         }
         await options.set(OPT_CONFIG, result.config);
+        // The public pages' CSP follows the provider: re-declare the origins the loader will load from.
+        await enqueueLoader(result.config);
         res.json(result.config);
     });
 
     // ---- public loader asset ----------------------------------------------------------------------
-    // Idempotent upsert by handle — safe to call on every init. Wrapped so the plugin still boots
-    // (admin page + routes) when the assets grant has not been given yet.
-    try {
-        await assets.enqueueScript({ handle: 'analytics-tag-loader', src: 'public/loader.js', strategy: 'defer' });
-    } catch (e) {
-        console.warn('[analytics-tag] could not enqueue the loader script (missing assets grant?): ' + (e && e.message ? e.message : e));
+    // Idempotent upsert by handle — safe to call on every init and after every save. `origins` names the
+    // provider host the loader injects its tag from: the public pages' Content-Security-Policy allows
+    // exactly that host, so it must follow the configured provider (and is empty while tracking is off).
+    // Wrapped so the plugin still boots (admin page + routes) when the assets grant has not been given yet.
+    async function enqueueLoader(cfg) {
+        try {
+            await assets.enqueueScript({ handle: 'analytics-tag-loader', src: 'public/loader.js', strategy: 'defer', origins: originsFor(cfg) });
+        } catch (e) {
+            console.warn('[analytics-tag] could not enqueue the loader script (missing assets grant?): ' + (e && e.message ? e.message : e));
+        }
     }
+    await enqueueLoader(await readConfig());
 
     adminMenu.add({
         href: '/admin/plugin/tracking',

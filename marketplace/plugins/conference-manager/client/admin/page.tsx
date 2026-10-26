@@ -30,6 +30,7 @@ import { DECO_LAYER_CLASS, HERO_HEAD_CLASS, SHELL_CSS, STAT_GRID_CLASS } from ".
 import { SectionPicker } from "./SectionPicker";
 import { WithdrawDeadlineSetting } from "./WithdrawDeadline";
 import { RegistrationClosesSetting, LocationRegistrationCloses } from "./RegistrationCloses";
+import { LocationName } from "./LocationName";
 // Lodging explorer (2.13.0) and the pure helpers it shares with this page (status meta, display
 // names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
 // imports this file.
@@ -5547,12 +5548,14 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                 </div>
 
                                 <div className="flex justify-between items-start mb-8 relative z-10">
-                                    <div className="flex items-center gap-4">
+                                    <div className="flex items-center gap-4 flex-1 min-w-0">
                                         <div className="w-14 h-14 shrink-0 rounded-2xl bg-gradient-to-br from-blue-50 to-indigo-50 text-blue-600 flex items-center justify-center text-xl shadow-inner group-hover:scale-110 transition-transform duration-500">
                                             <i className="fa-solid fa-map-location-dot"></i>
                                         </div>
-                                        <div>
-                                            <h3 className="text-2xl font-black text-gray-900 italic tracking-tighter leading-tight">{loc.name}</h3>
+                                        <div className="flex-1 min-w-0">
+                                            {/* 2.36.21: the name, editable in place. */}
+                                            <LocationName loc={loc} canEdit={canManage} tx={tx} addToast={addToast}
+                                                onSaved={(name) => setLocations((ls) => ls.map((l) => (l.id === loc.id ? { ...l, name } as any : l)))} />
                                             <div className="flex items-center gap-1.5 mt-0.5">
                                                 <div className="w-1.5 h-1.5 rounded-full bg-emerald-500"></div>
                                                 <span className="text-[10px] font-black text-gray-400 uppercase tracking-widest">{t('active') || 'Activo'}</span>

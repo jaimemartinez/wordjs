@@ -205,11 +205,13 @@ need `openssl` on the PATH. Full details, port matrix and the manual (source-che
 
 - **GitHub downloads are verified.** Every release publishes `wordjs-<tag>.zip.sha256`
   (`sha256sum` format) next to the bundle. `create-wordjs` — including `upgrade`, `gateway` and
-  `join` — downloads it and refuses to extract a ZIP whose SHA-256 differs. Releases published
-  **before** the checksum asset was introduced have nothing to verify against: they still install
-  (so `--version <old-tag>` rollbacks keep working) but with a clear warning that the download was
-  not verified. The checksum is fetched from the same GitHub release over HTTPS, so it catches a
-  corrupted or swapped download, not a compromised release.
+  `join` — downloads it and refuses to extract a ZIP whose SHA-256 differs. A release that
+  publishes **no** checksum (only those from before the asset was introduced) is refused unless you
+  pass `--allow-unverified`, which installs it with a clear warning that nothing was verified.
+- **Release signature.** The checksum comes from the same release, so it proves the download is
+  intact, not who published it. A signed release also publishes `wordjs-<tag>.zip.sha256.sig`, an
+  Ed25519 signature of the checksum file made with the project's release key; `create-wordjs`
+  verifies it against the public keys embedded in this package and refuses one that does not verify.
 - **`--zip` sources**: a URL must be `https://` (plain `http://` and other schemes are refused); a
   local path is accepted as is. Neither is verified unless you pass `--sha256 <hex>` (a URL
   without it prints a warning).

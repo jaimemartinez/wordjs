@@ -288,6 +288,8 @@ jobs:
           # where restoring it overwrites the site. make-release.js excludes both; this checks the output.
           stray="$(cd "$app" && find . -name node_modules -prune -o \( -path ./backend/backups -o -path './backend/backups/*' -o -iname '*.db' -o -iname '*.sqlite' -o -iname '*.sqlite3' \) -print)"
           [ -z "$stray" ] || { echo "::error::the bundle carries site backups or database files:"; echo "$stray"; exit 1; }
+          # Admin -> Updates and the supervisor's rollback run the upgrade CLI the installed release shipped.
+          [ -f "$app/packages/create-wordjs/index.js" ] || { echo "::error::the bundle does not carry packages/create-wordjs/index.js (the panel's upgrade CLI)"; exit 1; }
           ( cd "$app" && npm run release:install ) || { echo "::error::release:install failed in the extracted bundle"; exit 1; }
           bash "$GITHUB_WORKSPACE/scripts/smoke-deploy.sh" "$app"
 
@@ -328,6 +330,33 @@ jobs:
           sha256sum "wordjs-${GITHUB_REF_NAME}.zip" > "wordjs-${GITHUB_REF_NAME}.zip.sha256"
           cat "wordjs-${GITHUB_REF_NAME}.zip.sha256"
           sha256sum -c "wordjs-${GITHUB_REF_NAME}.zip.sha256"
+
+      # Who published it: the checksum file is signed with the project's Ed25519 release key, and
+      # create-wordjs verifies `<bundle>.sha256.sig` against the public keys embedded in the npm package
+      # (RELEASE_SIGNING_KEYS in packages/create-wordjs/index.js). The private key lives only in the
+      # RELEASE_SIGNING_KEY secret (PEM). Without the secret the release is published unsigned and the
+      # run says so; once the CLI requires signatures (SIGNATURE_REQUIRED_SINCE) such a release would not
+      # install, so the secret must be in place before that version is set.
+      - name: Sign the checksum (tag pushes only)
+        if: startsWith(github.ref, 'refs/tags/')
+        working-directory: release
+        env:
+          RELEASE_SIGNING_KEY: ${{ secrets.RELEASE_SIGNING_KEY }}
+        run: |
+          set -euo pipefail
+          if [ -z "${RELEASE_SIGNING_KEY}" ]; then
+            echo "::warning::RELEASE_SIGNING_KEY is not set: this release is published without a checksum signature."
+            exit 0
+          fi
+          node -e '
+            const crypto = require("crypto"); const fs = require("fs");
+            const file = process.argv[1];
+            const key = crypto.createPrivateKey(process.env.RELEASE_SIGNING_KEY);
+            const sig = crypto.sign(null, fs.readFileSync(file), key);
+            if (!crypto.verify(null, fs.readFileSync(file), crypto.createPublicKey(key), sig)) throw new Error("signature does not verify");
+            fs.writeFileSync(file + ".sig", sig.toString("base64") + "\n");
+          ' "wordjs-${GITHUB_REF_NAME}.zip.sha256"
+          cat "wordjs-${GITHUB_REF_NAME}.zip.sha256.sig"
 
       # Software Bill of Materials (CycloneDX) for the whole workspace — the supply-chain transparency
       # signal enterprise self-hosters check for. Generated on every run (so a workflow_dispatch validates
@@ -383,6 +412,7 @@ jobs:
           files: |
             release/wordjs-${{ github.ref_name }}.zip
             release/wordjs-${{ github.ref_name }}.zip.sha256
+            release/wordjs-${{ github.ref_name }}.zip.sha256.sig
             release/wordjs-sbom.cdx.json
             marketplace/dist/*
           body: |

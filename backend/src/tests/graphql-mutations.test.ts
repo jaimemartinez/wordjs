@@ -365,7 +365,8 @@ describe('content lifecycle through GraphQL lands exactly as through REST', () =
         const trash = await gqlAs('editor', `mutation { trashContent(id: ${id}) { node { id status } } }`);
         assert.strictEqual(trash.body.data.trashContent.node.status, 'trash');
         const restored = await gqlAs('editor', `mutation { restoreContent(id: ${id}) { node { status } } }`);
-        assert.strictEqual(restored.body.data.restoreContent.node.status, 'draft');
+        // Back to the status it had before the trash (POST /posts/:id/restore), as on REST.
+        assert.strictEqual(restored.body.data.restoreContent.node.status, 'future');
         const audit = await count("SELECT COUNT(*) FROM audit_log WHERE object_id = ? AND action IN ('post.trash', 'post.restore')", [String(id)]).catch(() => -1);
         if (audit !== -1) assert.ok(audit >= 2, 'the REST audit rows were written');
         const del = await gqlAs('editor', `mutation { deleteContent(id: ${id}) { id deleted previous } }`);

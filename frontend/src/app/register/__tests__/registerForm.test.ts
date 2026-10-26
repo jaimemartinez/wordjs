@@ -57,6 +57,13 @@ describe("validateRegisterDraft — la política de contraseña, en sus dos extr
         expect(validateRegisterDraft(draft({ password: long, confirm: long })).password).toBeTruthy();
     });
 
+    it("el máximo son 72 BYTES (lo que lee bcrypt): 37 letras con tilde ya lo superan", () => {
+        const tildes = "á".repeat(37); // 37 caracteres, 74 bytes
+        expect(validateRegisterDraft(draft({ password: tildes, confirm: tildes })).password).toBeTruthy();
+        const justo = "á".repeat(36); // 72 bytes
+        expect(validateRegisterDraft(draft({ password: justo, confirm: justo })).password).toBeUndefined();
+    });
+
     it("exige nombre de usuario y no lo da por bueno solo con espacios", () => {
         expect(validateRegisterDraft(draft({ username: "" })).username).toBeTruthy();
         expect(validateRegisterDraft(draft({ username: "   " })).username).toBeTruthy();

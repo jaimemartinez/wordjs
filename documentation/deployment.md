@@ -66,7 +66,7 @@ One backend + one frontend per gateway needs **no** shared database or filesyste
 
 WordJS ships **downloadable, pre-compiled bundles** so an operator can deploy without cloning the repo or building anything locally. If you just want to run WordJS, grab a release ZIP instead of following the from-source installation steps below.
 
-> **Latest release:** [v2.11.7](https://github.com/jaimemartinez/wordjs/releases) at `github.com/jaimemartinez/wordjs/releases`.
+> **Latest release:** [v2.11.11](https://github.com/jaimemartinez/wordjs/releases) at `github.com/jaimemartinez/wordjs/releases`.
 
 ### Versioning policy
 
@@ -94,8 +94,8 @@ tag examples on this page, and the supported-versions table in `SECURITY.md`.
 Push a version tag and the release pipeline does the rest:
 
 ```bash
-git tag v2.11.7
-git push origin v2.11.7
+git tag v2.11.11
+git push origin v2.11.11
 ```
 
 A `v*` tag triggers **`.github/workflows/release.yml`**. It runs a **`verify`** job first — `npm run ci:all` (the parallel workspace installer, root `scripts/ci-install.mjs`), then the dependency-audit gate (`scripts/ci-audit.mjs`, which wraps `npm audit --omit=dev --audit-level=high` and blocks on any high/critical advisory in production dependencies) in `backend`, `gateway`, `frontend` and `packages/create-wordjs`, and a strict backend type check (`npx tsc --noEmit`), plus the frontend, gateway and `create-wordjs` tests; the backend unit suite runs beside it in **`verify-backend-tests`**, four parallel shards (`npm test -- --test-shard=N/4`). Nothing is built or published unless `verify` and all four shards are green. The **`build-release`** job (`needs: [verify, verify-backend-tests]`) then runs `npm run ci:all` again followed by `npm run bundle-release` (root `scripts/make-release.js`). The packager:
@@ -143,7 +143,7 @@ Publish this way only when the plugins at that ref run on the core of the latest
 > ```bash
 > npx create-wordjs@latest my-site
 > ```
-> It verifies the ZIP's SHA-256 against the release's `wordjs-<tag>.zip.sha256` asset before extracting it (an older release without that asset installs with a warning that it was not verified; `--zip` URLs must be `https://`, and `--sha256 <hex>` pins a checksum for a `--zip` source — see [cli.md § 2](cli.md#2-one-command-site-bootstrap-npx-create-wordjs)). It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). On a Linux server, `--systemd` (e.g. `npx create-wordjs@latest /srv/wordjs --systemd --port 443`) writes a systemd unit that runs the site as a dedicated non-root account with no capabilities instead of starting it — see **[Running as a service](#-running-as-a-service-systemd-non-root)**. The manual download below is the equivalent, step-by-step alternative.
+> It verifies the ZIP's SHA-256 against the release's `wordjs-<tag>.zip.sha256` asset before extracting it (an older release without that asset is refused unless you pass `--allow-unverified`; `--zip` URLs must be `https://`, and `--sha256 <hex>` pins a checksum for a `--zip` source — see [cli.md § 2](cli.md#2-one-command-site-bootstrap-npx-create-wordjs)). It then installs the runtime dependencies for you (`npm run release:install` — no build step), seeds self-signed HTTPS (pass `--http` for plain HTTP) and starts the server (`npm run start:mono`) with a one-time install token, printing a ready-to-click `https://localhost:3000/install#token=…` URL. Pass `--no-start` to scaffold + install only; start it later with `cd my-site && npm run start:mono` (or `npm start` for the 3-service split). On a Linux server, `--systemd` (e.g. `npx create-wordjs@latest /srv/wordjs --systemd --port 443`) writes a systemd unit that runs the site as a dedicated non-root account with no capabilities instead of starting it — see **[Running as a service](#-running-as-a-service-systemd-non-root)**. The manual download below is the equivalent, step-by-step alternative.
 
 1. Download `wordjs-<tag>.zip` **and** `wordjs-<tag>.zip.sha256` from the GitHub Release, verify the download with `sha256sum -c wordjs-<tag>.zip.sha256` (releases published before the checksum asset was introduced do not have one), and unzip it.
 2. Install **runtime deps only** (no build/compile step — prebuilt native binaries are downloaded):
@@ -535,10 +535,10 @@ Then `GET /api/v1/setup/status` reports `"installed":true` and `/readyz` turns 2
 A minimal chart lives at **[`deploy/helm/wordjs`](../deploy/helm/wordjs)**.
 
 ```bash
-docker build -t <registry>/wordjs:2.11.7 . && docker push <registry>/wordjs:2.11.7
+docker build -t <registry>/wordjs:2.11.11 . && docker push <registry>/wordjs:2.11.11
 helm install wordjs deploy/helm/wordjs \
   --namespace wordjs --create-namespace \
-  --set image.repository=<registry>/wordjs --set image.tag=2.11.7 \
+  --set image.repository=<registry>/wordjs --set image.tag=2.11.11 \
   --set siteUrl=https://cms.example.com \
   --set installToken.value="$(openssl rand -hex 24)"
 kubectl -n wordjs port-forward deployment/wordjs 3000:3000   # then browse /install
@@ -751,7 +751,7 @@ Almost everything lives in `backend/wordjs-config.json` (written by the install 
 ## 🔒 Security Checklist
 
 1.  **Firewall:** Only open port `3000` (Gateway) to the public. Ports `4000` (Backend) and `3001` (Frontend) should stay internal.
-2.  **HTTPS:** Either terminate TLS in front of WordJS (**Cloudflare**, or an **Nginx/Caddy reverse proxy** with Certbot), or use the **built-in Let's Encrypt client** (`core/acme-client`, an RFC 8555 client on Node's `crypto`, in both monolith and split mode). Issue a certificate from **Admin → Security → SSL Certificate Manager** (HTTP-01, or DNS-01 with a TXT record you publish), and turn on **auto-renewal** with the `acme` block in `backend/wordjs-config.json` (also written by that screen): `enabled` (default `false`), `email`, `domains`, `staging` (default `false`), `renewBeforeDays` (default `30`), `challengeType` (`http-01`, the default, or `dns-01`) and `http01Port`. The renewal runs from the built-in cron (on one node only in a cluster) and only for HTTP-01: a DNS-01 certificate is renewed through the admin screen, because its TXT record is published by hand. HTTP-01 needs port 80 reachable — set `acme.http01Port: 80` so WordJS serves the challenge and redirects the rest to HTTPS (see [Ports below 1024](#ports-below-1024-without-a-capability) for binding it without root).
+2.  **HTTPS:** Either terminate TLS in front of WordJS (**Cloudflare**, or an **Nginx/Caddy reverse proxy** with Certbot), or use the **built-in Let's Encrypt client** (`core/acme-client`, an RFC 8555 client on Node's `crypto`, in both monolith and split mode). Issue a certificate from **Admin → Security → SSL Certificate Manager** (HTTP-01, or DNS-01 with a TXT record you publish), and turn on **auto-renewal** with the `acme` block in `backend/wordjs-config.json` (also written by that screen): `enabled` (default `false`), `email`, `domains`, `staging` (default `false`), `renewBeforeDays` (whole days from 1 to 60, default `30`), `challengeType` (`http-01`, the default, or `dns-01`) and `http01Port`. The renewal runs from the built-in cron (on one node only in a cluster) and only for HTTP-01: a DNS-01 certificate is renewed through the admin screen, because its TXT record is published by hand. HTTP-01 needs port 80 reachable — set `acme.http01Port: 80` so WordJS serves the challenge and redirects the rest to HTTPS (see [Ports below 1024](#ports-below-1024-without-a-capability) for binding it without root).
 3.  **Secrets:** Ensure your `gatewaySecret` and `jwtSecret` in `wordjs-config.json` are cryptographically secure. Both are generated for you: the `jwtSecret` by the backend's first boot (the installer keeps it), the `gatewaySecret` by the installer. A `jwtSecret` you pre-seed is kept as-is (before the install, only a short, non-string or published placeholder value is replaced), so generate it with `openssl rand -hex 64`.
 4.  **Install token:** On a fresh, not-yet-installed instance the pre-install endpoints (`POST /api/v1/setup/install`, `POST /api/v1/setup/test-db`) are gated by a **one-time install token** written to `backend/data/install-token` (`0600`) and overridable via `WORDJS_INSTALL_TOKEN` (≥ 16 chars). It is printed in the boot banner **only when stdout is a TTY** or `WORDJS_PRINT_INSTALL_TOKEN=1` — off a TTY the banner omits the `#token=` fragment and names the file, so the bootstrap secret is not shipped to your log aggregator. Read it from the terminal, or from that file, to complete the wizard; it is cleared once installed. See **[How an operator deploys a release](#how-an-operator-deploys-a-release)**.
 5.  **Metrics:** The Prometheus `/metrics` endpoint is **disabled (returns 404) by default** — it only serves once a scrape token is set via `config.metrics.token` (`wordjs-config.json`) or the `METRICS_TOKEN` env var. Once set, scrape with `Authorization: Bearer <token>` (header only — `?token=` is not accepted); a wrong token returns 401. So metrics are never exposed publicly unless you opt in.
@@ -763,7 +763,7 @@ Almost everything lives in `backend/wordjs-config.json` (written by the install 
 
 Before going live, confirm:
 
-1. [ ] **Real `gatewaySecret`** — do not ship the public default. If unset, the gateway warns at startup and falls back to the public default `secure-your-gateway-secret`, but it never accepts that value as credentials: while the default is in effect the secret-gated endpoint (`/gateway-status`) answers **503** ("Gateway management disabled: configure gatewaySecret.") instead of 200/401, and the backend's `/api/internal/gateway-update` likewise rejects requests when no real secret is configured. Note that whatever value the gateway holds (including the default) is what enrolling nodes receive, so set a real one before enrolling any node or going live. Rotate this away from any value committed during development, and keep `backend/wordjs-config.json` and `gateway/gateway-config.json` in sync.
+1. [ ] **Real `gatewaySecret`** — do not ship the public default. If unset, the gateway warns at startup and falls back to the public default `secure-your-gateway-secret`, but it never accepts that value as credentials: while the default is in effect the secret-gated endpoint (`/gateway-status`) answers **503** ("Gateway management disabled: configure gatewaySecret.") instead of 200/401. Enrollment hands it only to **backend** nodes (a frontend node never receives it), so set a real one before enrolling a backend node or going live. Rotate this away from any value committed during development, and keep `backend/wordjs-config.json` and `gateway/gateway-config.json` in sync.
 2. [ ] **Real `jwtSecret`** — a cryptographically secure value, not a placeholder. JWTs are revocable: logout ends its session, and a password change (or «sign out of all sessions») invalidates every older token via `token_valid_after`.
 3. [ ] **Real `dbPassword`** — rotate any password committed during development.
 4. [ ] **Proper mTLS certificates** — the gateway verifies upstream (backend/frontend) certificates against the cluster CA and requires an allowed internal CN. Provide real certs rather than relying on insecure defaults.
@@ -810,10 +810,12 @@ Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAS
 
 **From the admin panel:** **Admin → Updates** lists the newer releases with their notes and installs one
 with a click (the password, and a two-factor code when the account has two-factor authentication): a backup, the `create-wordjs upgrade` below with
-`--version <tag>`, an automatic restart, and the previous version put back if the update fails or the new
+`--version <tag>` — run from the copy of the CLI the installed release ships (`packages/create-wordjs/index.js`, by the
+server's own Node binary, with no shell), never a package fetched from the registry at update time — an automatic restart, and the previous version put back if the update fails or the new
 version does not start (`backend/data/update-state.json`, read by the monolith's supervisor). It is offered
 on a release install running as the monolith under its supervisor, whose files the service account can
-write (the `--systemd` layout). In a container, a git checkout, split or separate mode, or when the code
+write (the `--systemd` layout). A release that publishes no checksum for its bundle is listed with a notice and
+not installed (`409 update_unverified_release`). In a container, a git checkout, split or separate mode, or when the code
 belongs to another account, the screen says so and gives the command below instead. A container is
 recognised by `/.dockerenv` (Docker), `/run/.containerenv` (podman), `WORDJS_DOCKER=1` (set by the image and
 the Helm chart) or, on Kubernetes, the `KUBERNETES_SERVICE_HOST` every pod gets (containerd and CRI-O write no
@@ -830,7 +832,7 @@ It downloads the latest release (`--version <tag>` for another one, which is als
 Without access to GitHub (or to pin the exact bundle), download `wordjs-<tag>.zip` and its `.sha256` from the releases page and point the upgrade at the file:
 
 ```bash
-npx create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-v2.11.7.zip --sha256 <hex> --yes --force
+npx create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-v2.11.11.zip --sha256 <hex> --yes --force
 ```
 
 `--force` is needed only when the site already reports that version (re-applying a release). Run it with `sudo` when the site belongs to the service account: the upgraded files are given back to the site's owner. Then `sudo systemctl restart wordjs`.
