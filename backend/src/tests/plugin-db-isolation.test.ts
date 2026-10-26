@@ -164,9 +164,18 @@ test('plugin DDL under the role: own tables yes, a view over a core table no, ta
         await driver.runDdlAsRole(DDL_ROLE, `CREATE TABLE IF NOT EXISTS "${NEW}" (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT)`);
         const ins = await driver.runAsRole(DDL_ROLE, 'run', `INSERT INTO "${NEW}" (body) VALUES (?)`, ['x']);
         assert.ok(ins.changes >= 1);
-        // The database itself refuses DDL that reads a table the role cannot read.
-        await assert.rejects(() => driver.runDdlAsRole(DDL_ROLE, `CREATE VIEW wjp_isotest_ddl_v AS SELECT secret FROM "${SECRET}"`),
-            /permission denied/i, 'a view over a core table is refused under the role');
+        // The database itself keeps the role's DDL to what the role can read. Postgres checks a view's base
+        // tables when the view is READ, with its OWNER's rights — the owner is now the plugin's role, so a
+        // view over a core table reads nothing, whether the plugin or the admin queries it.
+        let viewMade = true;
+        try { await driver.runDdlAsRole(DDL_ROLE, `CREATE VIEW wjp_isotest_ddl_v AS SELECT secret FROM "${SECRET}"`); }
+        catch (e: any) { viewMade = false; assert.match(String(e && e.message), /permission denied/i); }
+        if (viewMade) {
+            await assert.rejects(() => driver.runAsRole(DDL_ROLE, 'all', 'SELECT secret FROM wjp_isotest_ddl_v', []),
+                /permission denied/i, 'the plugin cannot read a core table through its view');
+            await assert.rejects(() => driver.all('SELECT secret FROM wjp_isotest_ddl_v'),
+                /permission denied/i, 'nor can the admin: the view runs with its owner\'s (the role\'s) rights');
+        }
         await assert.rejects(() => driver.runDdlAsRole(DDL_ROLE, `CREATE TABLE wjp_isotest_ddl_copy AS SELECT secret FROM "${SECRET}"`),
             /permission denied/i, 'CREATE TABLE … AS SELECT over a core table is refused under the role');
         await assert.rejects(() => driver.runDdlAsRole(DDL_ROLE, `DROP TABLE "${SECRET}"`),

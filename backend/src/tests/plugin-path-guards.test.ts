@@ -243,10 +243,11 @@ describe('routes/plugins — installPluginFromZip prueba la contencion INLINE an
 
     it('la prueba de contencion esta ESCRITA en la funcion del sumidero, no delegada a un helper', () => {
         const src = codeOnly(readSrc('routes/plugins.ts'));
-        // The only fs.unlinkSync of the zip left in the file is the body of discardZip().
-        const raw = src.match(/fs\.unlinkSync\(zipPath\)/g) || [];
-        assert.strictEqual(raw.length, 1, 'exactly one raw unlink — inside discardZip()');
-        assert.match(src, /const discardZip = \(\) => \{ try \{ fs\.unlinkSync\(zipPath\);/);
+        // The only fs.unlinkSync of the zip left in the file is the body of discardZip(), and it deletes a
+        // value proved contained INSIDE that closure too (the analyzer judges the closure on its own).
+        assert.strictEqual((src.match(/fs\.unlinkSync\(zipPath\)/g) || []).length, 0, 'no unproved unlink of the zip');
+        assert.strictEqual((src.match(/fs\.unlinkSync\(target\)/g) || []).length, 1, 'exactly one raw unlink — inside discardZip()');
+        assert.match(src, /const discardZip = \(\) => \{\s*const target = path\.resolve\(zipPath\);\s*if \(!target\.startsWith\(OS_TMP_DIR \+ path\.sep\)\) return;\s*try \{ fs\.unlinkSync\(target\); \}/);
         // Resolucion canonica + prefijo CON separador, en la MISMA funcion que el unlink: eso es lo
         // que apaga la alerta js/path-injection, porque el barrier del analizador no cruza funciones.
         assert.match(src, /const zipPath = path\.resolve\(zipPathIn\);/);
