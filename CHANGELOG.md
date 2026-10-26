@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.11] - 2026-10-26
+
 ### Fixed
 - **mail-server 3.3.1: a slow destination no longer restarts the mail server.** WordJS gives an isolated plugin
   30 seconds to answer, and stops it when it takes longer. Delivering straight to a mail server that does not
