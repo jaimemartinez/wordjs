@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.8] - 2026-10-26
+
 ### Added
 - **conference-manager 2.36.20: «Cierre de inscripciones».**
   - **A general date.** The «Campos» section has a new «Cierre de inscripciones» date and hour. From then on the
@@ -29,6 +31,25 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     reaches the phone.
 
 ### Fixed
+- **GraphQL, streams and health probes: tighter resource bounds.**
+  - **Query limits.** A scalar leaf now costs 0.1 in the cost limit, multiplied by the page it sits on like any
+    other field. An operation may select at most 1000 fields once its fragments are expanded
+    (`WORDJS_GRAPHQL_MAX_FIELDS`) and one selection set at most 50 aliased fields (`WORDJS_GRAPHQL_MAX_ALIASES`).
+    A result larger than 16 MiB (`WORDJS_GRAPHQL_MAX_RESPONSE_BYTES`) is answered with a
+    `GRAPHQL_RESPONSE_TOO_LARGE` error; it is measured before it is serialized.
+  - **Rate limiting.** Each REST read a GraphQL query makes after the first now counts against the API rate
+    limiter, so a query costs the budget what the REST calls behind it would.
+  - **Uploads.** A multipart GraphQL request passes `POST /media`'s authentication and `upload_files` check before
+    its body is read. Each file is held to the site's upload limit from Settings → Media, the files of one request
+    together to that same limit, and every file after the first counts once more against the upload limiter.
+  - **Subscriptions.** The per-caller stream cap holds when many streams open at once, a stream abandoned while it
+    is being set up gives its slot back, and a caller without a signed-in user is counted by address (an IPv6 client
+    by its /64). The reads a stream makes while opening (`ids:`, a `Last-Event-ID` resume) count against the API
+    limiter; an anonymous resume replays at most 50 events.
+  - **Hook inspector.** `GET /api/v1/hooks/stream` takes an administrator's interactive session only (not an API
+    token), and at most 3 streams per user and 20 per process (`429 rest_hook_stream_limit`).
+  - **Health probes.** `GET /health` and `GET /api/v1/health` answer from one cached database check (1 s) with the
+    readiness deadline (`WORDJS_READINESS_TIMEOUT_MS`), like `/readyz`.
 - **conference-manager 2.36.20: the cupo editor on a locality card no longer pushes «Cancelar» out of the card.**
 - **conference-manager 2.36.17: «Autorizaciones» shows its list on a computer again.** On a site built before 2.36.16,
   the desktop table and the phone cards were both hidden on a wide screen, so a computer showed no list. The plugin's
