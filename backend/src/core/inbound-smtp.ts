@@ -208,14 +208,26 @@ function probe(port: number): Promise<{ ok: boolean; code?: string }> {
     });
 }
 
-/** This node's non-loopback IPv4 addresses, split into public and private (RFC 1918, CGNAT, link-local). */
-function nodeAddresses(): { public: string[]; private: string[] } {
-    const out = { public: [] as string[], private: [] as string[] };
+/**
+ * This node's non-loopback addresses: IPv4 split into public and private (RFC 1918, CGNAT, link-local), and
+ * the GLOBAL IPv6 ones (`public6`, 2000::/3 in canonical form — link-local, ULA and documentation addresses
+ * are left out). A sandboxed plugin cannot list interfaces, and a mail plugin sends over IPv6 as well, so it
+ * needs both to tell the operator which addresses their DNS must cover.
+ */
+function nodeAddresses(interfaces?: Record<string, any[] | undefined>): { public: string[]; private: string[]; public6: string[] } {
+    const out = { public: [] as string[], private: [] as string[], public6: [] as string[] };
     const isPrivate = (ip: string) => /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip);
+    const canonical6 = (ip: string) => { try { return new URL(`http://[${ip.split('%')[0]}]/`).hostname.slice(1, -1); } catch { return ''; } };
     try {
-        for (const list of Object.values(require('os').networkInterfaces() || {}) as any[]) {
+        for (const list of Object.values(interfaces || require('os').networkInterfaces() || {}) as any[]) {
             for (const a of list || []) {
-                if (!a || a.internal || (a.family !== 'IPv4' && a.family !== 4)) continue;
+                if (!a || a.internal) continue;
+                if (a.family === 'IPv6' || a.family === 6) {
+                    const ip = canonical6(String(a.address || ''));
+                    if (/^[23][0-9a-f]{0,3}:/.test(ip) && !/^2001:db8:/.test(ip) && !out.public6.includes(ip)) out.public6.push(ip);
+                    continue;
+                }
+                if (a.family !== 'IPv4' && a.family !== 4) continue;
                 const bucket = isPrivate(a.address) ? out.private : out.public;
                 if (!bucket.includes(a.address)) bucket.push(a.address);
             }
@@ -447,4 +459,4 @@ function getStatus(): Status {
     return { ...status, proxyIps: [...status.proxyIps], tls: status.tls ? { ...status.tls } : null, addresses: status.addresses ? { public: [...status.addresses.public], private: [...status.addresses.private] } : undefined };
 }
 
-module.exports = { start, stop, getStatus, _bindReason: bindReason, _hostName: hostName, _tlsMaterial: tlsMaterial, _byteBudget: byteBudget, _connectionSlots: connectionSlots };
+module.exports = { start, stop, getStatus, _bindReason: bindReason, _nodeAddresses: nodeAddresses, _hostName: hostName, _tlsMaterial: tlsMaterial, _byteBudget: byteBudget, _connectionSlots: connectionSlots };

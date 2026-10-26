@@ -136,3 +136,20 @@ test('the listener does no reverse DNS per connection, and bounds its shutdown a
     g.socket.destroy();
     await inbound.stop(OWNER);
 });
+
+// The addresses the host reports with the listener status (a sandboxed plugin cannot list interfaces).
+// A mail plugin also sends over IPv6, so the global IPv6 addresses travel with the IPv4 ones.
+test('the listener status names the public IPv4 and the global IPv6 addresses of this node', () => {
+    const got = inbound._nodeAddresses({
+        lo: [{ address: '127.0.0.1', family: 'IPv4', internal: true }, { address: '::1', family: 'IPv6', internal: true }],
+        eth0: [
+            { address: '93.184.215.14', family: 'IPv4', internal: false },
+            { address: '10.0.0.5', family: 'IPv4', internal: false },
+            { address: '2606:2800:021F:cb07:0000:0000:0000:0025', family: 'IPv6', internal: false },
+            { address: 'fe80::1%eth0', family: 'IPv6', internal: false },
+            { address: 'fd00::5', family: 'IPv6', internal: false },
+            { address: '2001:db8::1', family: 'IPv6', internal: false },
+        ],
+    });
+    assert.deepStrictEqual(got, { public: ['93.184.215.14'], private: ['10.0.0.5'], public6: ['2606:2800:21f:cb07::25'] });
+});
