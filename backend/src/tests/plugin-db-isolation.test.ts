@@ -125,3 +125,57 @@ test('a SERIAL / IDENTITY table created after provisioning is insertable under t
         await drop();
     }
 });
+
+// A plugin's DDL runs under its own role too (plugin-db-isolation runDdl): the role owns its tables, so it can
+// alter, index and drop them, while a view or a CREATE TABLE … AS SELECT over a table it cannot read is refused
+// by Postgres itself — not only by the SQL text-guard. Dropping the role hands the tables back instead of
+// dropping them (an uninstall that keeps data keeps them).
+test('plugin DDL under the role: own tables yes, a view over a core table no, tables survive the role', async (t: any) => {
+    const DDL_ROLE = 'wjp_role_isotest_ddl';
+    const PRE = 'wjp_isotest_ddl_pre';     // created by the host before the role existed (an upgrade)
+    const NEW = 'wjp_isotest_ddl_new';     // created by the plugin itself, under the role
+    const SECRET = 'iso_core_ddl_secrets'; // stands in for a core table
+    let driver: any;
+    try { driver = require('../drivers/postgres'); } catch (e: any) { return skipOrFail(t, `pg driver not loadable: ${e && e.message}`); }
+    try { await withTimeout(driver.connect(), 3000, 'pg connect'); } catch (e: any) { return skipOrFail(t, `no reachable Postgres: ${e && e.message}`); }
+    const drop = async () => {
+        for (const tbl of ['wjp_isotest_ddl_v', NEW, PRE, SECRET]) {
+            try { await driver.exec(`DROP VIEW IF EXISTS "${tbl}"`); } catch { /* not a view */ }
+            try { await driver.exec(`DROP TABLE IF EXISTS "${tbl}"`); } catch { /* */ }
+        }
+        try { await driver.dropPluginRole(DDL_ROLE); } catch { /* */ }
+    };
+    await drop();
+    await driver.exec(`CREATE TABLE "${PRE}" (id SERIAL PRIMARY KEY, title TEXT)`);
+    await driver.exec(`CREATE TABLE "${SECRET}" (id SERIAL PRIMARY KEY, secret TEXT)`);
+    try {
+        await driver.ensurePluginRole(DDL_ROLE);
+        await driver.grantPluginPrefix(DDL_ROLE, 'wjp_isotest_ddl_');
+        await driver.enablePluginDdl(DDL_ROLE, 'wjp_isotest_ddl_');
+    } catch (e: any) {
+        await drop();
+        return t.skip(`role provisioning needs CREATEROLE (graceful fallback to text-guard): ${e && e.message}`);
+    }
+    try {
+        // Its own pre-existing table: ALTER and CREATE INDEX need the OWNER — the role is now that owner.
+        await driver.runDdlAsRole(DDL_ROLE, `ALTER TABLE "${PRE}" ADD COLUMN note TEXT`);
+        await driver.runDdlAsRole(DDL_ROLE, `CREATE INDEX IF NOT EXISTS wjp_isotest_ddl_idx ON "${PRE}" (title)`);
+        // A new table, SQLite dialect, translated like run() translates it.
+        await driver.runDdlAsRole(DDL_ROLE, `CREATE TABLE IF NOT EXISTS "${NEW}" (id INTEGER PRIMARY KEY AUTOINCREMENT, body TEXT)`);
+        const ins = await driver.runAsRole(DDL_ROLE, 'run', `INSERT INTO "${NEW}" (body) VALUES (?)`, ['x']);
+        assert.ok(ins.changes >= 1);
+        // The database itself refuses DDL that reads a table the role cannot read.
+        await assert.rejects(() => driver.runDdlAsRole(DDL_ROLE, `CREATE VIEW wjp_isotest_ddl_v AS SELECT secret FROM "${SECRET}"`),
+            /permission denied/i, 'a view over a core table is refused under the role');
+        await assert.rejects(() => driver.runDdlAsRole(DDL_ROLE, `CREATE TABLE wjp_isotest_ddl_copy AS SELECT secret FROM "${SECRET}"`),
+            /permission denied/i, 'CREATE TABLE … AS SELECT over a core table is refused under the role');
+        await assert.rejects(() => driver.runDdlAsRole(DDL_ROLE, `DROP TABLE "${SECRET}"`),
+            /must be owner|permission denied/i, 'a table it does not own cannot be dropped');
+        // Dropping the role keeps the plugin's tables and their rows.
+        await driver.dropPluginRole(DDL_ROLE);
+        const rows = await driver.all(`SELECT body FROM "${NEW}"`);
+        assert.deepStrictEqual(rows.map((r: any) => r.body), ['x'], 'the plugin table outlives its role');
+    } finally {
+        await drop();
+    }
+});

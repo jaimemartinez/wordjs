@@ -511,7 +511,7 @@ Deleting a plugin (admin **Plugins** → delete, password-confirmed) removes its
 
 By default your plugin's **data tables are kept** (WordPress parity). Tick **"Also delete this plugin's data / tables"** in the delete dialog to additionally `DROP` the plugin's own `wjp_<slug>_*` tables, delete the options it created, revoke the account capabilities it declared and remove its private storage. Only what belongs to the plugin goes — core settings and other plugins are never touched ([plugin-database.md](plugin-database.md#lifecycle-uninstalling-and-dropdata)).
 
-> Options written via `wordjs.options.set` live in a **global** key space with no per-plugin namespace, so they are **not** auto-purged on delete. If your plugin stores option keys, prefix them with your slug and document how to remove them, or clean them up yourself.
+> `wordjs.options.set` writes only options **named after your slug** (`<slug>_…`, with every run of characters other than letters and digits turned into `_`: `photo-carousel` → `photo_carousel_…`); any other name is refused. Those are the options "Also delete this plugin's data" removes. Site settings are changed on their own admin screens, never by a plugin.
 
 ---
 
@@ -1027,7 +1027,7 @@ Every call is permission-checked on the host against your manifest.
 
 | Bridge call | Permission | Notes |
 | :--- | :--- | :--- |
-| `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) are **never** exposed — to any plugin. |
+| `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | `set` writes only `<slug>_…` options (see above). Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) are **never** exposed — to any plugin. |
 | `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Always scoped to your own `wjp_<slug>_` tables; SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. There is no unscoped mode. DDL is limited to your OWN `TABLE`/`INDEX`/`VIEW`/`TRIGGER` (SCHEMA/DATABASE/ROLE/FUNCTION/EXTENSION/… denied), an `ALTER … RENAME TO` target must keep your prefix, and a data-modifying `WITH` (a CTE containing insert/update/delete/replace/merge) counts as a write and needs `database:write`. |
 | `wordjs.db.batch(statements)` | `database:read` / `write` | Up to 200 `[sql, params]` pairs in ONE host round-trip — a transport optimisation only: each statement is re-checked with the same permission + SQL guard as the single-statement call, and DDL is refused (use `db.run` / `db.createTable`). Validated as a whole before anything runs, but **not** a transaction — a mid-batch failure leaves the earlier statements applied. |
 | `wordjs.db.createTable(name, columns)` | `database:write` | Does **not** add the prefix for you: `name` must already start with `wordjs.db.tablePrefix`, or the call throws (`Plugin tables must be named with the 'wjp_<slug>_' prefix`). Build it as `wordjs.db.tablePrefix + 'items'`. Emits `CREATE TABLE IF NOT EXISTS` and records your plugin as the table's creator. |

@@ -6,6 +6,45 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+- **Plugin boundary hardening.**
+  - **Plugin DDL runs under the plugin's own database user.** On PostgreSQL the plugin's role now owns its tables
+    and runs its `CREATE`/`ALTER`/`DROP` itself; on MySQL/MariaDB the plugin's user is granted exactly the objects
+    the statement names, just before it runs. Views and triggers a plugin creates run with the plugin's rights. When
+    the site's database user cannot create per-plugin users, **Site Health** now says which plugins fall back to the
+    SQL checks alone and what right to grant.
+  - **Stricter plugin SQL checks.** Every name in a target list (`DROP TABLE a, b`, multi-table `UPDATE`/`DELETE`),
+    the table a trigger is attached to, and the tables a `CREATE TABLE` copies or extends (`LIKE`, `INHERITS`,
+    `PARTITION OF`) must belong to the plugin. `DROP` takes one object and no `CASCADE`; `DEFINER`, `SQL SECURITY`,
+    `OWNER TO`, `SET SCHEMA`, tablespaces, data directories, non-InnoDB engines and trigger routines are refused.
+    **SQL comments (`--`, `/* */`, `#`) are no longer accepted in plugin SQL.** The MySQL and PostgreSQL drivers'
+    own comment scanners now follow their engine (`#` and `-- ` on MySQL, nested block comments on PostgreSQL).
+  - **Plugin options are written by allowlist.** With `settings:write` a plugin writes only options named after its
+    slug (`photo-carousel` → `photo_carousel_…`); `mail_domain` and `mail_delivery_ready` are written only by a
+    plugin holding `email:provider`. The record of options a plugin created can no longer hold a site setting.
+    photo-carousel 2.1.3, card-gallery 1.0.4, video-gallery 1.1.2 and mail-server 3.3.1 keep their options under
+    their own names and carry over what earlier versions stored.
+  - **A theme's tables are claimed under its real prefix** (`wjp_theme_<name>_`) from boot.
+  - **Reserved plugin slugs.** `core`, `theme` / `theme-*` (in any spelling that normalizes to it) and anything
+    starting with `@` can no longer be installed, uploaded or loaded as a plugin.
+  - **Plugin shortcode output is sanitized on the server** with the same allow-list as widget output (plus inert
+    `role`, `aria-*`, `tabindex` and image `loading`/`decoding`).
+  - **Re-uploading a plugin asks about the data a previous uninstall kept.** When `data/` or the plugin's tables are
+    still there, the upload (and a fresh marketplace install) answers 409 `existing_plugin_data` and the admin panel
+    asks: keep and reconnect them, or discard them and start clean.
+  - **Marketplace installs.** A fresh install must install as the catalog entry's slug; installing an older version
+    over a newer one needs `allowDowngrade: true`. Catalogs can be signed with Ed25519 (a detached `<index>.sig`):
+    the official catalog is checked against a key embedded in WordJS once it is configured, and an administrator can
+    pin a public key per source in the sources editor, which also shows whether each catalog is signed.
+  - **Plugin multipart routes bound their text fields** (count, size, name size, parts and header pairs), not only
+    the uploaded file.
+  - **Theme style values.** CSS escapes are refused; a value that references a token may only use the usual value
+    functions; `image-set()` / `cross-fade()` must use `url()`; and a `url()` must resolve under the theme's own
+    `/themes/<slug>/` folder, percent-encoded dot segments included.
+  - **Plugin yes/no flags are strict booleans.** `DELETE /api/v1/plugins/:slug` accepts `dropData` and
+    `POST /api/v1/plugins/:slug/permissions` accepts `network` only as `true` or `false` (absent = the default);
+    any other value is answered 400 and changes nothing.
+
 ### Added
 - **conference-manager 2.36.20: «Cierre de inscripciones».**
   - **A general date.** The «Campos» section has a new «Cierre de inscripciones» date and hour. From then on the

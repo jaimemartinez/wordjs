@@ -68,8 +68,8 @@ function boundSlug(slug: string, maxLength: number = MAX_SLUG_LENGTH) {
  * Sanitize HTML content
  * Equivalent to wp_kses()
  */
-function sanitizeContent(content: string, allowedTags: any = null) {
-    const defaultAllowed = {
+function defaultContentConfig(): any {
+    return {
         allowedTags: [
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
             'p', 'br', 'hr',
@@ -126,12 +126,33 @@ function sanitizeContent(content: string, allowedTags: any = null) {
         },
         allowedSchemes: ['http', 'https', 'mailto', 'tel']
     };
+}
+
+function sanitizeContent(content: string, allowedTags: any = null) {
+    const defaultAllowed = defaultContentConfig();
 
     // The bound is applied to the config that is actually USED, not only to the default one: the
     // `allowedTags` parameter replaces the whole configuration, so a caller that passes its own would
     // otherwise re-open the channel this function exists to close. withClassBound preserves whatever
     // transformTags that config declares.
     return sanitizeHtml(content, withClassBound(allowedTags || defaultAllowed));
+}
+
+/**
+ * Sanitize the HTML a PLUGIN or THEME shortcode returned, before it is spliced into a post.
+ *
+ * The same allow-list as sanitizeContent (the one plugin widgets go through), plus only inert
+ * accessibility and loading attributes a rendered component legitimately carries — `role`,
+ * `aria-*`, `tabindex`, and `loading`/`decoding` on <img> (the bundled photo-carousel's slides).
+ * None of them is an event handler, a URL or a style, so the allowance adds no script channel.
+ * Scripts, event handlers, forms, iframes, <style> and javascript: URLs are removed as everywhere.
+ */
+function sanitizeShortcodeOutput(html: string) {
+    const config = defaultContentConfig();
+    // sanitize-html merges the '*' list into every tag's own list.
+    config.allowedAttributes['*'] = [...config.allowedAttributes['*'], 'role', 'aria-*', 'tabindex'];
+    config.allowedAttributes.img = [...config.allowedAttributes.img, 'loading', 'decoding'];
+    return sanitizeHtml(String(html), withClassBound(config));
 }
 
 /**
@@ -292,6 +313,7 @@ module.exports = {
     boundSlug,
     MAX_SLUG_LENGTH,
     sanitizeContent,
+    sanitizeShortcodeOutput,
     escHtml,
     escAttr,
     escUrl,
