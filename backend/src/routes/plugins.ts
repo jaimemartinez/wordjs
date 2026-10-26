@@ -519,7 +519,14 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
         return refuseUncontainedZip();
     }
     // ONE deletion helper, so no failure path can grow a raw unlink again.
-    const discardZip = () => { try { fs.unlinkSync(zipPath); } catch { /* already gone */ } };
+    // The containment is proved again INSIDE the closure, on the exact value it deletes: the check above
+    // guards the straight-line code, but a closure called from a dozen later failure paths is analysed
+    // on its own, and an unproved unlink there is the alert this comment block exists to prevent.
+    const discardZip = () => {
+        const target = path.resolve(zipPath);
+        if (!target.startsWith(OS_TMP_DIR + path.sep)) return;
+        try { fs.unlinkSync(target); } catch { /* already gone */ }
+    };
     // existingData === 'discard': where the previous installation's data/ waits until the new package
     // has passed validation. Any failure puts it back (restoreDiscardedData); success deletes it.
     let discardedDataAside: string | null = null;
