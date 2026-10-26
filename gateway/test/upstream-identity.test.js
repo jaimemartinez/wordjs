@@ -174,6 +174,14 @@ describe('hop-by-hop and internal headers never reach an upstream', () => {
         assert.strictEqual(req.headers.host, 'example.com');
     });
 
+    it('a Connection value naming inherited properties or non-tokens touches nothing but real own headers', () => {
+        const req = { headers: { host: 'example.com', connection: '__proto__, constructor, toString, hasOwnProperty, bad name, x-real', 'x-real': '1', accept: 'a' }, socket: {} };
+        hostEdge.stripHopByHop(req, false);
+        assert.deepStrictEqual(Object.keys(req.headers).sort(), ['accept', 'host']);
+        assert.strictEqual(typeof Object.prototype.toString, 'function');
+        assert.strictEqual(typeof req.headers.hasOwnProperty, 'function', 'inherited members are untouched');
+    });
+
     it('an upgrade keeps exactly Connection: upgrade and Upgrade', () => {
         const req = { headers: { host: 'example.com', connection: 'Upgrade, x-secret-hop', upgrade: 'websocket', 'x-secret-hop': '1', 'proxy-authorization': 'x', 'x-wordjs-site-route': 'a' }, socket: {} };
         hostEdge.pinUpgradeHeaders(req);

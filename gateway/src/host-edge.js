@@ -150,12 +150,16 @@ function relayProofMatches(presented, expected) {
  */
 const HOP_BY_HOP = ['keep-alive', 'proxy-connection', 'proxy-authorization', 'proxy-authenticate', 'te', 'trailer'];
 const NEVER_HOP = new Set(['host', 'content-length', 'transfer-encoding']);
+// An RFC 9110 field-name token. Anything else in `Connection` names no header and is ignored.
+const HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9a-z-]{1,64}$/;
 function stripHopByHop(req, upgrade) {
     const headers = req.headers || {};
-    const named = String(headers.connection || '').split(',').map((t) => t.trim().toLowerCase()).filter(Boolean);
-    for (const name of named) {
-        if (NEVER_HOP.has(name) || (upgrade && name === 'upgrade')) continue;
-        delete headers[name];
+    const named = new Set(String(headers.connection || '').split(',').map((t) => t.trim().toLowerCase())
+        .filter((t) => HEADER_TOKEN.test(t) && !NEVER_HOP.has(t) && !(upgrade && t === 'upgrade')));
+    // The keys removed are the request's OWN header keys that the client named — never a key taken from
+    // the client's value itself, so no name it chooses can reach an inherited property.
+    for (const key of Object.keys(headers)) {
+        if (named.has(key)) delete headers[key];
     }
     for (const name of HOP_BY_HOP) delete headers[name];
     if (upgrade) headers.connection = 'upgrade';
