@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.13] - 2026-10-26
+
 ### Security
 - **Plugin boundary hardening.**
   - **Plugin DDL runs under the plugin's own database user.** On PostgreSQL the plugin's role now owns its tables
