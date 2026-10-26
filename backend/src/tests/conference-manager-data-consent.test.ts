@@ -1317,3 +1317,18 @@ test('2.36.20 a locality may have its own «Cierre de inscripciones»: it wins o
     assert.strictEqual(w.p.one(`SELECT registration_closes FROM ${PREFIX}locations WHERE id = ?`, w.norte).registration_closes, null);
     assert.deepStrictEqual(ok(await portal(w.p, 'get', '/portal/me', w.ptoken)).registration, { closes: past, own: false, general: past, open: false });
 });
+
+test('2.36.21 renaming a locality: trimmed, never empty, unique in the conference, carried to its registrations; only with «Localidades: administrar»', async () => {
+    const w = await world({ enable: false });
+    const id = ok(await w.register({ first_name: 'Rita' })).id as number;
+    ok(await w.p.call('post', '/locations', { body: { conference_id: w.cid, name: 'Sur', capacity: 50 } }));
+    assert.strictEqual((await w.p.call('put', `/locations/${w.norte}`, { body: { name: '   ' } })).status, 400);
+    const dup = await w.p.call('put', `/locations/${w.norte}`, { body: { name: 'sur' } });
+    assert.strictEqual(dup.status, 409);
+    assert.match(dup.body.error, /Ya existe una localidad con ese nombre/);
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { name: '  Norte Alto ' } }));
+    assert.strictEqual(w.p.one(`SELECT name FROM ${PREFIX}locations WHERE id = ?`, w.norte).name, 'Norte Alto');
+    assert.strictEqual(w.p.one(`SELECT location FROM ${PREFIX}inscriptions WHERE id = ?`, id).location, 'Norte Alto');
+    // The portal keeps working with the same access code.
+    assert.strictEqual(ok(await portal(w.p, 'get', '/portal/me', w.ptoken)).name, 'Norte Alto');
+});
