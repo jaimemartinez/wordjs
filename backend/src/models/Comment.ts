@@ -3,7 +3,7 @@
  * Equivalent to wp-includes/class-wp-comment.php and wp-includes/comment.php
  */
 
-const { db, dbAsync } = require('../config/database');
+const { dbAsync } = require('../config/database');
 // An id no column can hold names no row: findById answers null for it (core/query-params).
 const { isStorableId } = require('../core/query-params');
 const { clampLimit, clampOffset } = require('../core/pagination');

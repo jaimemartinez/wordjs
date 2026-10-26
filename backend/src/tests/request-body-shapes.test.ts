@@ -19,7 +19,8 @@
  * Post/Comment/Term.findById → the driver watcher fails; drop the shape check in setRole → the roles
  * cells fail; drop the status allowlist in PUT /comments → its 400 becomes a 500; drop assertActiveFlag
  * → the webhook cell fails; drop the field allowlist in PUT /menus/items → the menu cells fail; drop the
- * re-applied flags after the spread → the taxonomy cell fails.
+ * re-applied flags after the spread → the taxonomy cell fails; ask whether `status` was SENT instead of
+ * whether it differs from the stored one → the moderation-gate cell fails.
  */
 
 const { describe, it, before, after } = require('node:test');
@@ -213,6 +214,28 @@ describe('a webhook\'s active flag', () => {
         assert.strictEqual(Number((await db.get('SELECT active FROM webhooks WHERE id = ?', [id])).active), 0);
         await Webhook.update(id, { active: true });
         assert.strictEqual(Number((await db.get('SELECT active FROM webhooks WHERE id = ?', [id])).active), 1);
+    });
+});
+
+describe('PUT /comments/:id: the moderation gate is decided on the stored status', () => {
+    it('edit_comments without moderate_comments: echoing the stored status passes, changing it is 403', async () => {
+        await require('../core/roles').setRole('comment_fixer', { name: 'Comment fixer', capabilities: ['read', 'edit_comments', 'edit_posts', 'edit_others_posts', 'edit_published_posts'] });
+        await seedUser('fixer', 'comment_fixer');
+        const id = Number((await db.run(
+            `INSERT INTO comments (comment_post_id, comment_author, comment_author_email, comment_content, comment_approved, user_id, comment_type, comment_parent)
+             VALUES (?, 'Guest', 'g@example.com', 'text', '0', 0, 'comment', 0)`, [publicPost])).lastID);
+        // The editor's form sends the whole comment back, its current status included.
+        const echo = await as('fixer', 'put', `/comments/${id}`).send({ content: 'typo fixed', status: 'hold' });
+        assert.strictEqual(echo.status, 200, JSON.stringify(echo.body));
+        assert.strictEqual((await db.get('SELECT comment_content FROM comments WHERE comment_id = ?', [id])).comment_content, 'typo fixed');
+        for (const status of ['1', 'approve', 'spam', 'trash']) {
+            const res = await as('fixer', 'put', `/comments/${id}`).send({ content: 'sneaky', status });
+            assert.strictEqual(res.status, 403, `${status}: ${res.status} ${JSON.stringify(res.body)}`);
+            assert.strictEqual(res.body.code, 'rest_forbidden');
+        }
+        const row = await db.get('SELECT comment_content, comment_approved FROM comments WHERE comment_id = ?', [id]);
+        assert.strictEqual(row.comment_approved, '0', 'the status did not move');
+        assert.strictEqual(row.comment_content, 'typo fixed', 'a refused request writes nothing');
     });
 });
 
