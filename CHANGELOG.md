@@ -6,6 +6,38 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+- **Content authorization follows the record it touches.**
+  - **A trashed entry is read-only until it is restored.** Editing it in place (content, meta, language,
+    translations, a revision restore, live collaboration) answers 409 `rest_post_trashed`, and the post and page
+    editors show a «Restore» screen instead of the editor. Deleting a trashed entry for good, or restoring it, is
+    judged by the status it had before the trash. GraphQL's `restoreContent` now goes through
+    `POST /posts/:id/restore`, like the admin, and applies a requested `status` afterwards with an ordinary update.
+  - **Comment moderation is scoped to the entry.** Holding `moderate_comments` / `edit_comments` lets a role
+    moderate the comments of the entries it may edit. The moderation list and its totals, the single-comment read
+    and every moderation action follow that rule, and a comment edit by a role without `moderate_comments` no
+    longer returns the commenter's e-mail and IP.
+  - **`GET /media/:id/usage`** follows the item's read rule and counts only the entries the caller may read.
+  - **Revision history** is read by the people who work on the entry: its author while they still hold the
+    type's edit capability, or whoever edits others' entries of that type.
+  - **`/types`** shows the definition of a type whose entries are not public only to callers who may edit them.
+- **Request bodies are checked before they are used.**
+  - **Ids in a body** (a comment's post and parent, a form's page, a post's parent and menu order, media
+    folders and the media moved into them, a category's or menu item's parent) must be ids an id column can hold;
+    anything else is a 400/404 instead of a database error. The models' lookups by id answer "not found" for such
+    a value.
+  - **`POST /roles`** takes a text name and a list of at most 500 capability names; the capabilities list
+    ignores a malformed role stored earlier.
+  - **`PUT /comments/:id`** normalizes the author and email like a new comment, and answers 400 for an unknown
+    status.
+  - **`PUT /menus/items/:itemId`** writes only a menu item's own fields, each checked, and a menu location must
+    be a name.
+  - **A webhook's `active`** must be `true` or `false`, and a new taxonomy's `public`, `showInRest` and
+    `showInMenu` are always stored as booleans.
+- **Multisite.** `/health/details` and `/health/site` on the main site take a network administrator. A network
+  administrator's handoff account on a site can no longer be deleted by the site's administrators or rewritten by a
+  site import; the network manages it.
+
 ### Added
 - **conference-manager 2.36.20: «Cierre de inscripciones».**
   - **A general date.** The «Campos» section has a new «Cierre de inscripciones» date and hour. From then on the

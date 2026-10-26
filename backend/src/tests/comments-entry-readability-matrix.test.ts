@@ -181,10 +181,14 @@ describe('the comments feed', () => {
 });
 
 describe('the positive controls', () => {
-    it('a moderator sees every approved comment, pending ones included on request', async () => {
+    it('a moderator sees every comment of the entries they may moderate, pending ones included on request', async () => {
         const res = await get('editor', '/comments?per_page=100&status=any');
         const names = namesIn(res);
-        for (const name of [...VISIBLE, ...HIDDEN, 'pending_on_public']) assert.ok(names.includes(name), `the moderator lost ${name}`);
+        // Moderation follows the entry's edit gate (core/comment-scope): an editor holds no capability
+        // for the non-public `memo` type, and an internal row is nobody's discussion.
+        const outOfScope = ['nonpublic_type', 'internal'];
+        for (const name of [...VISIBLE, ...HIDDEN.filter((n) => !outOfScope.includes(n)), 'pending_on_public']) assert.ok(names.includes(name), `the moderator lost ${name}`);
+        for (const name of outOfScope) assert.ok(!names.includes(name), `the moderator was served ${name}`);
     });
 
     it('the author reads the comments of their own private and draft entries', async () => {

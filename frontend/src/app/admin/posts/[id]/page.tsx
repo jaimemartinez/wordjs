@@ -5,6 +5,7 @@ import { useRouter, useParams } from "next/navigation";
 import EditorBootFallback from "@/components/verso/editor/EditorBootFallback";
 import { postsApi, categoriesApi, tagsApi, apiGet, Category, Tag, PostTermRef } from "@/lib/api";
 import EditorLoadError from "@/components/EditorLoadError";
+import EditorTrashedNotice from "@/components/EditorTrashedNotice";
 import VersoEditor from "@/components/verso/editor/VersoEditor";
 import { rootFieldsPost } from "@/lib/verso/coreBlocks";
 import { serializeContentFallback } from "@/lib/verso/contentFallback";
@@ -589,6 +590,11 @@ export default function PostEditorPage() {
     // silently overwrite the real post on the next save/autosave.
     if (loadError) {
         return <EditorLoadError onRetry={loadPost} onBack={() => router.back()} />;
+    }
+
+    // In the trash → no editor: the server refuses edits there until the entry is restored.
+    if (lastServerStatusRef.current === "trash" && postId) {
+        return <EditorTrashedNotice postId={Number(postId)} onRestored={loadPost} onBack={() => router.push("/admin/posts")} />;
     }
 
     return (

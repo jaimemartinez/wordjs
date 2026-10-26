@@ -22,7 +22,9 @@ in its [post settings](content.md#the-post-settings).
 
 ## Moderating
 
-**Comments** («Comentarios») in the sidebar, for administrators and editors. The tabs filter the list: **All**
+**Comments** («Comentarios») in the sidebar, for administrators and editors. Each moderator sees the comments of the
+entries they may edit: an editor, for instance, does not see the comments of a custom content type their role has no
+capability for. The tabs filter the list: **All**
 («Todos»), **Pending** («Pendientes»), **Approved** («Aprobados»), **Spam** and **Trash** («Papelera»). Pending
 comments are tinted yellow.
 

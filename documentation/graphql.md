@@ -97,7 +97,7 @@ ones:
 | `updateContent(id:, input:)` | `PUT /posts/:id` |
 | `publishContent(id:)`, `unpublishContent(id:)` | `PUT /posts/:id` `{status: publish}` / `{status: draft}` |
 | `scheduleContent(id:, date:)` | `PUT /posts/:id` `{status: future, date}` |
-| `trashContent(id:)`, `restoreContent(id:, status:)` | `DELETE /posts/:id`, `PUT /posts/:id` out of the trash |
+| `trashContent(id:)`, `restoreContent(id:, status:)` | `DELETE /posts/:id`; `POST /posts/:id/restore` (back to the status it had before the trash), then `PUT /posts/:id` when `status` is given |
 | `deleteContent(id:)` | `DELETE /posts/:id?force=true` |
 | `setContentMeta(id:, key:, value:)` | `POST /posts/:id/meta` |
 | `restoreRevision(id:, postId:)`, `deleteRevision(id:)` | `POST /revisions/:id/restore`, `DELETE /revisions/:id` |

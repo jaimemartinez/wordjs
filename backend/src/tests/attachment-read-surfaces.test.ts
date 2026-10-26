@@ -348,8 +348,7 @@ describe('4. comments and the collaboration channel treat a hidden attachment as
         assert.deepStrictEqual(await answer('authorA', 'get', `/comments/${publishedCommentId}`), missingComment);
         assert.deepStrictEqual(await answer(null, 'get', `/comments/${publishedCommentId}`), await answer(null, 'get', `/comments/${MISSING_ID}`));
 
-        // A holder of moderate_comments still reads it: the moderation queue is site-wide, and the attachment
-        // rule of the comment routes is for callers without that capability.
+        // A moderator of the entry it hangs off still reads it (core/comment-scope).
         const mod = await call('admin', 'get', `/comments/${commentId}`);
         assert.strictEqual(mod.status, 200);
     });
@@ -407,9 +406,12 @@ describe('4. comments and the collaboration channel treat a hidden attachment as
         assert.strictEqual(reader.headers['x-wp-total'], '2');
         const readerReplies = await call('ledgerAuthor', 'get', `/comments?parent=${top}`);
         assert.deepStrictEqual((readerReplies.body as any[]).map((c) => c.id), [reply]);
-        // Control: a holder of moderate_comments sees the site-wide moderation queue, this thread included.
-        const moderator = await call('editor', 'get', `/comments?search=${token}`);
-        assert.strictEqual(moderator.headers['x-wp-total'], '2');
+        // A holder of moderate_comments moderates the entries they may edit (core/comment-scope): the editor
+        // holds nothing for the ledger type, so the thread is not in their queue; an administrator's it is.
+        const moderator = await call('editor', 'get', `/comments?search=${token}&status=any`);
+        assert.strictEqual(moderator.headers['x-wp-total'], '0');
+        const admin = await call('admin', 'get', `/comments?search=${token}&status=any`);
+        assert.strictEqual(admin.headers['x-wp-total'], '2');
     });
 
     test('the collaboration channel: a hidden attachment answers as a missing post', async () => {
