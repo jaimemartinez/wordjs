@@ -338,7 +338,7 @@ const isCollabPath = (req: any): boolean => /^\/collab(\/|$)/.test(apiRelativePa
 const apiLimiterStore = limiterStore('rl:api:') || new rateLimit.MemoryStore();
 const uploadLimiterStore = limiterStore('rl:upload:') || new rateLimit.MemoryStore();
 const UPLOADS_PER_HOUR = 50; // per IP
-const chargerFor = (store: any, max: number) => async (req: any, hits: number) => {
+const chargerFor = (store: any, max: number) => async (req: Request, hits: number) => {
     let total = 0;
     for (let i = 0; i < hits; i++) total = Number((await store.increment(ipKey(req))).totalHits);
     return total <= max;

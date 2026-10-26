@@ -105,10 +105,14 @@ class MultipartLimitError extends Error {
  * (charged before that file is read).
  */
 function boundedMemoryStorage(totalBytes: number) {
+    // Files seen and bytes buffered so far, per request.
+    const seen = new WeakMap<Request, { files: number; bytes: number }>();
     return {
         _handleFile(req: Request, file: any, cb: (err: any, info?: any) => void) {
-            const state = ((req as any).__graphqlUpload ||= { files: 0, bytes: 0 });
-            state.files++;
+            let state = seen.get(req);
+            if (!state) { state = { files: 0, bytes: 0 }; seen.set(req, state); }
+            const upload = state;
+            upload.files++;
             let failed = false;
             const fail = (err: Error) => {
                 if (failed) return;
@@ -116,14 +120,14 @@ function boundedMemoryStorage(totalBytes: number) {
                 file.stream.resume();
                 cb(err);
             };
-            const charged: Promise<boolean> = state.files > 1 ? chargeLimiter('upload', req, 1) : Promise.resolve(true);
+            const charged: Promise<boolean> = upload.files > 1 ? chargeLimiter('upload', req, 1) : Promise.resolve(true);
             charged.then((ok) => {
                 if (!ok) return fail(new MultipartLimitError(429, 'rest_upload_rate_limited', 'Too many file uploads, please try again later.'));
                 const chunks: Buffer[] = [];
                 file.stream.on('data', (chunk: Buffer) => {
                     if (failed) return;
-                    state.bytes += chunk.length;
-                    if (state.bytes > totalBytes) {
+                    upload.bytes += chunk.length;
+                    if (upload.bytes > totalBytes) {
                         chunks.length = 0;
                         return fail(new MultipartLimitError(413, 'rest_upload_too_large', 'The files of one request are larger than the upload limit together.'));
                     }
