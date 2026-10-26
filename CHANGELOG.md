@@ -7,6 +7,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ## [Unreleased]
 
 ### Added
+- **conference-manager 2.36.19: filters in «Localidades».**
+  - **Search:** by the locality or its coordinator (name, phone, e-mail). Accents are ignored, every word must match,
+    and a number matches the phone's digits.
+  - **Quick filters with counts:** Hospedaje por validar, Hospedaje validado, Sin encargado, Sin correo del
+    encargado, Bienvenida pendiente (never sent, or sent to an old address), and Cupo lleno. A filter appears only
+    when it would show something.
+  - **The result:** «n de total localidades» with «Quitar filtros», and a message when nothing matches.
 - **conference-manager 2.36.18: meal groups.**
   - **Companions for minors.** «Turnos» has two new settings: «Edad para contar como menor» (empty = off) and
     «Acompañantes por menor». A priority member younger than that age brings up to that many family members without
