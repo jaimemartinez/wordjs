@@ -13,7 +13,10 @@
  *    X-CSRF-Token double-submit header, which a cross-site page can neither send nor read.
  *  · POST /graphql as multipart/form-data — the GraphQL multipart request spec (`operations`, `map`, file
  *    parts) for `uploadMedia`. The file is re-streamed to POST /media, whose multer, file filter, magic-byte
- *    check and quota run as for a direct upload. Behind the upload limiter (index.ts).
+ *    check and quota run as for a direct upload. Behind the upload limiter (index.ts), which is charged once
+ *    more for every file after the first. Before a byte is buffered the caller must be signed in and hold
+ *    `upload_files` (what POST /media requires); each file is held to the site's upload limit (Settings →
+ *    Media), and the files of one request together to that same limit.
  *  · GET/POST /graphql/stream — subscriptions, as GraphQL over SSE (core/graphql/subscriptions).
  *
  * Authorization lives in the resolvers' REST sub-requests (core/graphql/dispatch) — nothing here decides
@@ -21,7 +24,6 @@
  */
 
 import type { Request, Response, NextFunction } from 'express';
-import { createHash } from 'crypto';
 
 const express = require('express');
 const multer = require('multer');
@@ -30,6 +32,9 @@ const { specifiedRules, GraphQLError, validate, getOperationAST, subscribe } = r
 const graphql = require('../core/graphql');
 const config = require('../config/app');
 const { sameOriginRequest, SESSION_COOKIE, optionalAuth } = require('../middleware/auth');
+const { clientIpBucket } = require('../core/client-ip');
+const { chargeLimiter } = require('../core/limiter-charge');
+const { exceedsResponseBytes } = require('../core/graphql/limits');
 const log = require('../core/module-logger').moduleLogger('routes/graphql');
 
 const router = express.Router();
@@ -52,6 +57,17 @@ function formatError(err: any) {
     return err;
 }
 
+function maxResponseBytes(): number {
+    return (config.api.graphql && config.api.graphql.maxResponseBytes) || 16 * 1024 * 1024;
+}
+
+/** The error that replaces a result (or a subscription event) too large to send. */
+function tooLargeError() {
+    return new GraphQLError(`The response would be larger than ${maxResponseBytes()} bytes. Ask for fewer fields or a smaller page.`, {
+        extensions: { code: 'GRAPHQL_RESPONSE_TOO_LARGE', maxBytes: maxResponseBytes() },
+    });
+}
+
 function contextFor(req: Request, res?: Response, extra: Record<string, any> = {}) {
     return {
         req,
@@ -66,24 +82,102 @@ const handler = createHandler({
     parse: graphql.parseWithLimits,
     validationRules: async () => [...specifiedRules, ...(await graphql.extraValidationRules())],
     context: (req: { raw: Request; context: { res: Response } }) => contextFor(req.raw, req.context && req.context.res),
+    // The cost limit bounds the work at validation; this bounds what is written. The result is measured
+    // before it is serialized, so an answer that does not fit is never built as a string.
+    onOperation: (_req: unknown, _args: unknown, result: any) => {
+        if (result && typeof result[Symbol.asyncIterator] !== 'function' && exceedsResponseBytes(result, maxResponseBytes())) {
+            return { errors: [tooLargeError()] };
+        }
+        return undefined;
+    },
     formatError,
 });
 
 // ─── Multipart (the GraphQL multipart request spec) ─────────────────────────────────────────────────
 
-const multipart = multer({
-    storage: multer.memoryStorage(),
-    // UTF-8 file names, as POST /media reads them (busboy's default is latin1).
-    defParamCharset: 'utf8',
-    limits: {
-        // The REST upload limit: a file POST /media would refuse is refused before it is buffered whole.
-        fileSize: config.uploads.maxFileSize,
-        // One file per mutation at most, and a document holds at most maxMutations of them.
-        files: (config.api.graphql && config.api.graphql.maxMutations) || 10,
-        fields: 2,
-        fieldSize: 1024 * 1024,
-    },
-});
+class MultipartLimitError extends Error {
+    constructor(readonly status: number, readonly code: string, message: string) { super(message); }
+}
+
+/**
+ * multer's memory storage with two more bounds, checked as the bytes arrive: the files of one request
+ * together may not pass `totalBytes`, and every file after the first is one more hit on the upload limiter
+ * (charged before that file is read).
+ */
+function boundedMemoryStorage(totalBytes: number) {
+    return {
+        _handleFile(req: Request, file: any, cb: (err: any, info?: any) => void) {
+            const state = ((req as any).__graphqlUpload ||= { files: 0, bytes: 0 });
+            state.files++;
+            let failed = false;
+            const fail = (err: Error) => {
+                if (failed) return;
+                failed = true;
+                file.stream.resume();
+                cb(err);
+            };
+            const charged: Promise<boolean> = state.files > 1 ? chargeLimiter('upload', req, 1) : Promise.resolve(true);
+            charged.then((ok) => {
+                if (!ok) return fail(new MultipartLimitError(429, 'rest_upload_rate_limited', 'Too many file uploads, please try again later.'));
+                const chunks: Buffer[] = [];
+                file.stream.on('data', (chunk: Buffer) => {
+                    if (failed) return;
+                    state.bytes += chunk.length;
+                    if (state.bytes > totalBytes) {
+                        chunks.length = 0;
+                        return fail(new MultipartLimitError(413, 'rest_upload_too_large', 'The files of one request are larger than the upload limit together.'));
+                    }
+                    chunks.push(chunk);
+                });
+                file.stream.on('error', fail);
+                file.stream.on('end', () => {
+                    if (failed) return;
+                    const buffer = Buffer.concat(chunks);
+                    cb(null, { buffer, size: buffer.length });
+                });
+            }, fail);
+        },
+        _removeFile(_req: Request, file: any, cb: (err: any) => void) {
+            delete file.buffer;
+            cb(null);
+        },
+    };
+}
+
+/** multer for one multipart GraphQL request, with the site's upload limit read now (Settings → Media). */
+function multipartFor(limitBytes: number) {
+    return multer({
+        storage: boundedMemoryStorage(limitBytes),
+        // UTF-8 file names, as POST /media reads them (busboy's default is latin1).
+        defParamCharset: 'utf8',
+        limits: {
+            // The REST upload limit: a file POST /media would refuse is refused before it is buffered whole.
+            fileSize: limitBytes,
+            // One file per mutation at most, and a document holds at most maxMutations of them.
+            files: (config.api.graphql && config.api.graphql.maxMutations) || 10,
+            fields: 2,
+            fieldSize: 1024 * 1024,
+        },
+    });
+}
+
+/**
+ * Who may send files at all, decided before multer reads a byte, by POST /media's own door: the route is
+ * dispatched as this caller with no file. Its authentication (session, API token and its scope, the MFA
+ * rules) and its `upload_files` check run exactly as for a direct upload, and a caller who passes them
+ * gets the route's "no file" answer — nothing is stored. Any other answer is the REST refusal, returned
+ * as a GraphQL error with the REST code and status.
+ */
+async function uploadRefusal(req: Request): Promise<{ status: number; code: string; message: string } | null> {
+    const probe = await graphql.restWrite(req, 'POST', '/media', { body: {} });
+    const body = probe.body || {};
+    if (probe.status === 400 && body.code === 'rest_upload_no_file') return null;
+    return {
+        status: probe.status >= 400 ? probe.status : 403,
+        code: String(body.code || 'rest_forbidden'),
+        message: String(body.message || 'You do not have permission to upload files.'),
+    };
+}
 
 const FORBIDDEN_SEGMENTS = new Set(['__proto__', 'prototype', 'constructor']);
 
@@ -213,20 +307,29 @@ router.all('/', (req: Request, res: Response, next: NextFunction) => {
     // Responses depend on the caller's identity and are never shared-cacheable.
     res.setHeader('Cache-Control', 'no-store');
     if (req.method === 'POST' && isMultipart(req)) {
-        return multipart.any()(req, res, (err: any) => {
-            if (err) {
-                const tooBig = err.code === 'LIMIT_FILE_SIZE';
-                return res.status(tooBig ? 413 : 400).json({ errors: [{ message: tooBig ? 'The file is larger than the upload limit.' : 'Malformed multipart GraphQL request.', extensions: { code: tooBig ? 'rest_upload_too_large' : 'BAD_REQUEST' } }] });
+        return void uploadRefusal(req).then(async (refusal) => {
+            if (refusal) {
+                return res.status(refusal.status).json({ errors: [{ message: refusal.message, extensions: { code: refusal.code, status: refusal.status } }] });
             }
-            const problem = applyMultipart(req);
-            if (problem) return badRequest(res, problem);
-            // graphql-http reads JSON requests only; the parsed operations ARE that request now. The sub-requests
-            // the resolvers dispatch describe their own bodies (core/graphql/dispatch), so this header is the
-            // GraphQL request's alone.
-            req.headers['content-type'] = 'application/json; charset=utf-8';
-            delete req.headers['content-length'];
-            Promise.resolve(handler(req, res)).catch(next);
-        });
+            const limitBytes: number = await require('../core/upload-limit').maxUploadBytes();
+            return multipartFor(limitBytes).any()(req, res, (err: any) => {
+                if (err) {
+                    if (err instanceof MultipartLimitError) {
+                        return res.status(err.status).json({ errors: [{ message: err.message, extensions: { code: err.code, status: err.status } }] });
+                    }
+                    const tooBig = err.code === 'LIMIT_FILE_SIZE';
+                    return res.status(tooBig ? 413 : 400).json({ errors: [{ message: tooBig ? 'The file is larger than the upload limit.' : 'Malformed multipart GraphQL request.', extensions: { code: tooBig ? 'rest_upload_too_large' : 'BAD_REQUEST' } }] });
+                }
+                const problem = applyMultipart(req);
+                if (problem) return badRequest(res, problem);
+                // graphql-http reads JSON requests only; the parsed operations ARE that request now. The sub-requests
+                // the resolvers dispatch describe their own bodies (core/graphql/dispatch), so this header is the
+                // GraphQL request's alone.
+                req.headers['content-type'] = 'application/json; charset=utf-8';
+                delete req.headers['content-length'];
+                Promise.resolve(handler(req, res)).catch(next);
+                });
+        }).catch(next);
     }
     Promise.resolve(handler(req, res)).catch(next);
 });
@@ -246,11 +349,25 @@ function clientKey(req: Request): string {
     // key made of the raw credential let one account open five streams per token it held.
     const userId = req.user && Number(req.user.id);
     if (userId) return `u:${userId}`;
-    const auth = String(req.headers.authorization || '');
-    const cookie = req.cookies && typeof req.cookies[SESSION_COOKIE] === 'string' ? req.cookies[SESSION_COOKIE] : '';
-    const credential = auth.startsWith('Bearer ') ? auth : cookie;
-    if (credential) return `c:${createHash('sha256').update(credential).digest('hex').slice(0, 32)}`;
-    return `ip:${req.ip}`;
+    // Everyone else is their address's rate-limit identity (an IPv6 client is its /64), whatever cookie or
+    // header it sends: a credential that resolves to nobody is a string the caller chose, not an identity.
+    return `ip:${clientIpBucket(req)}`;
+}
+
+/** Take a stream slot for `key`, or null when a cap is reached. The slot is held until `release` runs. */
+function reserveStream(key: string): (() => void) | null {
+    const g = config.api.graphql || {};
+    if (openStreams >= (g.maxStreams || 500) || (streamsByClient.get(key) || 0) >= (g.maxStreamsPerClient || 5)) return null;
+    openStreams++;
+    streamsByClient.set(key, (streamsByClient.get(key) || 0) + 1);
+    let released = false;
+    return () => {
+        if (released) return;
+        released = true;
+        openStreams--;
+        const left = (streamsByClient.get(key) || 1) - 1;
+        if (left > 0) streamsByClient.set(key, left); else streamsByClient.delete(key);
+    };
 }
 
 function streamParams(req: Request): { query?: string; variables?: any; operationName?: string } | string {
@@ -375,28 +492,55 @@ async function serveStream(req: Request, res: Response): Promise<any> {
         return badRequest(res, 'Only subscription operations are served on /graphql/stream; send queries and mutations to /graphql.', 'GRAPHQL_NOT_A_SUBSCRIPTION');
     }
 
-    const g = config.api.graphql || {};
-    const key = clientKey(req);
-    if (openStreams >= (g.maxStreams || 500) || (streamsByClient.get(key) || 0) >= (g.maxStreamsPerClient || 5)) {
+    // The slot is taken BEFORE subscribe() is awaited (it reads the entries the subscription names and the
+    // events it replays), and the close handlers are attached before it too: streams opened all at once
+    // cannot pass the cap together, and a caller who hangs up mid-subscribe does not keep its slot.
+    const release = reserveStream(clientKey(req));
+    if (!release) {
         return res.status(429).json({ errors: [{ message: 'Too many open subscription streams.', extensions: { code: 'graphql_stream_limit' } }] });
     }
+    let result: any = null;
+    let done = false;
+    let keepalive: NodeJS.Timeout | null = null;
+    let lifetime: NodeJS.Timeout | null = null;
+    const finish = () => {
+        if (done) return;
+        done = true;
+        if (keepalive) clearInterval(keepalive);
+        if (lifetime) clearTimeout(lifetime);
+        release();
+        try { if (result && typeof result.return === 'function') result.return(); } catch { /* already closed */ }
+    };
+    // The response's close, not the request's: a request whose JSON body was already read closes on its own.
+    res.on('close', finish);
+    const hungUp = () => !!(res.destroyed || res.writableEnded || (req.socket && req.socket.destroyed));
 
     const lastEventId = req.get('Last-Event-ID') || undefined;
     const contextValue: any = contextFor(req, undefined, { lastEventId });
-    const result = await subscribe({
-        schema,
-        document,
-        contextValue,
-        variableValues: params.variables,
-        operationName: params.operationName,
-    });
+    try {
+        result = await subscribe({
+            schema,
+            document,
+            contextValue,
+            variableValues: params.variables,
+            operationName: params.operationName,
+        });
+    } catch (err) {
+        finish();
+        throw err;
+    }
     if (!result || typeof result[Symbol.asyncIterator] !== 'function') {
         // A subscribe-time error (bad arguments, a refusal): an ordinary GraphQL response, no stream.
+        finish();
+        if (res.headersSent || res.destroyed) return undefined;
         return res.status(400).json({ ...result, errors: (result && result.errors ? result.errors : []).map(formatError) });
     }
+    // The caller hung up while the subscription was being set up: there is nobody to stream to.
+    if (done || hungUp()) {
+        finish();
+        return undefined;
+    }
 
-    openStreams++;
-    streamsByClient.set(key, (streamsByClient.get(key) || 0) + 1);
     res.status(200);
     res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
     res.setHeader('Cache-Control', 'no-store, no-transform');
@@ -405,29 +549,18 @@ async function serveStream(req: Request, res: Response): Promise<any> {
     if (typeof (res as any).flushHeaders === 'function') (res as any).flushHeaders();
     res.write(': connected\n\n');
 
-    let done = false;
-    const finish = () => {
-        if (done) return;
-        done = true;
-        clearInterval(keepalive);
-        clearTimeout(lifetime);
-        openStreams--;
-        const left = (streamsByClient.get(key) || 1) - 1;
-        if (left > 0) streamsByClient.set(key, left); else streamsByClient.delete(key);
-        try { if (typeof result.return === 'function') result.return(); } catch { /* already closed */ }
-    };
-    const keepalive = setInterval(() => { if (!done) res.write(':\n\n'); }, streamTuning.keepaliveMs);
-    const lifetime = setTimeout(() => { finish(); endStream(res); }, streamTuning.maxStreamMs);
+    keepalive = setInterval(() => { if (!done) res.write(':\n\n'); }, streamTuning.keepaliveMs);
+    lifetime = setTimeout(() => { finish(); endStream(res); }, streamTuning.maxStreamMs);
     if (keepalive.unref) keepalive.unref();
     if (lifetime.unref) lifetime.unref();
-    req.on('close', finish);
-    res.on('close', finish);
 
     try {
         for await (const value of result) {
             if (done) break;
             const cursor = typeof contextValue.lastCursor === 'string' ? contextValue.lastCursor : null;
-            const payload = { ...value, errors: value.errors ? value.errors.map(formatError) : undefined };
+            const payload = exceedsResponseBytes(value, maxResponseBytes())
+                ? { errors: [tooLargeError()] }
+                : { ...value, errors: value.errors ? value.errors.map(formatError) : undefined };
             res.write(`${cursor ? `id: ${cursor}\n` : ''}event: next\ndata: ${JSON.stringify(payload)}\n\n`);
         }
     } catch (err: any) {
