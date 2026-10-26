@@ -505,7 +505,8 @@ function Queue({ t, locale, toast, confirm }: any) {
         setBusy(it.id);
         try {
             const r = await api(`/plugin/mail-server/admin/queue/${it.id}/retry`, { method: 'POST' }) as any;
-            if (r && r.pending) toast('progress', t('read.retryPending'));
+            if (r && r.waiting) toast('progress', t('read.retryWaiting'));
+            else if (r && r.pending) toast('progress', t('read.retryPending'));
             else if (r && r.success) toast('success', t('read.delivered')); else toast('error', r?.message || t('read.stillFailing'));
             load();
         } catch (e: any) { toast('error', errorText(e, t)); }
@@ -727,7 +728,7 @@ function RelayStatus({ t, settings }: any) {
     return (
         <div className="mt-4 grid gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
             <span className="flex items-start gap-3 font-semibold"><i className="fa-solid fa-circle-exclamation mt-0.5 text-red-500"></i>{t('srv.cfg.relayUnavailable', { reason: st.error || '—' })}</span>
-            <span className="text-xs text-red-700">{t('srv.cfg.relayQueued')}</span>
+            <span className="text-xs text-red-700">{t(settings.mail_relay_mode === 'fallback' ? 'srv.cfg.relayDownFallback' : 'srv.cfg.relayQueued')}</span>
         </div>
     );
 }
@@ -828,7 +829,19 @@ function Config({ t, settings, set, setSettings, dnsInfo, onGenerateDkim, genera
                             <option value="1">{t('common.yes')}</option><option value="0">{t('common.no')} — {t('srv.cfg.noTlsRelay')}</option>
                         </select>
                     </Field>
+                    <Field label={t('srv.cfg.relayMode')} hint={settings.mail_relay_mode === 'fallback' ? t('srv.cfg.relayModeFallbackHint') : t('srv.cfg.relayModeAlwaysHint')} className="md:col-span-2">
+                        <select className={inputCls} value={settings.mail_relay_mode || 'always'} onChange={(e) => set({ mail_relay_mode: e.target.value })}>
+                            <option value="always">{t('srv.cfg.relayModeAlways')}</option>
+                            <option value="fallback">{t('srv.cfg.relayModeFallback')}</option>
+                        </select>
+                    </Field>
                 </div>
+                {settings.direct_paused_until && (
+                    <p className="mt-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                        <i className="fa-solid fa-pause mt-0.5"></i>
+                        <span>{t('srv.cfg.directPaused', { until: new Date(settings.direct_paused_until).toLocaleTimeString() })}</span>
+                    </p>
+                )}
                 <RelayStatus t={t} settings={settings} />
                 <SandboxAccess t={t} settings={settings} onChanged={reloadSettings} />
             </Card>
@@ -1059,7 +1072,7 @@ function TestDelivery({ t }: any) {
 
 const SETTINGS_KEYS_EDITABLE = [
     'mail_from_email', 'mail_from_name', 'smtp_listen_port', 'smtp_proxy_ips', 'smtp_catch_all', 'mail_helo_host',
-    'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls',
+    'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls', 'mail_relay_mode',
     'mail_security_dkim_domain', 'mail_security_dkim_selector', 'mail_security_dnsbl_enabled', 'mail_security_spf_enabled',
     'mail_security_spf_reject', 'mail_security_dmarc_enabled', 'mail_undo_send_seconds', 'mail_blocked_senders', 'mail_allowed_senders',
     'mail_quota_default_mb', 'mail_forwarding_allowed',

@@ -109,7 +109,8 @@ function Detail({ id, t, locale, toast, onClose, onChanged, goQueue }: any) {
         setBusy(true);
         try {
             const r = await api(`/plugin/mail-server/admin/queue/${m.queue.id}/retry`, { method: 'POST' }) as any;
-            if (r && r.pending) toast('progress', t('read.retryPending'));
+            if (r && r.waiting) toast('progress', t('read.retryWaiting'));
+            else if (r && r.pending) toast('progress', t('read.retryPending'));
             else if (r && r.success) toast('success', t('read.delivered')); else toast('error', r?.message || t('read.stillFailing'));
             await load();
             onChanged();
