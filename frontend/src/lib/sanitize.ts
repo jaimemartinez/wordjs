@@ -10,7 +10,7 @@
 
 import DOMPurify from 'dompurify';
 // THE hosts a video embed may come from. Declared in a plain-JS module at the frontend root because
-// `next.config.ts` has to read the SAME list to build the CSP `frame-src` — see that file, and see
+// lib/contentSecurityPolicy.ts reads the SAME list to build the CSP `frame-src` — see that file, and see
 // embed-hosts.js's header for why the list could not stay here.
 import { ALLOWED_IFRAME_HOSTS as EMBED_IFRAME_HOSTS, ALLOWED_EMBED_HOSTS as EMBED_ALL_HOSTS } from '../../embed-hosts.js';
 // The value criterion for a CSS declaration, shared with the OBJECT style channel (props.css /
@@ -52,7 +52,7 @@ function loadSanitizeHtml(): any {
 
 // Allowlist of iframe embed hosts (generated with the backend's sanitize-meta.ts). Arbitrary iframe src
 // is NOT permitted — only these hosts — and every surviving iframe is forced to carry a sandbox
-// attribute. The CSP `frame-src` (next.config.ts) is the backstop if anything slips past this list,
+// attribute. The CSP `frame-src` (lib/contentSecurityPolicy.ts) is the backstop if anything slips past this list,
 // and it is DERIVED from the very same module so the two can no longer drift apart.
 export const ALLOWED_IFRAME_HOSTS: readonly string[] = EMBED_IFRAME_HOSTS;
 const IFRAME_SANDBOX = HTML_SANITIZATION.iframeSandbox;

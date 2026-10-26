@@ -168,7 +168,7 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                     size="md"
                     label={t('ssl.auto.renewBefore')}
                     help={t('ssl.auto.renewBeforeHint')}
-                    type="number" min={1} max={89}
+                    type="number" min={1} max={60}
                     value={cfg.renewBeforeDays}
                     onChange={e => setCfg({ ...cfg, renewBeforeDays: Number(e.target.value) })}
                     className="font-mono"

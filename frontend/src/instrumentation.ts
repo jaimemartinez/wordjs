@@ -1,3 +1,5 @@
+import { checkGatewayIdentity } from './lib/gatewayIdentity';
+
 
 /**
  * The cluster mTLS options for the leg that REGISTERS this node with the gateway.
@@ -9,19 +11,12 @@
  * that port-steals the internal port, or anything on the path in a multi-machine cluster, collected
  * the cluster secret and could answer as the gateway.
  *
- * NO `checkServerIdentity` override here, deliberately — ordinary hostname verification is the
- * stronger check and it is what the rest of the cluster already does on this exact leg:
- *   - `lib/revalidateSecret.ts` (`clusterSecretRequestOptions`) dials the SAME host and the SAME
- *     internal port from THIS process, seconds later — `recoverPurgeSecret()` below fires it as soon
- *     as registration succeeds — with `rejectUnauthorized: true` and no override.
- *   - the backend's gateway leg (`core/frontend-purge.ts` → `gatewayPurgeOptions`) does the same, and
- *     says in as many words why it passes no CN allowlist: it dials the gateway by the very host its
- *     certificate is issued for.
- * Every issuer of the gateway-internal cert puts `localhost` + `127.0.0.1` in the SANs on top of the
- * advertise host (`gateway/src/cluster-ca.js` → `signPublicKey`, `backend/src/core/certManager.ts` →
- * `generateServiceCert`), so the default `gatewayHost` verifies too. A CN allowlist is only needed
- * where the dialled name cannot appear in a SAN — the backend's DIRECT purge leg to localhost — and
- * inventing a second, weaker policy for this leg would just re-open what it closes.
+ * The peer check is ordinary hostname verification AND the gateway's identity
+ * (`lib/gatewayIdentity.ts` → `checkGatewayIdentity`): every cluster certificate — a backend's or a
+ * frontend's too — carries `localhost` + `127.0.0.1` in its SANs, so the hostname alone would accept
+ * another node answering on the gateway's internal port. The sibling legs to the same port
+ * (`lib/revalidateSecret.ts`, `lib/edgeSync.ts`) and the backend's (`core/frontend-purge.ts` →
+ * `gatewayPurgeOptions`) use the same check, never a CN check INSTEAD of the hostname.
  *
  * `fsMod` is injected because this module is loaded in every Next runtime: `fs` may only be imported
  * inside the `NEXT_RUNTIME === 'nodejs'` branch (see below), and a test needs to drive it anyway.
@@ -38,6 +33,7 @@ export function gatewayClientOptions(
         key: fsMod.readFileSync(paths.key),
         cert: fsMod.readFileSync(paths.cert),
         rejectUnauthorized: true,
+        checkServerIdentity: checkGatewayIdentity,
     };
 }
 
@@ -170,7 +166,6 @@ export async function register() {
             let frontendPort: unknown;
 
             // Try to read config
-            let gatewaySecret = null;
             let gatewayHost = 'localhost';
             let gatewayInternalPort = 3100;
 
@@ -183,7 +178,6 @@ export async function register() {
 
                 if (fs.existsSync(configPath)) {
                     const config = JSON.parse(fs.readFileSync(configPath, 'utf8'));
-                    gatewaySecret = config.gatewaySecret;
                     if (config.gatewayHost) gatewayHost = config.gatewayHost;
                     if (config.gatewayInternalPort) gatewayInternalPort = config.gatewayInternalPort;
                     frontendPort = config.frontendPort;
@@ -225,7 +219,7 @@ export async function register() {
                 url: advertisedUrl(process.env.WORDJS_FRONTEND_LISTENER, hostname, port),
                 routes: ['/', '/admin', '/login', '/install', '/migration', '/portal', '/_next']
             });
-            return { clientOpts, data, gatewaySecret, gatewayHost, gatewayInternalPort };
+            return { clientOpts, data, gatewayHost, gatewayInternalPort };
         };
 
         const registerWithGateway = () => {
@@ -238,7 +232,7 @@ export async function register() {
                 setTimeout(attempt, Math.min(5000, [250, 1000, 2000][attemptN - 1] ?? 5000));
             };
             const attempt = () => {
-                const { clientOpts, data, gatewaySecret, gatewayHost, gatewayInternalPort } = readRegistrationContext();
+                const { clientOpts, data, gatewayHost, gatewayInternalPort } = readRegistrationContext();
                 // `/register` exists only on the gateway's internal mTLS listener and requires a cluster
                 // identity, so without one there is nothing to send: wait for the install (or node-join)
                 // to write the certificates, and register on the first attempt that finds them.
@@ -260,8 +254,7 @@ export async function register() {
                     ...clientOpts,
                     headers: {
                         'Content-Type': 'application/json',
-                        'Content-Length': Buffer.byteLength(data),
-                        'x-gateway-secret': gatewaySecret || 'secure-your-gateway-secret'
+                        'Content-Length': Buffer.byteLength(data)
                     }
                 }, (res: any) => {
                     if (res.statusCode === 200) {

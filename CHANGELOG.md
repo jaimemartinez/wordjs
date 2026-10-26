@@ -28,6 +28,39 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     group's turn rounded to 5 minutes, instead of an exact «Tu turno: 12:10–12:25». The exact range no longer
     reaches the phone.
 
+### Security
+- **Cluster hardening: the gateway, its control plane and the frontend's Content-Security-Policy.**
+  - **Each upstream must prove the role it serves.** The gateway now checks that an upstream's cluster certificate
+    names the role that owns the route (backend for `/api`, frontend for pages), with one connection pool per role,
+    for proxied requests, WebSockets, health checks and cache purges alike.
+  - **No loopback fallback after a node has registered.** The pre-install route to the services on the gateway's own
+    machine is used only until each role registers once; after that, a node that stops answering gets a 503.
+  - **Registered targets are checked in one canonical form.** A target URL is reduced to its origin before any check,
+    ownership compares the listener (every loopback spelling, either scheme), a loopback target is accepted only from
+    a node on the gateway machine, and a node on another machine must register an HTTPS target.
+  - **Multisite relays need proof.** The gateway takes a frontend node's `X-Forwarded-Host` only together with a
+    proof derived from the cluster's revalidate secret, which the frontend now sends with its server-side reads.
+  - **The gateway secret goes to backend nodes only**, and the unused `/api/internal/gateway-update` hook is removed
+    from the backend.
+  - **TCP forwards reach mail ports only** (25, 110, 143, 465, 587, 993, 995, 2525, 4190, or the port the backend's
+    inbound SMTP listener holds), changing them asks for the two-factor code of an account that has one, and
+    `tcpForwardBind` in `gateway-config.json` can narrow them to one address.
+  - **CSP.** The frontend writes its Content-Security-Policy per request (`src/proxy.ts`). The admin, the
+    sign-in screens, install, migration and portals get a fresh nonce with `'strict-dynamic'` and no
+    `'unsafe-inline'`. The public pages stay on ISR and keep `'unsafe-inline'`, but `script-src` no longer allows
+    every https host — only the origins active plugins declare (new optional `origins` on
+    `wordjs.assets.enqueueScript`; analytics-tag 1.1.0 declares its configured provider). Every document adds
+    `form-action 'self'` and `script-src-attr 'none'`; the backend's and the gateway's own policies no longer
+    allow inline script (their pages carry none).
+  - **Certificate and cluster switches are booleans.** `staging`, `enabled` and `sslEnabled` (Security → SSL and
+    automatic renewal), the gateway's own `sslEnabled`, and a TCP forward's `proxyProtocol` accept `true`/`false` or
+    nothing, and answer 400 otherwise; `renewBeforeDays` is a whole number from 1 to 60.
+  - **Forwarded headers.** The gateway no longer forwards hop-by-hop request headers (the fixed set and every
+    header `Connection` names; an upgrade keeps only `Connection: upgrade` and `Upgrade`), the gateway and the
+    monolith drop a client's `x-wordjs-site-route`, and the multisite rewrite never matches `/_next/` assets or
+    `/favicon.ico`. Proxied calls no longer pass `secure: false`; only the pre-install bootstrap without a cluster
+    identity skips verification.
+
 ### Fixed
 - **conference-manager 2.36.20: the cupo editor on a locality card no longer pushes «Cancelar» out of the card.**
 - **conference-manager 2.36.17: «Autorizaciones» shows its list on a computer again.** On a site built before 2.36.16,

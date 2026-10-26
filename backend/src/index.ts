@@ -135,12 +135,12 @@ app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            // The only HTML this origin serves is the Swagger UI page at `${prefix}/docs`, whose
-            // swagger-ui-dist bootstrap is an inline <script> — that, and nothing else, is what
-            // 'unsafe-inline' is for. No script here is ever built from a string, so no 'unsafe-eval':
+            // The only HTML this origin serves is the Swagger UI page at `${prefix}/docs`, and every script
+            // on it is a file (swagger-ui-express emits its init code as swagger-ui-init.js, not inline), so
+            // no inline script is allowed. No script here is ever built from a string, so no 'unsafe-eval':
             // a theme is a token contract that ships no JavaScript, and a plugin's admin bundle is
-            // executed by the FRONTEND, under the frontend's own header (frontend/next.config.ts).
-            scriptSrc: ["'self'", "'unsafe-inline'"],
+            // executed by the FRONTEND, under the frontend's own header (frontend/src/lib/contentSecurityPolicy.ts).
+            scriptSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
             fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
             imgSrc: ["'self'", "data:", "blob:", "https:", "*"], // Allow images from everywhere (CMS content)
@@ -1233,8 +1233,8 @@ app.get('/api', (req: Request, res: Response) => {
     });
 });
 
-// Internal Routes (Gateway Hooks)
-app.use('/api/internal', require('./routes/internal'));
+// (No /api/internal router: its one hook, a secret-gated gateway-port update nothing ever called, was
+// removed. The gateway's control plane is its own mTLS listener; a path here is answered 404.)
 
 // NOTE: the public site is rendered by the Next.js frontend in BOTH split and monolith mode (the
 // gateway/monolith only route /api,/uploads,/themes,/plugins,/.well-known,/healthz,/readyz,/metrics to
@@ -1409,7 +1409,9 @@ async function initializeMainSite() {
                     key: fs.readFileSync(keyPath),
                     cert: fs.readFileSync(certPath),
                     ca: fs.readFileSync(caPath),
-                    rejectUnauthorized: true
+                    rejectUnauthorized: true,
+                    // The hostname AND the gateway's identity: every cluster leaf carries the loopback SANs.
+                    checkServerIdentity: require('./core/cert-manager').checkGatewayIdentity
                 };
             };
             refreshClientOpts();

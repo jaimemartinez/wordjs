@@ -1,6 +1,7 @@
 import fs from "fs";
 import https from "https";
 import { readClusterIdentity, type ClusterNodeIdentity, type RequestFn } from "@/lib/revalidateSecret";
+import { checkGatewayIdentity } from "@/lib/gatewayIdentity";
 
 /**
  * A frontend node on ANOTHER machine keeps its own copy of the edge wiring in wordjs-config.json:
@@ -123,6 +124,7 @@ export function edgeInfoRequestOptions(id: ClusterNodeIdentity): Record<string, 
         key: fs.readFileSync(id.key),
         cert: fs.readFileSync(id.cert),
         rejectUnauthorized: true,
+        checkServerIdentity: checkGatewayIdentity,
     };
 }
 

@@ -116,7 +116,6 @@ const PASSWORD = 'Correct-Horse-9!';
  */
 const APP_MOUNTS: Array<{ base: string; module: string }> = [
     { base: B, module: '../routes' },
-    { base: '/api/internal', module: '../routes/internal' },
     { base: '/api/v1/analytics', module: '../routes/analytics' },
     // Mounted late, inside initialize(), rather than at module scope — which is exactly why it was
     // invisible to a walk of the routes index.

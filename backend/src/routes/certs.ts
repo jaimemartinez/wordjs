@@ -25,6 +25,19 @@ router.use(isAdmin);
  *     error envelope on failure, not the rest_* one.
  */
 /**
+ * A switch from the request body: absent, or a real boolean. A string such as "false" is truthy, so a
+ * truthiness check turned it ON (staging, auto-renewal, HTTPS); anything that is not a boolean is refused.
+ * Returns the value, `undefined` when absent, or null when it is not a boolean (the caller answers 400).
+ */
+function bodyFlag(v: unknown): boolean | undefined | null {
+    if (v === undefined) return undefined;
+    return typeof v === 'boolean' ? v : null;
+}
+function badFlag(res: Response, name: string) {
+    return res.status(400).json({ code: 'rest_invalid_param', error: `${name} must be true or false.` });
+}
+
+/**
  * POST /auto-provision
  * HTTP-01 Automated Flow
  */
@@ -112,7 +125,9 @@ router.use(isAdmin);
  */
 router.post('/auto-provision', async (req: Request, res: Response) => {
     try {
-        const { domain, domains, email, staging } = req.body;
+        const { domain, domains, email } = req.body;
+        const staging = bodyFlag(req.body.staging);
+        if (staging === null) return badFlag(res, 'staging');
         const names = Array.isArray(domains) && domains.length ? domains : domain;
         if (!names || !email) return res.status(400).json({ error: 'Domain and Email required' });
         // One name from the form: refuse a list or a non-name now, with what to do, not a CA error later.
@@ -121,7 +136,7 @@ router.post('/auto-provision', async (req: Request, res: Response) => {
             if (problem) return res.status(400).json({ code: problem.code, error: problem.message });
         }
 
-        const result = await certManager.provisionAutoHTTP(names, email, !!staging);
+        const result = await certManager.provisionAutoHTTP(names, email, staging === true);
         res.json(result);
     } catch (e) {
         log.error({ err: e }, '[Certs] Provision Error');
@@ -235,12 +250,14 @@ router.post('/auto-provision', async (req: Request, res: Response) => {
  */
 router.post('/dns-start', async (req: Request, res: Response) => {
     try {
-        const { domain, email, staging } = req.body;
+        const { domain, email } = req.body;
+        const staging = bodyFlag(req.body.staging);
+        if (staging === null) return badFlag(res, 'staging');
         if (!domain || !email) return res.status(400).json({ error: 'Domain and Email required' });
         const problem = certManager.singleCertificateNameProblem(domain, { wildcard: true });
         if (problem) return res.status(400).json({ code: problem.code, error: problem.message });
 
-        const data = await certManager.startDNSChallenge(domain, email, !!staging);
+        const data = await certManager.startDNSChallenge(domain, email, staging === true);
         res.json(data);
     } catch (e) {
         log.error({ err: e }, '[Certs] DNS Start Error');
@@ -392,8 +409,10 @@ router.post('/dns-check', async (req: Request, res: Response) => {
  */
 router.post('/dns-finish', async (req: Request, res: Response) => {
     try {
-        const { step1Data, email, staging } = req.body;
-        await certManager.finishDNSChallenge(step1Data, email, !!staging);
+        const { step1Data, email } = req.body;
+        const staging = bodyFlag(req.body.staging);
+        if (staging === null) return badFlag(res, 'staging');
+        await certManager.finishDNSChallenge(step1Data, email, staging === true);
         res.json({ success: true });
     } catch (e) {
         log.error({ err: e }, '[Certs] DNS Finish Error');
@@ -712,7 +731,9 @@ router.post('/check', async (req: Request, res: Response) => {
  */
 router.post('/config', async (req: Request, res: Response) => {
     try {
-        const { port, sslEnabled } = req.body;
+        const { port } = req.body;
+        const sslEnabled = bodyFlag(req.body.sslEnabled);
+        if (sslEnabled === null) return badFlag(res, 'sslEnabled');
         let result: any;
         try {
             result = await certManager.updateGatewayConfig(port, sslEnabled);
@@ -948,7 +969,21 @@ router.get('/acme-config', async (req: Request, res: Response) => {
  */
 router.post('/acme-config', async (req: Request, res: Response) => {
     try {
-        const { enabled, email, domains, staging, renewBeforeDays, challengeType, http01Port } = req.body || {};
+        const body = req.body || {};
+        const { email, domains, challengeType, http01Port } = body;
+        const enabled = bodyFlag(body.enabled);
+        if (enabled === null) return badFlag(res, 'enabled');
+        const staging = bodyFlag(body.staging);
+        if (staging === null) return badFlag(res, 'staging');
+        // Whole days, 1 to 60 (a certificate lives 90): absent keeps the default of 30.
+        let renewBeforeDays = 30;
+        if (body.renewBeforeDays !== undefined && body.renewBeforeDays !== null && body.renewBeforeDays !== '') {
+            const n = typeof body.renewBeforeDays === 'number' ? body.renewBeforeDays : NaN;
+            if (!Number.isInteger(n) || n < 1 || n > 60) {
+                return res.status(400).json({ code: 'rest_invalid_param', error: 'renewBeforeDays must be a whole number of days from 1 to 60.' });
+            }
+            renewBeforeDays = n;
+        }
 
         const domList: string[] = Array.isArray(domains)
             ? domains.map((d: any) => String(d).trim()).filter(Boolean)
@@ -966,11 +1001,11 @@ router.post('/acme-config', async (req: Request, res: Response) => {
         }
 
         const newAcme: any = {
-            enabled: !!enabled,
+            enabled: enabled === true,
             email: email ? String(email).trim() : '',
             domains: domList,
-            staging: !!staging,
-            renewBeforeDays: Number(renewBeforeDays) > 0 ? Number(renewBeforeDays) : 30,
+            staging: staging === true,
+            renewBeforeDays,
             challengeType: challengeType === 'dns-01' ? 'dns-01' : 'http-01'
         };
         // The port-80 listener for HTTP-01 challenges: a whole port number, or empty to stop it.

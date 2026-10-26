@@ -177,12 +177,14 @@ function copyDir(from, to) {
  *   upstreams      { frontend, backend } echo upstream ports for the registry ('/' and '/api')
  *   cluster        a CA from makeCa(): installs gateway-internal certs so the internal mTLS listener starts
  *   registered     false = an empty registry, as on a box the install wizard has not run on yet: the
- *                  upstreams are then reachable only through the pre-install bootstrap (their ports)
+ *                  upstreams are then reachable only through the pre-install bootstrap (their ports);
+ *                  'evicted' = both roles registered once and the health sweep then emptied their groups
+ *   registry       a gateway-registry.json body to write as is (overrides `registered`)
  *   extraConfig    more keys for gateway-config.json (trustProxy, logging, …)
  *   env            more environment variables for the gateway process
  * Returns { dir, port, internalPort, acmePort, output(), stop() }.
  */
-async function bootGateway({ secure = false, storedCert = false, ssl, acme = false, upstreams, cluster, registered = true, extraConfig = {}, env = {} }) {
+async function bootGateway({ secure = false, storedCert = false, ssl, acme = false, upstreams, cluster, registered = true, registry, extraConfig = {}, env = {} }) {
     const root = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-gw-'));
     const dir = path.join(root, 'gateway');
     copyDir(path.join(GATEWAY_ROOT, 'src'), path.join(dir, 'src'));
@@ -210,7 +212,10 @@ async function bootGateway({ secure = false, storedCert = false, ssl, acme = fal
     }
     if (ssl !== undefined) config.ssl = ssl;
     fs.writeFileSync(path.join(dir, 'gateway-config.json'), JSON.stringify(config, null, 2));
-    fs.writeFileSync(path.join(dir, 'gateway-registry.json'), JSON.stringify(registered ? {
+    fs.writeFileSync(path.join(dir, 'gateway-registry.json'), JSON.stringify(registry ? registry : registered === 'evicted' ? {
+        '/': { targets: [], metrics: {} },
+        '/api': { targets: [], metrics: {} },
+    } : registered ? {
         '/': { targets: [`http://127.0.0.1:${upstreams.frontend}`], metrics: {} },
         '/api': { targets: [`http://127.0.0.1:${upstreams.backend}`], metrics: {} },
     } : {}));

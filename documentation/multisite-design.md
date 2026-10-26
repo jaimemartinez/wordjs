@@ -535,8 +535,10 @@ Phase 1 follows the plan above with these narrowings and departures, each delibe
   for the request, which behind the gateway's mTLS hop it does not.
 - **Server-side reads reach the right site in every mode.** The frontend fetches a site's data naming
   it in `X-Forwarded-Host`: the backend believes that from a loopback hop (monolith, split), and the
-  gateway believes it from a **registered frontend node** (separate mode) when the address the node
-  connected to and the address it names are both addresses of the network. With multisite on, every
+  gateway believes it from a **registered frontend node** (separate mode) that also sends the relay
+  proof (`X-WordJS-Relay`, an HMAC of a fixed label under the cluster's revalidate secret; the peer
+  address alone is shared by everything on that machine) and when the address the node connected to and
+  the address it names are both addresses of the network. The gateway drops the proof before proxying. With multisite on, every
   backend response names the site that answered (`X-WordJS-Site-Host`), and another site's page refuses
   data from any other site, so a deployment path that loses the site fails closed (not found) instead of
   showing one site's content under another's address.
