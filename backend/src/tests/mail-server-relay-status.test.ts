@@ -433,3 +433,17 @@ test('«always» keeps the relay as the only path, and the mode only takes its t
         assert.strictEqual((await b.call('get', '/settings')).body.mail_relay_mode, 'always');
     } finally { b.plugin.deactivate(); }
 });
+
+test('a mail server that replies (even «try later») is not «no reply»: direct delivery is not paused', async () => {
+    const replyThenSilence = async (opts: any) => {
+        if (opts.host === '142.250.31.10') throw Object.assign(new Error('421 4.7.0 Try again later'), { responseCode: 421 });
+        return noReply();
+    };
+    const b = await boot({ dns: timeoutDns, direct: replyThenSilence });
+    try {
+        await b.provider({ to: 'a@gmail.com', subject: 'first', text: 'x' });
+        assert.strictEqual((await b.call('get', '/settings')).body.direct_paused_until, null, 'the first MX answered: our port 25 works');
+        await b.provider({ to: 'b@gmail.com', subject: 'second', text: 'x' });
+        assert.ok(b.directAttempts.length > 2, 'the second message is still tried directly');
+    } finally { b.plugin.deactivate(); }
+});

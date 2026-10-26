@@ -3549,7 +3549,6 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
             continue;
         }
 
-        let mxReplied = false;
         for (let i = 0; i < candidates.length; i++) {
             const pinnedIp = candidates[i];
             const delivered = (info, extra = {}) => {
@@ -3564,7 +3563,7 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                 // On a TLS *verification* failure (and only that), retry THIS host once with verification
                 // disabled, logging the downgrade explicitly. Other failures fall through to the next MX.
                 if (isTlsVerifyError(e)) {
-                    mxReplied = true;
+                    anyReply = true; // a TLS handshake: the host answered
                     console.warn(`[MailServer][TLS] STARTTLS verification FAILED for ${mx.exchange} (${e.message}) — retrying with verification DISABLED (downgraded, opportunistic encryption only).`);
                     try {
                         return delivered(await sendVia(pinnedIp, mx.exchange, false), { tlsDowngraded: true });
@@ -3579,7 +3578,7 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                 // The host refused STARTTLS with a reply: deliver to it without TLS, as opportunistic TLS
                 // does, and say so in the log.
                 if (isStartTlsRefused(e)) {
-                    mxReplied = true;
+                    anyReply = true; // an SMTP reply: the host answered
                     console.warn(`[MailServer][TLS] ${mx.exchange} refused STARTTLS (${e.responseCode}) — retrying WITHOUT TLS (opportunistic, plaintext).`);
                     try {
                         return delivered(await sendVia(pinnedIp, mx.exchange, false, true), { tlsDowngraded: true, plaintext: true });
@@ -3607,18 +3606,19 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                     console.warn(`[MailServer] ${mx.exchange} unreachable at ${pinnedIp} (${e.message}) — trying ${candidates[i + 1]}.`);
                     continue;
                 }
-                if (!isUnreachable(e)) mxReplied = true;
+                // Reaching here, the earlier addresses of this host were unreachable too (see above).
+                const replied = !isUnreachable(e);
+                if (replied) anyReply = true;
                 // Every address of this host gave no reply. When that happens on more than one host the
                 // problem is OUR outbound port 25 (a provider filter or rate limit), not theirs: each
                 // further host only adds connections to the count that keeps it blocked.
-                if (!mxReplied && ++unreachableMx >= UNREACHABLE_MX_LIMIT) {
+                if (!replied && ++unreachableMx >= UNREACHABLE_MX_LIMIT) {
                     console.warn(`[MailServer] ${unreachableMx} mail servers of ${domain} gave no reply on port 25 — stopping here; outbound port 25 looks blocked or rate-limited.`);
                     break mxLoop;
                 }
                 continue mxLoop;
             }
         }
-        if (mxReplied) anyReply = true;
     }
     const err = new Error(`Direct delivery to ${recipient} failed: ${lastErr ? lastErr.message : 'no MX reachable'}`);
     err.permanent = permanent;
