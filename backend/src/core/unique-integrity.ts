@@ -132,7 +132,8 @@ async function indexExists(q: Q, e: Engine, table: string, index: string): Promi
 async function duplicateGroups(q: Q, e: Engine, r: Rule, limit = 200): Promise<Array<{ key: string; count: number }>> {
     const key = r.key(e);
     const rows = (await q.all(
-        `SELECT ${key} AS k, COUNT(*) AS c FROM ${r.table} WHERE ${r.where} GROUP BY ${key} HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC LIMIT ${Math.max(1, Math.floor(limit))}`
+        `SELECT ${key} AS k, COUNT(*) AS c FROM ${r.table} WHERE ${r.where} GROUP BY ${key} HAVING COUNT(*) > 1 ORDER BY COUNT(*) DESC LIMIT ?`,
+        [Math.max(1, Math.floor(Number(limit) || 1))]
     )) || [];
     return rows.map((d: any) => ({ key: d.k === null || d.k === undefined ? '' : String(d.k), count: Number(d.c) || 0 }));
 }
