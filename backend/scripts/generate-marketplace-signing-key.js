@@ -27,17 +27,28 @@ function arg(name) {
 const out = path.resolve(arg('--out') || 'marketplace-signing-key.pem');
 const force = process.argv.includes('--force');
 
-if (fs.existsSync(out) && !force) {
-    console.error(`✗ ${out} already exists. Pass --force to overwrite it (the old key would stop verifying).`);
-    process.exit(1);
-}
-
 const { publicKey, privateKey } = crypto.generateKeyPairSync('ed25519');
 const privatePem = privateKey.export({ type: 'pkcs8', format: 'pem' });
 const publicB64 = publicKey.export({ type: 'spki', format: 'der' }).toString('base64');
 
-fs.writeFileSync(out, privatePem, { mode: 0o600, flag: force ? 'w' : 'wx' });
-try { fs.chmodSync(out, 0o600); } catch { /* best-effort on Windows */ }
+// The open itself decides whether the file may be written: 'wx' fails if it already exists (no separate
+// existence check that could go stale before the write), and the mode is set on the descriptor we hold.
+let fd;
+try {
+    fd = fs.openSync(out, force ? 'w' : 'wx', 0o600);
+} catch (e) {
+    if (e && e.code === 'EEXIST') {
+        console.error(`✗ ${out} already exists. Pass --force to overwrite it (the old key would stop verifying).`);
+        process.exit(1);
+    }
+    throw e;
+}
+try {
+    try { fs.fchmodSync(fd, 0o600); } catch { /* best-effort on Windows */ }
+    fs.writeSync(fd, privatePem);
+} finally {
+    fs.closeSync(fd);
+}
 
 console.log(`Private key written to: ${out}`);
 console.log('  -> Do NOT commit it. Put its full contents (including the BEGIN/END lines) in the GitHub');
