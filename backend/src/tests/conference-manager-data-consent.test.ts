@@ -1253,3 +1253,67 @@ test('2.36.12 a team member without «Localidades» sees no coordinator contact,
     assert.deepStrictEqual([loc.responsible_name, loc.responsible_phone, loc.responsible_email, loc.welcome_sent_to, loc.coordinator_log], [null, null, null, null, undefined]);
     assert.strictEqual((await p.call('put', `/locations/${norte}`, { user: recep, body: { responsible_name: 'X' } })).status, 403);
 });
+
+test('2.36.20 «Cierre de inscripciones»: after the date the portal registers nobody; the admin still can; no date = as before', async () => {
+    const w = await world({ enable: false });
+    const conf = () => w.p.one(`SELECT registration_closes FROM ${PREFIX}conferences WHERE id = ?`, w.cid);
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const local = (ms: number) => { const d = new Date(ms); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+    // No date: the portal registers, and says registration is open.
+    ok(await w.register({ first_name: 'Abierta' }));
+    assert.deepStrictEqual(ok(await portal(w.p, 'get', '/portal/me', w.ptoken)).registration, { closes: null, own: false, general: null, open: true });
+    // A bad value is refused by field; a date in the future keeps it open.
+    const bad = await w.p.call('put', `/${w.cid}`, { body: { registration_closes: 'mañana' } });
+    assert.deepStrictEqual([bad.status, bad.body.field], [400, 'registration_closes']);
+    const later = local(Date.now() + 3 * 86400000);
+    ok(await w.p.call('put', `/${w.cid}`, { body: { registration_closes: later, lodging_tz: 'UTC' } }));
+    assert.strictEqual(conf().registration_closes, later);
+    assert.strictEqual(ok(await portal(w.p, 'get', '/portal/me', w.ptoken)).registration.open, true);
+    ok(await w.register({ first_name: 'Antes' }));
+    // Past: the portal answers 403 registration_closed with the date; nothing is stored.
+    const past = local(Date.now() - 3600000);
+    ok(await w.p.call('put', `/${w.cid}`, { body: { registration_closes: past, lodging_tz: 'UTC' } }));
+    const before = w.p.q(`SELECT id FROM ${PREFIX}inscriptions WHERE conference_id = ?`, w.cid).length;
+    const refused = await w.register({ first_name: 'Tarde' });
+    assert.deepStrictEqual([refused.status, refused.body.code], [403, 'registration_closed']);
+    assert.match(refused.body.error, /Las inscripciones cerraron el \d{2}\/\d{2}\/\d{4} a las \d{2}:\d{2}/);
+    assert.strictEqual(w.p.q(`SELECT id FROM ${PREFIX}inscriptions WHERE conference_id = ?`, w.cid).length, before);
+    assert.deepStrictEqual(ok(await portal(w.p, 'get', '/portal/me', w.ptoken)).registration, { closes: past, own: false, general: past, open: false });
+    // The administration still registers.
+    ok(await w.p.call('post', '/inscriptions', { body: { conference_id: w.cid, location_id: w.norte, first_name: 'Admin', last_name: 'Inscribe', email: 'admin.inscribe@example.org', age: 30, general_verbal_consent: true } }));
+    // Removing the date reopens the portal.
+    ok(await w.p.call('put', `/${w.cid}`, { body: { registration_closes: '' } }));
+    assert.strictEqual(conf().registration_closes, null);
+    ok(await w.register({ first_name: 'Reabierta' }));
+});
+
+test('2.36.20 a locality may have its own «Cierre de inscripciones»: it wins over the general one, only for that locality', async () => {
+    const w = await world({ enable: false });
+    const pad = (n: number) => String(n).padStart(2, '0');
+    const local = (ms: number) => { const d = new Date(ms); return `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())}T${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}`; };
+    const sur = ok(await w.p.call('post', '/locations', { body: { conference_id: w.cid, name: 'Sur', capacity: 50 } })).id as number;
+    const surCode = w.p.one(`SELECT code FROM ${PREFIX}locations WHERE id = ?`, sur).code;
+    const surToken = ok(await w.p.call('post', '/portal/login', { anonymous: true, body: { location_id: sur, code: surCode } })).token as string;
+    const later = local(Date.now() + 3 * 86400000), past = local(Date.now() - 3600000);
+    // The general date is in the future; Norte gets its own, already past.
+    ok(await w.p.call('put', `/${w.cid}`, { body: { registration_closes: later, lodging_tz: 'UTC' } }));
+    const bad = await w.p.call('put', `/locations/${w.norte}`, { body: { registration_closes: 'pronto' } });
+    assert.deepStrictEqual([bad.status, bad.body.field], [400, 'registration_closes']);
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { registration_closes: past } }));
+    assert.strictEqual(w.p.one(`SELECT registration_closes FROM ${PREFIX}locations WHERE id = ?`, w.norte).registration_closes, past);
+    assert.deepStrictEqual(ok(await portal(w.p, 'get', '/portal/me', w.ptoken)).registration, { closes: past, own: true, general: later, open: false });
+    const refused = await w.register({ first_name: 'Tarde' });
+    assert.deepStrictEqual([refused.status, refused.body.code], [403, 'registration_closed']);
+    // Sur keeps the general one: still open.
+    assert.deepStrictEqual(ok(await portal(w.p, 'get', '/portal/me', surToken)).registration, { closes: later, own: false, general: later, open: true });
+    ok(await portal(w.p, 'post', '/portal/inscriptions', surToken, { general_verbal_consent: true, first_name: 'Sí', last_name: 'Sur', email: 'si.sur@example.org', age: 30 }));
+    // An own date later than a past general one reopens that locality only.
+    ok(await w.p.call('put', `/${w.cid}`, { body: { registration_closes: past, lodging_tz: 'UTC' } }));
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { registration_closes: later } }));
+    ok(await w.register({ first_name: 'Prorroga' }));
+    assert.strictEqual((await portal(w.p, 'post', '/portal/inscriptions', surToken, { general_verbal_consent: true, first_name: 'No', last_name: 'Sur', email: 'no.sur@example.org', age: 30 })).status, 403);
+    // '' = back to the general one.
+    ok(await w.p.call('put', `/locations/${w.norte}`, { body: { registration_closes: '' } }));
+    assert.strictEqual(w.p.one(`SELECT registration_closes FROM ${PREFIX}locations WHERE id = ?`, w.norte).registration_closes, null);
+    assert.deepStrictEqual(ok(await portal(w.p, 'get', '/portal/me', w.ptoken)).registration, { closes: past, own: false, general: past, open: false });
+});

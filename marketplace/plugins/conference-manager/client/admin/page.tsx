@@ -29,6 +29,7 @@ import { canAutoFocus, LAYER } from "../lib/overlay";
 import { DECO_LAYER_CLASS, HERO_HEAD_CLASS, SHELL_CSS, STAT_GRID_CLASS } from "../lib/phoneLayout";
 import { SectionPicker } from "./SectionPicker";
 import { WithdrawDeadlineSetting } from "./WithdrawDeadline";
+import { RegistrationClosesSetting, LocationRegistrationCloses } from "./RegistrationCloses";
 // Lodging explorer (2.13.0) and the pure helpers it shares with this page (status meta, display
 // names, field values, {placeholder} filling) — they live in lib/lodgingView.ts so the explorer never
 // imports this file.
@@ -3701,6 +3702,11 @@ function FieldsPage({ conferenceId }: { conferenceId: number }) {
                 <PhoneCountrySetting conference={conference} language={language} canManage={canManage}
                     onSaved={(iso) => setConference({ ...conference, phone_country: iso })} />
             )}
+            {/* 2.36.20: «Cierre de inscripciones» — from then on the coordinators register nobody; the admin still can. */}
+            {conference && (
+                <RegistrationClosesSetting conferenceId={conferenceId} value={(conference as any).registration_closes} canEdit={canManage} tx={tx} addToast={addToast}
+                    onSaved={(v) => setConference({ ...conference, registration_closes: v } as any)} />
+            )}
             {/* Premium Publisher Card */}
             <div className={`group relative overflow-hidden rounded-[40px] p-10 max-sm:p-6 border-2 transition-all duration-500 shadow-2xl ${isPublished
                 ? 'bg-emerald-50/50 border-emerald-100 shadow-emerald-100/30'
@@ -5606,17 +5612,17 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                                         <div className="flex-1 min-w-0">
                                                             <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('location.inscribed') || 'Inscritos'} / {t('location.capacity') || 'Cupo máximo'}</div>
                                                             {editing ? (
-                                                                <div className="flex items-center gap-2 mt-1">
+                                                                <div className="flex flex-wrap items-center gap-2 mt-1" data-capacity-edit={loc.id}>
                                                                     <input
                                                                         type="number" min={Math.max(1, inscribed)} step={1}
                                                                         value={capacityEdit!.value}
                                                                         onChange={e => setCapacityEdit({ id: loc.id, value: e.target.value })}
                                                                         onKeyDown={e => { if (e.key === 'Enter') handleSaveCapacity(loc); if (e.key === 'Escape') setCapacityEdit(null); }}
-                                                                        className="w-24 border-2 border-blue-200 rounded-lg px-2 py-1 text-sm font-black text-gray-900 outline-none focus:border-blue-500"
+                                                                        className="w-24 min-w-0 border-2 border-blue-200 rounded-lg px-2 py-1 text-sm font-black text-gray-900 outline-none focus:border-blue-500"
                                                                         autoFocus
                                                                     />
-                                                                    <button onClick={() => handleSaveCapacity(loc)} disabled={savingCapacity} className="text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">{t('save') || 'Guardar'}</button>
-                                                                    <button onClick={() => setCapacityEdit(null)} className="text-[10px] font-black uppercase tracking-widest px-2 py-1.5 rounded-lg text-gray-400 hover:bg-gray-100">{t('cancel') || 'Cancelar'}</button>
+                                                                    <button onClick={() => handleSaveCapacity(loc)} disabled={savingCapacity} className="shrink-0 text-[10px] font-black uppercase tracking-widest px-3 py-1.5 rounded-lg bg-blue-600 text-white hover:bg-blue-700 disabled:opacity-50">{t('save') || 'Guardar'}</button>
+                                                                    <button onClick={() => setCapacityEdit(null)} className="shrink-0 text-[10px] font-black uppercase tracking-widest px-2 py-1.5 rounded-lg text-gray-400 hover:bg-gray-100">{t('cancel') || 'Cancelar'}</button>
                                                                 </div>
                                                             ) : (
                                                                 <div className="flex items-center gap-2">
@@ -5861,6 +5867,9 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                                 <div className="text-xs font-black text-gray-700 break-all" data-coordinator-phone="">{loc.responsible_phone || tx('loc.coord.nophone', 'Sin teléfono')}</div>
                                             </div>
                                         </div>
+                                        {/* 2.36.20: its own «Cierre de inscripciones», or the general one. */}
+                                        <LocationRegistrationCloses loc={loc} general={(conference as any)?.registration_closes} canEdit={canManage} tx={tx} addToast={addToast}
+                                            onSaved={(v) => setLocations((ls) => ls.map((l) => (l.id === loc.id ? { ...l, registration_closes: v } as any : l)))} />
                                         {/* 2.36.11: «Correo del encargado» and the welcome e-mail (never the access code). */}
                                         <CoordinatorMail loc={loc} canManage={canManage} tx={tx} addToast={addToast} onEdit={() => setCoordEdit(loc)}
                                             onChanged={(next: any) => setLocations((ls) => ls.map((l) => (l.id === next.id ? { ...l, ...next } : l)))} />
