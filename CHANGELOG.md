@@ -6,6 +6,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **conference-manager 2.36.18: meal groups.**
+  - **Companions for minors.** «Turnos» has two new settings: «Edad para contar como menor» (empty = off) and
+    «Acompañantes por menor». A priority member younger than that age brings up to that many family members without
+    points into their group, instead of «Acompañantes por persona prioritaria» (which still applies to adults).
+  - **One approximate time per group.** «Mi inscripción» now says «Grupo C · hacia las 12:15», the start of the
+    group's turn rounded to 5 minutes, instead of an exact «Tu turno: 12:10–12:25». The exact range no longer
+    reaches the phone.
+
 ### Fixed
 - **conference-manager 2.36.17: «Autorizaciones» shows its list on a computer again.** On a site built before 2.36.16,
   the desktop table and the phone cards were both hidden on a wide screen, so a computer showed no list. The plugin's

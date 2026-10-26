@@ -27,6 +27,7 @@
 
 const crypto = require('crypto');
 const { geoPoint } = require('./geo');
+const { approxTime } = require('./meal-priority');
 
 const SESSION_DAYS = 30;
 const CODE_RE = /^[A-HJ-NP-Z2-9]{10}$/;
@@ -218,7 +219,8 @@ function createSelfPage(base) {
         if (mg) {
             for (const m of meals.pending) {
                 const s = mg.services.find(x => x.date === m.date && x.meal === m.meal);
-                if (s && s.start) { m.turn_start = s.start; m.turn_end = s.end; }
+                // 2.36.18: one approximate time for the group («hacia las 12:15»), never the exact range.
+                if (s && s.start) m.turn_approx = approxTime(s.start);
                 // 2.36.5: their group has been called on this meal — «Tu grupo ya puede pasar a comer».
                 if (s && s.called_at) m.called_at = s.called_at;
             }

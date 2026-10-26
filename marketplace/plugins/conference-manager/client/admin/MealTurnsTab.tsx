@@ -49,7 +49,7 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
     const [data, setData] = useState<any>(null);
     const [failed, setFailed] = useState('');
     const [busy, setBusy] = useState('');
-    const [pace, setPace] = useState<{ lines: string; per_min: string; companions_max: string }>({ lines: '', per_min: '', companions_max: '' });
+    const [pace, setPace] = useState<{ lines: string; per_min: string; companions_max: string; minor_age: string; minor_companions: string }>({ lines: '', per_min: '', companions_max: '', minor_age: '', minor_companions: '' });
     const [paceError, setPaceError] = useState('');
     const [weights, setWeights] = useState<Record<string, string>>({});
     const [weightError, setWeightError] = useState('');
@@ -62,7 +62,8 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
         try {
             const d = await conferenceApi.getMealPriority(conferenceId);
             setData(d); setFailed('');
-            setPace({ lines: String(d.config.lines), per_min: String(d.config.per_min), companions_max: String(d.config.companions_max) });
+            setPace({ lines: String(d.config.lines), per_min: String(d.config.per_min), companions_max: String(d.config.companions_max),
+                minor_age: d.config.minor_age ? String(d.config.minor_age) : '', minor_companions: String(d.config.minor_companions ?? 2) });
             const w: Record<string, string> = {};
             for (const c of d.health_options || []) w[c] = String(d.config.weights?.[c] ?? d.default_weights?.[c] ?? d.unknown_weight);
             setWeights(w);
@@ -91,8 +92,12 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
         if (!Number.isInteger(lines) || lines < 1 || lines > 50) return setPaceError(tx('turns.pace.error.lines', 'Las filas de entrega deben ser un número entero entre 1 y 50.'));
         if (!(per >= 0.1 && per <= 60)) return setPaceError(tx('turns.pace.error.rate', 'Los platos por minuto deben estar entre 0,1 y 60.'));
         if (!Number.isInteger(comp) || comp < 0 || comp > 20) return setPaceError(tx('turns.pace.error.companions', 'Los acompañantes deben ser un número entero entre 0 y 20.'));
+        // 2.36.18: the minors' own number of companions ('' age = off).
+        const minorAge = String(pace.minor_age).trim() === '' ? 0 : Number(pace.minor_age), minorComp = Number(pace.minor_companions);
+        if (!Number.isInteger(minorAge) || minorAge < 0 || minorAge > 30) return setPaceError(tx('turns.pace.error.minor.age', 'La edad para contar como menor debe ser un número entero entre 1 y 30 (vacío: no se usa).'));
+        if (!Number.isInteger(minorComp) || minorComp < 0 || minorComp > 20) return setPaceError(tx('turns.pace.error.minor.companions', 'Los acompañantes por menor deben ser un número entero entre 0 y 20.'));
         setPaceError('');
-        act('pace', () => conferenceApi.saveMealPriorityConfig(conferenceId, { lines, per_min: per, companions_max: comp }), tx('turns.saved', 'Guardado.'));
+        act('pace', () => conferenceApi.saveMealPriorityConfig(conferenceId, { lines, per_min: per, companions_max: comp, minor_age: minorAge, minor_companions: minorComp }), tx('turns.saved', 'Guardado.'));
     };
     const saveWeights = () => {
         const out: Record<string, number> = {};
@@ -226,8 +231,16 @@ export default function MealTurnsTab({ conferenceId }: { conferenceId: number })
                                 <input id="cm-turns-rate" inputMode="decimal" className={inputCls} value={pace.per_min} onChange={(e) => setPace({ ...pace, per_min: e.target.value })} /></div>
                             <div><label htmlFor="cm-turns-comp" className={labelCls}>{tx('turns.companions', 'Acompañantes por persona prioritaria')}</label>
                                 <input id="cm-turns-comp" inputMode="numeric" className={inputCls} value={pace.companions_max} onChange={(e) => setPace({ ...pace, companions_max: e.target.value })} /></div>
+                            {/* 2.36.18: a minor brings its own number of companions (a child eats with its family). */}
+                            <div><label htmlFor="cm-turns-minor-age" className={labelCls}>{tx('turns.minor.age', 'Edad para contar como menor (menos de…)')}</label>
+                                <input id="cm-turns-minor-age" inputMode="numeric" className={inputCls} value={pace.minor_age} placeholder={tx('turns.minor.age.off', 'Vacío: no se usa')}
+                                    onChange={(e) => setPace({ ...pace, minor_age: e.target.value })} data-turns-minor-age="" /></div>
+                            <div><label htmlFor="cm-turns-minor-comp" className={labelCls}>{tx('turns.minor.companions', 'Acompañantes por menor')}</label>
+                                <input id="cm-turns-minor-comp" inputMode="numeric" className={inputCls} value={pace.minor_companions} disabled={String(pace.minor_age).trim() === ''}
+                                    onChange={(e) => setPace({ ...pace, minor_companions: e.target.value })} data-turns-minor-companions="" /></div>
                         </div>
                         <p className="text-[11px] text-gray-500">{tx('turns.pace.hint', 'Se usa el 85 % de esa capacidad, para dejar margen a quien se demora. Los acompañantes de una familia van en el grupo de su familiar prioritario.')}</p>
+                        <p className="text-[11px] text-gray-500">{tx('turns.minor.hint', 'Un menor con prioridad lleva a su grupo hasta ese número de familiares sin puntos (en vez de los acompañantes por persona prioritaria). Si ya fijaste los grupos, toca «Recalcular» para aplicarlo.')}</p>
                         {paceError && <p role="alert" className="text-xs font-semibold text-rose-600">{paceError}</p>}
                         <button type="button" className={btnPrimary} disabled={!!busy} onClick={savePace}>{tx('save', 'Guardar')}</button>
                     </div>
