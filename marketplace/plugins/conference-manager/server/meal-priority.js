@@ -7,7 +7,8 @@
  *           person's conditions in «Condiciones de salud»; E from the age bands below). Sex never counts on its
  *           own: «Embarazo» / «Lactancia» are conditions the person marks. «Prefiero no responder» = H 0.
  *   GROUPS  six groups of (nearly) EQUAL size: units — a family travels together, with at most
- *           `companions_max` companions per priority member; everyone else alone — sorted by score (desc), ties
+ *           `companions_max` companions per priority member (2.36.18: `minor_companions` for a member younger than
+ *           `minor_age`, when it is set); everyone else alone — sorted by score (desc), ties
  *           by a stable hash; a unit starting at position s with z people out of N goes to group
  *           ⌊6 (s + z/2) / N⌋. Monotone (more points never means a later group) and balanced (± one family).
  *           A coordinator's manual group is kept as is; the rest are cut around it.
@@ -52,7 +53,8 @@ const DEFAULT_WEIGHTS = Object.freeze({
 const UNKNOWN_WEIGHT = 10;
 // `enabled`: off until the admin turns «Turnos de comida» on — until then no letter reaches a badge, the scanner or
 // «Mi inscripción» (the meals page still previews the groups).
-const DEFAULT_CONFIG = Object.freeze({ enabled: false, weights: {}, companions_max: 4, lines: 1, per_min: 4, occupancy: 0.85, services: {} });
+// 2.36.18: `minor_age` 0 = off; a priority member younger than it brings up to `minor_companions` companions.
+const DEFAULT_CONFIG = Object.freeze({ enabled: false, weights: {}, companions_max: 4, minor_age: 0, minor_companions: 2, lines: 1, per_min: 4, occupancy: 0.85, services: {} });
 const DEFAULT_WINDOWS = Object.freeze({ desayuno: ['06:00', '10:00'], almuerzo: ['11:30', '15:00'], cena: ['18:00', '21:30'] });
 
 // ── the pure model (unit-tested on its own) ─────────────────────────────────────────────────────────────────
@@ -99,7 +101,9 @@ function tieKey(conferenceId, person) {
  * The cut. `people`: [{ id, score, family (key or ''), tie }]. `manual`: Map id → letter (kept as is, outside the
  * cut). Returns Map id → letter. Pure.
  */
-function assignGroups(people, { manual = new Map(), companionsMax = 4 } = {}) {
+function assignGroups(people, { manual = new Map(), companionsMax = 4, minorAge = 0, minorCompanions = 0 } = {}) {
+    // 2.36.18: how many companions one priority member brings — a minor (younger than minorAge, when set) its own number.
+    const capOf = (m) => (minorAge > 0 && m.age != null && m.age < minorAge ? Math.max(0, minorCompanions) : Math.max(0, companionsMax));
     const out = new Map();
     const free = [];
     for (const p of people) {
@@ -120,7 +124,7 @@ function assignGroups(people, { manual = new Map(), companionsMax = 4 } = {}) {
         const priority = members.filter(m => m.score > 0);
         const companions = members.filter(m => !(m.score > 0)).sort(byTie);
         if (!priority.length) { units.push(members); continue; }
-        const lifted = companions.slice(0, priority.length * Math.max(0, companionsMax));
+        const lifted = companions.slice(0, priority.reduce((n, m) => n + capOf(m), 0));
         units.push([...priority, ...lifted]);
         const rest = companions.slice(lifted.length);
         if (rest.length) units.push(rest);
@@ -177,6 +181,18 @@ function serviceSlots(service, counts, order, rate) {
     return { slots, start: fmtMin(start), end: fmtMin(t), overflow: end != null && t > end + 0.001, per_minute: Math.round(k * 10) / 10 };
 }
 
+/**
+ * 2.36.18: «hacia las 12:15» — a group's start time as the participant reads it: rounded to the nearest 5 minutes,
+ * never an exact range (the owner: «una hora aproximada para cada grupo, no por persona»). 'HH:MM' → 'HH:MM', or null.
+ */
+function approxTime(hhmm) {
+    const m = /^(\d{1,2}):(\d{2})$/.exec(String(hhmm || ''));
+    if (!m) return null;
+    const t = Math.round((Number(m[1]) * 60 + Number(m[2])) / 5) * 5;
+    const h = Math.floor(t / 60) % 24, min = t % 60;
+    return `${String(h).padStart(2, '0')}:${String(min).padStart(2, '0')}`;
+}
+
 /** Body → stored config: only known keys, every number clamped. Throws httpError(400) on a bad value. */
 function cleanConfig(prev, body, httpError) {
     const cfg = { ...DEFAULT_CONFIG, ...(prev || {}) };
@@ -196,6 +212,8 @@ function cleanConfig(prev, body, httpError) {
         cfg.enabled = body.enabled;
     }
     if (body.companions_max !== undefined) cfg.companions_max = Math.round(num(body.companions_max, 0, 20, 'El máximo de acompañantes'));
+    if (body.minor_age !== undefined) cfg.minor_age = Math.round(num(body.minor_age === '' ? 0 : body.minor_age, 0, 30, 'La edad para contar como menor'));
+    if (body.minor_companions !== undefined) cfg.minor_companions = Math.round(num(body.minor_companions, 0, 20, 'Los acompañantes por menor'));
     if (body.lines !== undefined) cfg.lines = Math.round(num(body.lines, 1, 50, 'El número de filas de entrega'));
     if (body.per_min !== undefined) cfg.per_min = Math.round(num(body.per_min, 0.1, 60, 'Los platos por minuto') * 10) / 10;
     if (body.occupancy !== undefined) cfg.occupancy = Math.round(num(body.occupancy, 0.5, 1, 'La ocupación') * 100) / 100;
@@ -327,7 +345,7 @@ function createMealPriority(base) {
         const manual = new Map([...stored].filter(([id, s]) => s.manual && GROUPS.includes(s.grp)).map(([id, s]) => [id, s.grp]));
 
         let groups;
-        if (!frozen_at) groups = assignGroups(people, { manual, companionsMax: config.companions_max });
+        if (!frozen_at) groups = assignGroups(people, { manual, companionsMax: config.companions_max, minorAge: config.minor_age || 0, minorCompanions: config.minor_companions ?? 0 });
         else {
             // Frozen: stored letters; a later registrant joins the smallest group whose stored scores span theirs.
             groups = new Map();
@@ -659,5 +677,5 @@ function createMealPriority(base) {
 
 module.exports = {
     createMealPriority, assignGroups, callOrder, serviceSlots, priorityScore, agePoints, healthPoints, weightOf, parseAge,
-    cleanConfig, tieKey, GROUPS, AGE_BANDS, DEFAULT_WEIGHTS, UNKNOWN_WEIGHT, DEFAULT_CONFIG,
+    cleanConfig, tieKey, GROUPS, AGE_BANDS, DEFAULT_WEIGHTS, UNKNOWN_WEIGHT, DEFAULT_CONFIG, approxTime,
 };

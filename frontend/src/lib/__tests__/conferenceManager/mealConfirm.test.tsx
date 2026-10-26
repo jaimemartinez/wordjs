@@ -1920,3 +1920,22 @@ describe('2.36.6 «Mi inscripción»: the badge first, then meals, then transpor
         expect(subsTable).not.toMatch(/kind|what/);
     });
 });
+
+describe('2.36.18 meal groups: the minors\' companions, and one approximate time per group on «Mi inscripción»', () => {
+    const read = (rel: string) => fs.readFileSync(path.resolve(__dirname, '../../../../../marketplace/plugins/conference-manager', rel), 'utf8');
+    it('«Turnos» asks for the age and the number, checks both in place, and sends them with the kitchen pace', () => {
+        const m = read('client/admin/MealTurnsTab.tsx');
+        expect(m).toContain('data-turns-minor-age=""');
+        expect(m).toContain('data-turns-minor-companions=""');
+        expect(m).toContain("companions_max: comp, minor_age: minorAge, minor_companions: minorComp }");
+        expect(m).toContain("tx('turns.pace.error.minor.age'");
+        expect(m).toContain("disabled={String(pace.minor_age).trim() === ''}");
+        expect(m).not.toMatch(/window\.(alert|confirm|prompt)\(|\balert\(/);
+    });
+    it('«Mi inscripción» shows «Grupo C · hacia las 12:15», never «Tu turno: 12:10–12:25»', () => {
+        const page = read('client/portal/yo/MyRegistration.tsx');
+        expect(page).toContain('{view.meal_group ? `Grupo ${view.meal_group} · ` : ""}hacia las {m.turn_approx}');
+        expect(page).not.toContain('Tu turno:');
+        expect(page).not.toContain('turn_end');
+    });
+});

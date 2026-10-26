@@ -504,3 +504,37 @@ test('2.36.10 «Historial»: who registered and how, each edit (field names, nev
     // created_by / updated_by are never form fields.
     assert.strictEqual((await w.p.call('post', '/fields', { body: { conference_id: w.cid, name: 'created_by', label: 'X', type: 'text' } })).status, 400);
 });
+
+test('2.36.18 a minor brings its own number of companions; adults keep companions_max; off by default', () => {
+    // A family: a 4-year-old (30 points), a grandmother with points (adult), four relatives without points; 40 others.
+    const family = [
+        { id: 1, score: 30, age: 4, family: 'x', tie: 1 }, { id: 2, score: 20, age: 65, family: 'x', tie: 2 },
+        ...[3, 4, 5, 6].map(id => ({ id, score: 0, age: 35, family: 'x', tie: 5000 + id })),
+    ];
+    const others = Array.from({ length: 40 }, (_, i) => ({ id: i + 100, score: 0, age: 30, family: '', tie: 1000 + i }));
+    const people = [...family, ...others];
+    const lifted = (g: Map<number, string>) => [3, 4, 5, 6].filter(id => g.get(id) === g.get(1)).length;
+    // Off (minorAge 0): child and grandmother bring up to companionsMax each → all four relatives with them.
+    assert.strictEqual(lifted(M.assignGroups(people, { companionsMax: 4 })), 4);
+    // On: the child (under 12) brings 1, the grandmother (adult) 0 → one relative with them.
+    assert.strictEqual(lifted(M.assignGroups(people, { companionsMax: 0, minorAge: 12, minorCompanions: 1 })), 1);
+    // A child brings their own number even when adults bring none: two relatives.
+    assert.strictEqual(lifted(M.assignGroups(people, { companionsMax: 0, minorAge: 12, minorCompanions: 2 })), 2);
+    // The age is «younger than»: a 12-year-old with the same settings is not a minor (and here has no points).
+    const teen = [{ id: 1, score: 5, age: 12, family: 'y', tie: 1 }, { id: 2, score: 0, age: 40, family: 'y', tie: 999999 }, ...others];
+    assert.notStrictEqual(M.assignGroups(teen, { companionsMax: 0, minorAge: 12, minorCompanions: 3 }).get(2), M.assignGroups(teen, { companionsMax: 0, minorAge: 12, minorCompanions: 3 }).get(1));
+    // The settings: stored, checked, off by default.
+    const err = (s: number, m: string) => Object.assign(new Error(m), { status: s });
+    assert.deepStrictEqual([M.DEFAULT_CONFIG.minor_age, M.DEFAULT_CONFIG.minor_companions], [0, 2]);
+    const cfg = M.cleanConfig({}, { minor_age: 12, minor_companions: 3 }, err);
+    assert.deepStrictEqual([cfg.minor_age, cfg.minor_companions], [12, 3]);
+    assert.strictEqual(M.cleanConfig({}, { minor_age: '' }, err).minor_age, 0, 'empty = off');
+    for (const bad of [{ minor_age: 31 }, { minor_age: -1 }, { minor_companions: 21 }, { minor_companions: 'x' }]) assert.throws(() => M.cleanConfig({}, bad, err), JSON.stringify(bad));
+});
+
+test('2.36.18 «Mi inscripción» says the group\'s approximate time, never an exact range', () => {
+    assert.deepStrictEqual(['12:10', '12:13', '12:12', '07:58', '23:58', '', 'x'].map(M.approxTime), ['12:10', '12:15', '12:10', '08:00', '00:00', null, null]);
+    const src = require('fs').readFileSync(path.join(PLUGIN_DIR, 'server/selfpage.js'), 'utf8');
+    assert.ok(src.includes('if (s && s.start) m.turn_approx = approxTime(s.start);'));
+    assert.ok(!src.includes('m.turn_end = s.end'), 'the exact end of the group\'s slot no longer reaches the phone');
+});

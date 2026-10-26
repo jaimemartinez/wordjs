@@ -21,7 +21,7 @@ import { BusAlerts, PushSwitch, dropPushSubscription, type Bus } from "./BusAler
 import { Select } from "../../lib/Select";
 import { clearOffline, isOfflineFailure, offlineCopyOf, readOffline, registerOfflineWorker, saveOffline, type OfflineCopy } from "./offline";
 
-type Meal = { date: string; meal: string; label: string | null; start_time: string | null; end_time: string | null; delivered_at?: string | null; turn_start?: string; turn_end?: string };
+type Meal = { date: string; meal: string; label: string | null; start_time: string | null; end_time: string | null; delivered_at?: string | null; turn_approx?: string | null; called_at?: string | null };
 type View = {
     name: string; conference: string; location: string | null; code: string;
     answers: { label: string; value: string }[];
@@ -465,7 +465,7 @@ export default function MyRegistrationPage() {
                                             <p className="text-sm text-gray-800"><span className="font-black">{mealName(m)}</span> · {dayLabel(m.date)}{m.start_time ? ` · ${m.start_time}${m.end_time ? `–${m.end_time}` : ""}` : ""}</p>
                                             {m.called_at
                                                 ? <p className="text-xs font-black text-emerald-700" data-meal-called="">Tu grupo ya fue llamado</p>
-                                                : m.turn_start && <p className="text-xs font-bold text-blue-700" data-meal-turn="">Tu turno: {m.turn_start}{m.turn_end && m.turn_end !== m.turn_start ? `–${m.turn_end}` : ""}</p>}
+                                                : m.turn_approx && <p className="text-xs font-bold text-blue-700" data-meal-turn="">{view.meal_group ? `Grupo ${view.meal_group} · ` : ""}hacia las {m.turn_approx}</p>}
                                         </div>
                                     </li>
                                 ))}
