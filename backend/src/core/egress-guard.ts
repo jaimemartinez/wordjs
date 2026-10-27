@@ -217,7 +217,7 @@ export function setAllowedHosts(list: any): void {
 }
 // Canonicalize an IP LITERAL (strip [] brackets, fold IPv6 to a normalized byte form) so equivalent
 // spellings — bracketed vs bare, compressed vs expanded IPv6 — compare equal. Returns null for a hostname.
-function canonIp(s: string): string | null {
+export function canonIp(s: string): string | null {
     const a = String(s).replace(/^\[|\]$/g, '');
     const fam = realIsIP(a);
     if (fam === 4) return 'v4:' + a;
@@ -323,7 +323,7 @@ export function setPrivateDestinations(list: any): void {
     resolvedPrivate.clear();
 }
 
-function notePrivateResolution(hostname: string, addresses: any): void {
+export function notePrivateResolution(hostname: string, addresses: any): void {
     const name = String(hostname || '').toLowerCase().replace(/\.$/, '');
     const ports = privateDestinations.filter((d) => !d.ip && d.host === name).map((d) => d.port);
     if (!ports.length) return;
@@ -616,8 +616,12 @@ function guardNet(mod: any): any {
 // is the single chokepoint. SAFE ONLY in the child: the whole child process is ONE plugin (its core
 // bootstrap + IPC bridge never use net), so constraining the shared prototype here cannot affect host
 // code. NEVER call this on the host (it would wrongly constrain core). Idempotent.
+//
+// `viaTunnel` (core/egress-tunnel-client connectViaTunnel) replaces the native connect: the child has no
+// direct network at the kernel layer, so after the same pre-checks the socket is handed to the tunnel,
+// whose host side decides and opens the real connection.
 let childNetGuardInstalled = false;
-export function installChildNetGuard(): void {
+export function installChildNetGuard(viaTunnel?: (socket: any, args: any[]) => any): void {
     if (childNetGuardInstalled) return;
     childNetGuardInstalled = true;
     try {
@@ -625,7 +629,8 @@ export function installChildNetGuard(): void {
         if (proto && typeof proto.connect === 'function' && !(proto.connect as any).__wjGuarded) {
             const origConnect = proto.connect;
             const desc = Object.getOwnPropertyDescriptor(proto, 'connect');
-            const patched = function (this: any, ...args: any[]) { return secureConnect(origConnect, this, args); };
+            const target = viaTunnel ? function (this: any, ...a: any[]) { return viaTunnel(this, a); } : origConnect;
+            const patched = function (this: any, ...args: any[]) { return secureConnect(target, this, args); };
             (patched as any).__wjGuarded = true;
             // LOCK it: a network-granted plugin must NOT be able to reassign net.Socket.prototype.connect
             // (e.g. `Object.getPrototypeOf(require('net').Socket.prototype).connect = raw`) back to the raw
@@ -689,16 +694,28 @@ function normalizeHttpArgs(args: any[]): { url?: any; options: any; cb?: any } {
     return { url, options, cb };
 }
 
+/** The port a URL addresses: its own, else its scheme's default (http/ws 80, https/wss 443). */
+function urlPort(u: URL): number {
+    if (u.port) return Number(u.port);
+    return u.protocol === 'https:' || u.protocol === 'wss:' ? 443 : 80;
+}
+
 function guardHttp(mod: any): any {
+    const defaultPort = mod === realHttps ? 443 : 80;
     const wrap = (orig: any) => function (...args: any[]) {
         const { url, options, cb } = normalizeHttpArgs(args);
         let host = options.host || options.hostname;
-        if (!host && url) { try { host = new URL(String(url)).hostname; } catch { /* */ } }
-        assertHostLiteral(host);
+        let port: any = options.port;
+        if (url) { try { const u = new URL(String(url)); if (!host) host = u.hostname; if (port == null) port = urlPort(u); } catch { /* */ } }
+        if (port == null) port = defaultPort;
+        // An administrator-approved private destination (exact host AND port) is reachable over http too,
+        // exactly as over net.connect; everything else is public-only.
+        const approved = isApprovedPrivate(host, port);
+        if (!approved) assertHostLiteral(host);
         // Always inject the validating lookup (unless a unix-socket), so http(s).request({port}) with no
         // host — which defaults to 'localhost' — is validated (and blocked) instead of silently hitting
         // loopback. IP-literal hosts skip lookup and are covered by assertHostLiteral above.
-        if (!options.socketPath) options.lookup = validatingLookup;
+        if (!options.socketPath) options.lookup = approved ? approvedPrivateLookup : validatingLookup;
         const rebuilt = url !== undefined ? [url, options] : [options];
         if (cb) rebuilt.push(cb);
         return orig.apply(mod, rebuilt);
@@ -768,8 +785,17 @@ function pinDgramAddress(sock: any, list: any[]): string {
 // Validate a dgram send() against the egress policy, then delegate to `orig` with the destination pinned
 // to a validated IP literal. `orig`/`thisArg`/`args` mirror the prototype call so this is reusable from
 // both the in-place prototype patch AND the module-wrapper instance/subclass overrides.
+// UDP has no egress tunnel: once the child's TCP goes through the host (core/egress-tunnel-client), a
+// datagram is refused here too, with the same answer the kernel layer gives in production.
+let udpRefused = false;
+export function refuseUdp(): void { udpRefused = true; }
+function udpRefusal(): Error {
+    return Object.assign(new Error('[sandbox] network egress is blocked: plugins cannot send UDP datagrams (only TCP connections, through the host)'), { code: 'EACCES' });
+}
+
 function secureDgramSend(orig: any, thisArg: any, args: any[]): any {
     const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : undefined;
+    if (udpRefused) { const e = udpRefusal(); if (cb) { process.nextTick(cb, e); return; } throw e; }
     const idx = dgramSendAddressIndex(args);
     const address = typeof args[idx] === 'string' ? args[idx] : undefined;
     if (address === undefined) {
@@ -800,6 +826,7 @@ function secureDgramSend(orig: any, thisArg: any, args: any[]): any {
 // marking the socket connected-to-a-validated-destination so a later no-address send() is allowed.
 function secureDgramConnect(orig: any, thisArg: any, args: any[]): any {
     const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : undefined;
+    if (udpRefused) { const e = udpRefusal(); if (cb) { process.nextTick(cb, e); return; } throw e; }
     const address = typeof args[1] === 'string' ? args[1] : undefined; // arg after port
     if (address === undefined) {
         // connect(port) with no address defaults to 127.0.0.1 / ::1 — a loopback binding. Deny. (EG-3)
@@ -1103,16 +1130,20 @@ export function getGuardedModule(base: string): any {
 
 /** Throw synchronously if a URL's host is a blocked IP literal (used for WebSocket). */
 export function assertUrlAllowedSync(rawUrl: string): void {
-    let host: string | undefined;
-    try { host = new URL(String(rawUrl)).hostname; } catch { return; }
-    assertHostLiteral(host);
+    let u: URL;
+    try { u = new URL(String(rawUrl)); } catch { return; }
+    if (isApprovedPrivate(u.hostname, urlPort(u))) return;
+    assertHostLiteral(u.hostname);
 }
 
 /** Resolve + validate a URL's host; rejects (throws) if it resolves to a blocked IP. For fetch. */
 export async function assertUrlAllowed(rawUrl: string): Promise<void> {
     let host: string | undefined;
-    try { host = new URL(String(rawUrl)).hostname; } catch { return; } // non-URL (e.g. relative) → let fetch handle
+    let u: URL;
+    try { u = new URL(String(rawUrl)); host = u.hostname; } catch { return; } // non-URL (e.g. relative) → let fetch handle
     if (!host) return;
+    // An approved private destination is judged at its connect (the host side of the egress tunnel).
+    if (isApprovedPrivate(host, urlPort(u))) return;
     if (!isHostAllowed(host)) throw blockErr(host); // per-plugin egress policy: allowlist or deny-all (hostname path)
     if (realIsIP(host)) { assertHostLiteral(host); return; }
     await new Promise<void>((resolve, reject) => {

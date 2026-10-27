@@ -110,27 +110,35 @@ test('Plugin without permission blocked from fs.writeFileSync', () => {
     });
 });
 
-test('Plugin CAN access its own directory', () => {
+test('Plugin CAN write its own data, and only READ its own code directory', () => {
     const secureFs = createSecureFs();
     const pluginsDir = path.resolve(__dirname, '../../plugins');
     const testPluginDir = path.join(pluginsDir, 'test-own-dir-plugin');
 
-    // Create test dir if not exists
+    // Create test dir if not exists, with its data link (core/plugin-own-data)
     if (!fs.existsSync(testPluginDir)) {
         fs.mkdirSync(testPluginDir, { recursive: true });
     }
+    fs.writeFileSync(path.join(testPluginDir, 'code.txt'), 'shipped');
+    require('../core/plugin-own-data').prepareOwnDataLink(path.dirname(pluginsDir), 'test-own-dir-plugin');
 
-    // Plugin should be able to write to its own directory
+    // Plugin should be able to write its own data...
     runWithContext('test-own-dir-plugin', () => {
-        const testFile = path.join(testPluginDir, 'test.txt');
+        const testFile = path.join(testPluginDir, 'data', 'test.txt');
         secureFs.writeFileSync(testFile, 'allowed');
         const content = secureFs.readFileSync(testFile, 'utf8');
         expect(content).toBe('allowed');
         secureFs.unlinkSync(testFile);
+        // ...read its code, and never write it.
+        expect(secureFs.readFileSync(path.join(testPluginDir, 'code.txt'), 'utf8')).toBe('shipped');
+        let refused = false;
+        try { secureFs.writeFileSync(path.join(testPluginDir, 'code.txt'), 'rewritten'); } catch { refused = true; }
+        expect(refused).toBe(true);
     });
 
     // Cleanup
-    fs.rmdirSync(testPluginDir);
+    fs.rmSync(testPluginDir, { recursive: true, force: true });
+    fs.rmSync(require('../core/sandbox-paths').ownDataDir(path.dirname(pluginsDir), 'test-own-dir-plugin'), { recursive: true, force: true });
 });
 
 // ============================================

@@ -13,13 +13,13 @@ test('Linux keeps Landlock for a plugin without the network grant', () => {
     assert.strictEqual(decision.denyNetwork, true);
 });
 
-test('Linux keeps Landlock when network is granted and changes only the socket rule', () => {
+test('Linux keeps Landlock AND the socket denial when network is granted: the host egress tunnel serves it', () => {
     const decision = isolate.__linuxFloorDecision({
         platform: 'linux', zeroConf: 'active', netGranted: true,
     });
     assert.strictEqual(decision.layer, 'landlock');
-    assert.strictEqual(decision.denyNetwork, false);
-    assert.match(decision.reason, /dangerous-syscall filter stay active/i);
+    assert.strictEqual(decision.denyNetwork, true);
+    assert.match(decision.reason, /host egress tunnel/i);
 });
 
 test('Windows and macOS keep their native container for both network policies', () => {

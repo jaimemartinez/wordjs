@@ -94,26 +94,35 @@ test('#04/#08 resolveSafePluginDir throws on traversal and never returns PLUGINS
 // ─────────────────────────────────────────────────────────────────────────────
 const QSLUG = 'audit-quota-test-plugin';
 const qdir = path.join(PLUGINS_DIR, QSLUG);
+// A plugin writes its own data through `<its dir>/data`, the link out of its read-only code dir.
+const ownData = require('../core/plugin-own-data');
+const { ownDataDir } = require('../core/sandbox-paths');
+function withDataLink(dir: string, slug: string): string {
+    fs.mkdirSync(dir, { recursive: true });
+    ownData.prepareOwnDataLink(path.dirname(PLUGINS_DIR), slug);
+    return path.join(dir, 'data');
+}
 
 test('#07 a single oversized raw write is blocked (EDQUOT); a normal write still works', () => {
-    fs.mkdirSync(qdir, { recursive: true });
+    const qdata = withDataLink(qdir, QSLUG);
     try {
         // Normal small write into own dir → allowed.
         runWithContext(QSLUG, () => {
-            fs.writeFileSync(path.join(qdir, 'ok.bin'), Buffer.alloc(1024));
+            fs.writeFileSync(path.join(qdata, 'ok.bin'), Buffer.alloc(1024));
         });
-        assert.ok(fs.existsSync(path.join(qdir, 'ok.bin')), 'normal write should succeed');
+        assert.ok(fs.existsSync(path.join(qdata, 'ok.bin')), 'normal write should succeed');
 
         // A single write past the 64MB single-write cap → EDQUOT, and nothing is written.
         let err: any = null;
         runWithContext(QSLUG, () => {
-            try { fs.writeFileSync(path.join(qdir, 'huge.bin'), Buffer.alloc(65 * 1024 * 1024)); }
+            try { fs.writeFileSync(path.join(qdata, 'huge.bin'), Buffer.alloc(65 * 1024 * 1024)); }
             catch (e) { err = e; }
         });
         assert.ok(err && err.code === 'EDQUOT', `expected EDQUOT, got ${err && err.code}`);
-        assert.ok(!fs.existsSync(path.join(qdir, 'huge.bin')), 'the oversized file must not exist');
+        assert.ok(!fs.existsSync(path.join(qdata, 'huge.bin')), 'the oversized file must not exist');
     } finally {
         fs.rmSync(qdir, { recursive: true, force: true });
+        fs.rmSync(ownDataDir(path.dirname(PLUGINS_DIR), QSLUG), { recursive: true, force: true });
     }
 });
 
@@ -121,24 +130,25 @@ const QSLUG2 = 'audit-quota-promises-plugin';
 const qdir2 = path.join(PLUGINS_DIR, QSLUG2);
 
 test('#07 fs.promises writes are ALSO metered (blocker: the promises path bypassed the quota)', async () => {
-    fs.mkdirSync(qdir2, { recursive: true });
+    const qdata2 = withDataLink(qdir2, QSLUG2);
     try {
         let err: any = null;
         await runWithContext(QSLUG2, async () => {
             const fsp = require('fs').promises; // secure proxy under plugin context → metered
-            try { await fsp.writeFile(path.join(qdir2, 'huge.bin'), Buffer.alloc(65 * 1024 * 1024)); }
+            try { await fsp.writeFile(path.join(qdata2, 'huge.bin'), Buffer.alloc(65 * 1024 * 1024)); }
             catch (e) { err = e; }
         });
         assert.ok(err && err.code === 'EDQUOT', `expected EDQUOT via fs.promises, got ${err && (err.code || err.message)}`);
-        assert.ok(!fs.existsSync(path.join(qdir2, 'huge.bin')), 'the oversized promises write must not exist');
+        assert.ok(!fs.existsSync(path.join(qdata2, 'huge.bin')), 'the oversized promises write must not exist');
 
         // A normal small fs.promises write still works (no regression).
         await runWithContext(QSLUG2, async () => {
-            await require('fs').promises.writeFile(path.join(qdir2, 'ok.bin'), Buffer.alloc(1024));
+            await require('fs').promises.writeFile(path.join(qdata2, 'ok.bin'), Buffer.alloc(1024));
         });
-        assert.ok(fs.existsSync(path.join(qdir2, 'ok.bin')));
+        assert.ok(fs.existsSync(path.join(qdata2, 'ok.bin')));
     } finally {
         fs.rmSync(qdir2, { recursive: true, force: true });
+        fs.rmSync(ownDataDir(path.dirname(PLUGINS_DIR), QSLUG2), { recursive: true, force: true });
     }
 });
 

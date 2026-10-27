@@ -53,8 +53,8 @@ function pureContractTest() {
     const degraded = isolate.__linuxFloorDecision({ platform: 'linux', zeroConf: 'degraded', netGranted: false });
     assert(denied.layer === 'landlock' && denied.denyNetwork === true,
         'Linux without the network grant must keep Landlock and deny IP sockets');
-    assert(granted.layer === 'landlock' && granted.denyNetwork === false,
-        'Linux with the network grant must keep Landlock and change only the socket rule');
+    assert(granted.layer === 'landlock' && granted.denyNetwork === true,
+        'Linux with the network grant must keep Landlock AND the IP-socket denial (its network is the host egress tunnel)');
     assert(degraded.layer === 'none', 'a failed native probe must never be reported as active');
 
     const shim = fs.readFileSync(path.join(repoRoot, 'backend', 'scripts', 'landlock-seccomp-shim.pl'), 'utf8');
@@ -184,7 +184,7 @@ async function certifyCurrentPlatform() {
     assert(integratedState === 'active', `integrated sandbox state is '${integratedState}'`);
     assert(integrated.mechanism === platformSpec.mechanism,
         `integrated mechanism is '${integrated.mechanism}', expected '${platformSpec.mechanism}'`);
-    assert(integrated.network?.state === 'active', 'both network-policy launch shapes were not certified');
+    assert(integrated.network?.state === 'active', 'the confinement and the host egress tunnel were not certified');
     assert(String(integrated.appliesTo).includes('every isolated plugin'),
         'the report does not guarantee that the native sandbox wraps every isolated plugin');
 
@@ -198,7 +198,7 @@ async function certifyCurrentPlatform() {
         certifiedAt: new Date().toISOString(),
     };
     if (reportPath) fs.writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`);
-    console.log(`OK: ${platformSpec.mechanism} certified for filesystem/process confinement and both network policies`);
+    console.log(`OK: ${platformSpec.mechanism} certified for filesystem/process confinement, no direct network, and the host egress tunnel`);
     console.log(JSON.stringify(report, null, 2));
 }
 

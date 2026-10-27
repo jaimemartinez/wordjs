@@ -156,7 +156,7 @@ function guardFsCall(pluginSlug: string, prop: string, args: any[]): void {
             if (!isStagedUploadRead(pluginSlug, targetPath, isWrite) && !fsCapabilityAllowed(pluginSlug, isWrite ? 'write' : 'read')) {
                 throw createSecurityError(pluginSlug, `fs.${String(prop)}`, targetPath);
             }
-        } else if (!isModuleLoaderRead(targetPath, isWrite) && fsCapabilityRevoked(pluginSlug, isWrite ? 'write' : 'read')) {
+        } else if (!isModuleLoaderRead(targetPath, isWrite, ownCodeDir(pluginSlug)) && fsCapabilityRevoked(pluginSlug, isWrite ? 'write' : 'read')) {
             // The carve-out is io-guard's, applied verbatim: the module loader's reads of the plugin's own
             // code are not the plugin exercising a capability, and refusing them stops the isolate booting
             // rather than stopping it reading. Both copies of this gate must exempt exactly the same set,
@@ -209,6 +209,11 @@ function realResolve(targetPath: string) {
     }
 }
 
+/** The plugin's (or theme's) own code directory, for the module-resolution exemption. */
+function ownCodeDir(pluginSlug: string): string {
+    return String(pluginSlug).startsWith('theme:') ? path.join(THEMES_DIR, String(pluginSlug).slice('theme:'.length)) : path.join(PLUGINS_DIR, String(pluginSlug));
+}
+
 function isPathWithinPluginDir(pluginSlug: any, targetPath: any) {
     if (!pluginSlug) return true;
 
@@ -228,6 +233,13 @@ function isPathWithinPluginDir(pluginSlug: any, targetPath: any) {
         if (resolvedPath === themeDir || resolvedPath.startsWith(themeDir + path.sep)) {
             return true;
         }
+    }
+
+    // ...and its own data directory, which is where `<its dir>/data` leads (core/plugin-own-data): the
+    // realpath of every path under that link lands here.
+    const ownData = realResolve(require('./sandbox-paths').ownDataDir(path.dirname(PLUGINS_DIR), String(pluginSlug)));
+    if (resolvedPath === ownData || resolvedPath.startsWith(ownData + path.sep)) {
+        return true;
     }
 
     return false;

@@ -23,6 +23,11 @@ export type HealthCheck = {
     message: string;
     fix?: { href: string; label: string; labelKey?: string };
     /**
+     * A one-click fix the panel runs for the administrator: POST `endpoint` (under /api/v1) with `body`,
+     * then the report is run again. For the fixes that need nothing but a decision.
+     */
+    action?: { endpoint: string; label: string; labelKey?: string; body?: Record<string, string> };
+    /**
      * Catalogue keys for the panel's own languages: `titleKey` names the title, `messageKey` the exact
      * message variant, `vars` its dynamic parts ({name} placeholders). `title`/`message`/`fix.label` stay the
      * English text for every other consumer of GET /health/site.
@@ -260,6 +265,7 @@ async function checkBackground(): Promise<HealthCheck[]> {
     out.push(degraded
         ? check('background.plugins', 'background', 'warn', 'degraded', 'Plugin isolation', 'Plugins run, but without the operating system’s extra confinement on this host. Your host may need a newer kernel or the platform’s sandbox enabled.')
         : check('background.plugins', 'background', 'ok', 'ok', 'Plugin isolation', 'Plugins run isolated from the site and from each other.'));
+    out.push(...pluginSandboxChecks());
     const outbox = await SystemHealth.checkContentOutbox();
     const dead = Number(outbox && outbox.dead) || 0;
     out.push(dead > 0
@@ -274,6 +280,37 @@ async function checkBackground(): Promise<HealthCheck[]> {
         ? check('background.restart', 'background', 'warn', 'manual', 'Restarting by itself', 'Nothing here restarts WordJS: after a database move, a restore or a network switch you will have to restart it by hand. Start it with npm start, the monolith, Docker or systemd.')
         : check('background.restart', 'background', 'ok', 'ok', 'Restarting by itself', `WordJS restarts itself when a change needs it (${restart}).`, { mode: restart }));
     return out;
+}
+
+/**
+ * What the plugin sandbox needs an administrator to know or decide:
+ *   · Windows: secret paths every AppContainer could read because of the install folder's ACL, when WordJS
+ *     could not change it itself;
+ *   · every platform: plugins refused because their files changed since WordJS installed them.
+ * Network needs nothing here: no plugin has a network of its own, and the host egress tunnel applies each
+ * plugin's policy on every platform.
+ */
+function pluginSandboxChecks(): HealthCheck[] {
+    const out: HealthCheck[] = [];
+    if (process.platform === 'win32') {
+        const win = require('./sandbox-windows');
+        const exposure = win.getSecretExposure();
+        if (exposure && exposure.checked && exposure.exposed.length) {
+            out.push(check('security.pluginSecrets', 'security', 'fail', 'exposed', 'Plugin access to secrets',
+                `Every plugin sandbox on this server can read ${exposure.exposed.length} folder(s) or file(s) that hold secrets, because of how the install folder's permissions are set, and WordJS could not change them. Plugins are not started until this is fixed: run, as an administrator, icacls <path> /inheritance:d and then icacls <path> /remove:g *S-1-15-2-1 *S-1-15-2-2 for each one, or move WordJS out of C:\\Program Files.`,
+                { count: exposure.exposed.length }));
+        }
+    }
+    for (const slug of require('./plugin-integrity').listIntegrityMismatches()) {
+        out.push(withAction(check('background.pluginFiles', 'background', 'warn', 'changed', 'Plugin files',
+            `The files of the plugin ${slug} changed since WordJS installed it, so it was not started. Update or reinstall it from Plugins; if you changed them yourself, accept them.`, { slug }),
+        { endpoint: '/health/sandbox/plugin-files/accept', label: 'Accept these files', labelKey: 'siteHealth.action.acceptPluginFiles', body: { slug } }));
+    }
+    return out;
+}
+
+function withAction(c: HealthCheck, action: NonNullable<HealthCheck['action']>): HealthCheck {
+    return { ...c, action: { ...action } };
 }
 
 /**
@@ -375,4 +412,4 @@ async function runSiteHealth(req: any): Promise<{ checks: HealthCheck[]; summary
     return { checks, summary, at: new Date().toISOString(), host: os.hostname() };
 }
 
-module.exports = { runSiteHealth, checkProxy, checkDisk, checkEdge, checkUniqueRules, checkAuditLog };
+module.exports = { runSiteHealth, checkProxy, checkDisk, checkEdge, checkUniqueRules, checkAuditLog, pluginSandboxChecks };

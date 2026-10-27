@@ -77,7 +77,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.3.6',
+    version: '3.3.7',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -612,6 +612,11 @@ function relayErrorText(e, host, port) {
     }
     if (/network' is blocked|grant Network access|\[sandbox\] .*(net|tls).*blocked/i.test(msg)) {
         return 'this plugin does not hold the Network permission (Plugins → Mail Server → Permissions)';
+    }
+    // The kernel sandbox lets this plugin connect only to the SMTP ports its manifest declares (and to the
+    // port of an approved private destination): another relay port is refused before any packet leaves.
+    if (e && (e.code === 'EACCES' || e.code === 'EPERM') && ![25, 465, 587, 2525].includes(Number(port))) {
+        return `the WordJS plugin sandbox only lets this plugin connect to the SMTP ports 25, 465, 587 and 2525, and the relay is on port ${port}: use one of those ports for the relay (or, for a relay on your own network, approve ${host}:${port} under "Sandbox access" in the Configuration tab)`;
     }
     return msg;
 }

@@ -6,6 +6,45 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+- **Plugin sandbox: tighter confinement of isolated plugins on Linux, macOS and Windows.**
+  - **Read-only code.** A plugin's (and a theme's) code folder is read-only at every sandbox layer. Its `data/` folder moves to
+    `data/plugin-own/` on its first start (a rename, nothing is copied or lost) and stays reachable at the old path
+    through a link (a junction on Windows), so plugins that keep state in `data/` work unchanged. The code and the
+    manifest are fingerprinted and checked before every start; an administrator who changed them on purpose accepts
+    them in **Site Health**.
+  - **Network goes through WordJS, on every platform.** No plugin has a network of its own at the kernel layer any
+    more (Landlock and seccomp on Linux, Seatbelt on macOS, an AppContainer without network capabilities on
+    Windows), with the network permission or without it. A plugin that holds it reaches the network through WordJS,
+    which decides the exact destination, resolves the name once and opens the connection: the plugin's allowed
+    hosts, public addresses only unless an administrator approved a private `host:port`, and the TCP ports it may
+    use. DNS and the web are always allowed; a plugin names more on its `network` permission
+    (`"ports": [25, 587]`), and an approved private destination adds its own. Connections, name lookups, idle time
+    and bytes are bounded per plugin and for the whole server. Plugin code does not change: `net`, `tls`, `http`,
+    `https`, `fetch`, WebSocket, STARTTLS and `dns.lookup` work as before. UDP is not available to plugins. Nothing
+    is configured on any platform.
+  - **Linux.** The seccomp filter refuses more calls (on other processes' limits, priority and scheduling; mount
+    and quota interfaces; file mode, owner and extended-attribute changes by path; signal-owner commands),
+    and below Landlock ABI 3 it also refuses truncating files the plugin may only read. The launcher closes every
+    inherited descriptor but stdio and the IPC channel and starts the plugin in `/`. The probe certifies each of these.
+  - **macOS.** A plugin may execute only the Node binary, and file metadata is reachable only along the paths to
+    what the profile grants.
+  - **Windows.** The probe checks the secret folders of the install for the all-application-packages groups, removes
+    their access there (or does not certify the sandbox) and certifies with a canary under the install folder. Each
+    plugin's profile follows the real install path and a new generation per install; uninstalling revokes every zone
+    it may hold and keeps track of a revoke that did not land; a start revokes the zones its policy no longer
+    includes; every ACL change is read back, and a timed-out one is stopped with its whole process tree. Writable
+    folders carry OWNER RIGHTS.
+  - **IPC.** The per-start secret that authenticates the worker's messages travels on the IPC channel, never on the
+    command line.
+  - **Production entry.** `npm start` (`backend/server.js`) and `node monolith.js prod` refuse to start without
+    `backend/dist/` instead of running the TypeScript sources; the source-mode Windows exemption needs a development
+    or test run.
+  - `npm run sandbox -- status | retire-all` shows what Site Health reports for the sandbox, and removes this
+    install's Windows sandbox profiles before an install or a worktree is deleted.
+- **mail-server 3.3.7:** declares the SMTP ports it uses (25, 465, 587 and 2525), and a relay on another port is
+  explained in the console.
+
 ## [2.11.16] - 2026-10-27
 
 ### Fixed

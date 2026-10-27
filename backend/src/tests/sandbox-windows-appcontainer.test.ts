@@ -147,7 +147,9 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
         assert.ok(s.includes('0x00020009'), 'must set PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES');
         assert.ok(s.includes('caps.CapCount = 0'), 'network-denied shape must begin with zero capabilities');
         assert.ok(s.includes('S-1-15-3-1'), 'network-granted shape must use only the well-known internetClient SID');
-        assert.ok(s.includes('caps.CapCount = 1'), 'internetClient must be the sole optional capability');
+        assert.ok(s.includes('caps.CapCount = (uint)capN'), 'the capability count is internetClient alone, or with privateNetworkClientServer');
+        assert.ok(s.includes('bool privNet = Env("WJS_AC_PRIVATE_NETWORK") == "1"; int capN = privNet ? 2 : 1;'), 'privateNetworkClientServer only on the explicit private-destination flag');
+        assert.ok(s.includes('S-1-15-3-3'), 'and it is the well-known privateNetworkClientServer SID');
         assert.ok(s.includes('ATTR_HANDLE_LIST'), 'only the four deliberate stdio/IPC handles may be inherited');
         assert.ok(s.includes('WJS_AC_ACTIVE_PROCS'), 'the Job Object process ceiling must be wired into every launch');
         assert.ok(s.includes('0x00002000'), 'must set JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE so the contained child dies with the relay');
@@ -261,10 +263,11 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
         }
     });
 
-    test('the probe covers both network policies while retaining read and child-process denials', () => {
+    test('the probe certifies the one network shape (no capability) and the egress tunnel, with read and child-process denials', () => {
         const source = fs.readFileSync(path.resolve(__dirname, '../core/sandbox-windows.ts'), 'utf8');
         assert.match(source, /allowNetwork:\s*false/);
-        assert.match(source, /allowNetwork:\s*true/);
+        assert.doesNotMatch(source, /contained\(\{ allowNetwork: true \}\)/, 'no network-granted shape: no plugin has a network capability');
+        assert.match(source, /probeTunnelOk\(verdict\.tunnel\)/);
         assert.match(source, /verifyProcessLimit:\s*true/);
         assert.match(sw.__probeChildSource, /WJS_PROCESS_DENIAL/);
         assert.doesNotMatch(sw.__probeChildSource, /child_process/, 'the relay proves the Job limit before resuming the child; uv_spawn can block after the kernel refusal');
@@ -277,7 +280,9 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
         const appRoot = path.resolve(path.sep, 'app');
         const core = path.join(appRoot, 'dist', 'core');
         const zones = sw.appContainerZones(appRoot, 'my-plugin', core);
-        assert.ok(zones.write.includes(path.join(appRoot, 'plugins', 'my-plugin')));
+        assert.ok(!zones.write.includes(path.join(appRoot, 'plugins', 'my-plugin')), 'its code folder is read-only');
+        assert.ok(zones.readExec.includes(path.join(appRoot, 'plugins', 'my-plugin')));
+        assert.ok(zones.write.includes(require('../core/sandbox-paths').ownDataDir(appRoot, 'my-plugin')), 'its own data directory is writable');
         for (const d of ['data', 'logs', 'os-tmp']) {
             const prefix = path.join(appRoot, d, 'plugins');
             const privateDir = zones.write.find((z: string) => z.startsWith(`${prefix}${path.sep}`));
@@ -294,7 +299,8 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
         const sibling = sw.appContainerZones(appRoot, 'other-plugin', core);
         assert.ok(!zones.write.some((z: string) => sibling.write.includes(z)), 'plugin-private storage must not overlap');
         const t = sw.appContainerZones(appRoot, 'theme:aurora', core);
-        assert.ok(t.write.includes(path.join(appRoot, 'themes', 'aurora')), 'a theme isolate owns themes/<name>, not plugins/theme:<name>');
+        assert.ok(t.readExec.includes(path.join(appRoot, 'themes', 'aurora')), 'a theme isolate owns themes/<name>, not plugins/theme:<name>');
+        assert.ok(!t.write.includes(path.join(appRoot, 'themes', 'aurora')), 'and cannot write it');
     });
 
     test('non-Windows callers get a clean refusal, never a half-applied grant', async () => {
@@ -495,7 +501,8 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
         const verdict: any = await new Promise((resolve) => {
             let got: any = null, done = false;
             const fin = () => { if (done) return; done = true; try { launched.child.kill(); } catch { /* */ } resolve(got); };
-            launched.child.on('message', (m: any) => { got = m; fin(); });
+            require('../core/egress-tunnel').attachProbeTunnel(launched.child);
+            launched.child.on('message', (m: any) => { if (m && m.kind === 'net') return; got = m; fin(); });
             launched.child.on('exit', () => setTimeout(fin, 100));
             const t = setTimeout(fin, 40000); if ((t as any).unref) (t as any).unref();
         });
@@ -543,7 +550,8 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
         const verdict: any = await new Promise((resolve) => {
             let got: any = null, done = false;
             const finish = () => { if (done) return; done = true; try { launched.child.kill(); } catch { /* */ } resolve(got); };
-            launched.child.on('message', (m: any) => { got = m; finish(); });
+            require('../core/egress-tunnel').attachProbeTunnel(launched.child);
+            launched.child.on('message', (m: any) => { if (m && m.kind === 'net') return; got = m; finish(); });
             launched.child.on('exit', () => setTimeout(finish, 100));
             const t = setTimeout(finish, 40000); if ((t as any).unref) (t as any).unref();
         });

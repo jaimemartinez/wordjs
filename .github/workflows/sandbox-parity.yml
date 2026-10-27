@@ -184,6 +184,15 @@ jobs:
         working-directory: backend
         run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-posture-truthfulness.test.ts src/tests/host-executes-no-foreign-code.test.ts
 
+      # THE CONFINEMENT OF A REAL PLUGIN, ON EVERY PLATFORM. A real isolate on each kernel: its code folder
+      # is read-only and its data/ folder (moved out of the code, behind a link - a junction on Windows,
+      # a symlink elsewhere) is writable and kept intact; the IPC frame nonce reaches it over the channel,
+      # never on the command line; and its network goes only through the host egress tunnel (http, fetch,
+      # https, STARTTLS and a bare net.Socket work; metadata, private addresses and UDP are refused).
+      - name: Certify a real plugin's code, data and network confinement (all platforms)
+        working-directory: backend
+        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-own-code-readonly.test.ts src/tests/sandbox-ipc-nonce-channel.test.ts src/tests/egress-tunnel.test.ts
+
       # WHICH LAYER WOULD KILL IT — kept AFTER the fix, deliberately.
       #
       # This is what found the cause, and it stays because the next regression in this area will present
@@ -235,3 +244,51 @@ jobs:
             sandbox-parity-root-cut-bounding-report.json
           retention-days: 14
           if-no-files-found: ignore
+
+  # WINDOWS, ON THE REAL ACLs, beside the parity job: a contained child must be refused a secret its install
+  # tree exposes to ALL APPLICATION PACKAGES once the probe protected it (and read it before - the control);
+  # owner rights, retirement and the AppContainer launch itself on real ACLs. (The network needs nothing on
+  # Windows: no plugin has a network capability, and the probe above certifies the host egress tunnel.)
+  # Every contained launch is a cold PowerShell relay (~25 s on this runner), so the suites are spread over
+  # three runners, which share nothing: on one host, two processes editing the same ACL could lose an ACE.
+  windows-live:
+    name: "Windows live AppContainer (${{ matrix.shard }})"
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: "ACLs and grants"
+            files: src/tests/sandbox-windows-appcontainer.test.ts
+            pattern: "ensureAppContainerProfile is idempotent|grant is idempotent|a root-only revoke|a zone reached through a junction|a missing directory is skipped"
+          # The launch tests use the package SID the profile test creates, so that test runs here too.
+          - shard: "contained launches"
+            files: src/tests/sandbox-windows-appcontainer.test.ts
+            pattern: "ensureAppContainerProfile is idempotent|a minimal contained Node|the contained child is refused|internetClient changes only egress|killing the relay|extended Job Object caps apply"
+          - shard: "secrets and retirement"
+            files: src/tests/sandbox-windows-aap-secrets.test.ts src/tests/sandbox-windows-retirement.test.ts
+            pattern: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install
+        working-directory: backend
+        run: npm ci
+      - name: Certify on this host (${{ matrix.shard }})
+        working-directory: backend
+        shell: bash
+        env:
+          WORDJS_TEST_APPCONTAINER: '1'
+          FILES: ${{ matrix.files }}
+          PATTERN: ${{ matrix.pattern }}
+        run: |
+          if [ -n "$PATTERN" ]; then
+            node --test --test-force-exit --test-concurrency=1 --test-name-pattern="$PATTERN" -r ts-node/register $FILES
+          else
+            node --test --test-force-exit --test-concurrency=1 -r ts-node/register $FILES
+          fi
