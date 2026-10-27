@@ -405,7 +405,7 @@ export default function Webmail({ access, user, t, locale, toasts, confirm, isAd
         try {
             const res = await api(`/plugin/mail-server/emails/${email.id}/retry`, { method: 'POST' }) as any;
             if (res && res.pending) {
-                toast('progress', t('read.retryPending'));
+                toast('progress', t(res.waiting ? 'read.retryWaiting' : 'read.retryPending'));
                 setOpenEmail((o: any) => o && o.id === email.id ? { ...o, delivery_status: 'retry' } : o);
             } else if (res && res.success) {
                 ok(t('read.delivered'));

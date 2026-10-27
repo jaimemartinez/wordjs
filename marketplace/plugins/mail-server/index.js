@@ -77,7 +77,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.3.4',
+    version: '3.3.5',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -2174,7 +2174,7 @@ async function sendRateGate(data, sentRecordId) {
 }
 
 /** Hold a message for the rate: its external recipients wait on its row, in order (see markPaced). */
-async function holdForSendRate(sentRecordId, data, externalRecipients, until) {
+async function holdForSendRate(sentRecordId, data, externalRecipients, until, note = 'Waiting for the queue\'s sending rate') {
     try {
         // The recipients still to reach, as a retry would store them. This runs FIRST: the rewrite clears
         // the delivery state, and markPaced below sets it. NOT-A-USER-PATH: the delivery state machine's
@@ -2182,7 +2182,7 @@ async function holdForSendRate(sentRecordId, data, externalRecipients, until) {
         await Email.update(sentRecordId, { toAddress: externalRecipients.join(', ') });
     } catch (e) { /* non-fatal */ }
     // NOT-A-USER-PATH: the same row, mid-delivery.
-    await Email.markPaced(sentRecordId, new Date(until).toISOString(), 'Waiting for the queue\'s sending rate');
+    await Email.markPaced(sentRecordId, new Date(until).toISOString(), note);
     // Waiting is not a delivery attempt: the pass that sends it later costs nothing more (users and site).
     noteRetryCharge(sentRecordId, externalRecipients.length);
 }
@@ -2892,8 +2892,12 @@ async function sendMail(data) {
         // delivery branch further down (a re-read could disagree if initTransporter() runs in between).
         // `relayConfigured` with no ready relay means the relay is DOWN: the mail waits, it never goes
         // direct-to-MX instead (see initTransporter).
+        // In 'fallback' mode the relay is only the backup of direct delivery: everything below that
+        // depends on "a relay is configured" (the From rewrite, "never direct while it is down") follows
+        // the direct-delivery rules instead.
+        const mode = await relayMode();
         const relay = await readyRelay();
-        const relayConfigured = !!relay || relayStatus.configured;
+        const relayConfigured = mode === 'fallback' ? false : (!!relay || relayStatus.configured);
 
         // DMARC/SPF ALIGNMENT (DIRECT-TO-MX ONLY): when WE are the MTA, we may only send as a domain we
         // can actually AUTHENTICATE for (the one our DKIM key signs and our SPF/PTR cover). A user whose
@@ -2972,7 +2976,7 @@ async function sendMail(data) {
             : undefined;
         const mailObj = { fromEmail: wireFrom, envelopeFrom: envelopeSenderOf(data, wireFrom), fromName, replyTo: wireReplyTo, subject: data.subject, text: data.text, html: data.html, attachments, messageId: outboundMessageId, headers: extraHeaders };
 
-        if (relay) {
+        if (relay && mode !== 'fallback') {
             // Relay/smarthost path (used only if a relay is configured). NOTE: wireFrom === fromEmail
             // here by construction (see mayRewriteFrom above) — the smarthost owns alignment.
             console.log(`[MailServer] Delivering ${externalRecipients.length} recipient(s) via configured relay...`);
@@ -2997,16 +3001,45 @@ async function sendMail(data) {
             console.error(`[MailServer] ❌ ${reason} — ${externalRecipients.length} recipient(s) left in the retry queue.`);
             for (const extR of externalRecipients) failed.push({ recipient: extR, error: reason, permanent: false });
         } else {
-            // Direct-to-MX delivery (real MTA).
+            // Direct-to-MX delivery (real MTA), with the relay as its backup in 'fallback' mode.
+            const backup = mode === 'fallback' ? relay : null;
+            const viaBackup = async (extR, why) => {
+                try {
+                    const info = await deliverViaRelay(backup, extR, mailObj, dkimOptions);
+                    console.log(`[MailServer] ✅ Delivered to ${extR} via the backup relay (${why}).`);
+                    delivered.push({ recipient: extR, via: 'relay', response: info.response });
+                } catch (e) {
+                    console.error(`[MailServer] ❌ Backup relay delivery to ${extR} failed: ${e.message}`);
+                    const code = Number(e && e.responseCode) || 0;
+                    failed.push({ recipient: extR, error: e.message, permanent: code >= 500 && code < 600 });
+                }
+            };
+            // A delivery test is a diagnostic: it always tries, pause or not, and reports what it found.
+            const isPaused = () => !data.noRetry && directPausedUntil > Date.now();
+            // Direct delivery is paused and there is no backup: the message waits for the pause like it
+            // waits for the sending rate — not a delivery attempt, so its retries are not spent.
+            if (isPaused() && !backup && sentRecordId) {
+                await holdForSendRate(sentRecordId, data, externalRecipients, directPausedUntil,
+                    `Direct delivery paused: outbound port 25 gave no reply (until ${new Date(directPausedUntil).toISOString()})`);
+                console.log(`[MailServer] Message ${sentRecordId} waits for direct delivery to resume (${externalRecipients.length} recipient(s)).`);
+                return { success: true, queued: true, delivered, failed: [], waiting: externalRecipients.length };
+            }
             const heloName = await getHeloName();
             console.log(`[MailServer] Direct MX delivery for ${externalRecipients.length} recipient(s) as ${heloName}...`);
             for (const extR of externalRecipients) {
+                if (isPaused()) {
+                    if (backup) { await viaBackup(extR, 'direct delivery is paused'); continue; }
+                    failed.push({ recipient: extR, error: 'Direct delivery paused: outbound port 25 gave no reply', permanent: false });
+                    continue;
+                }
                 try {
                     const r = await deliverDirect(extR, mailObj, dkimOptions, heloName);
                     console.log(`[MailServer] ✅ Delivered to ${extR} via ${r.mx}: ${r.response}`);
                     delivered.push({ recipient: extR, via: r.mx, response: r.response });
                 } catch (e) {
                     console.error(`[MailServer] ❌ ${e.message}`);
+                    if (e.unreachable) pauseDirectDelivery(`no mail server of ${extR.split('@')[1]} replied on port 25`);
+                    if (backup && !e.permanent) { await viaBackup(extR, 'direct delivery failed'); continue; }
                     failed.push({ recipient: extR, error: e.message, permanent: !!e.permanent });
                 }
             }
@@ -3385,6 +3418,23 @@ async function deliverViaRelay(relay, recipient, mail, dkimOptions) {
 // success the next deliveries try that family first instead of waiting out a connection timeout each time.
 let outboundFamilyHint = 4;
 
+// How many MX hosts of one domain may give no reply at all before a delivery stops trying the rest.
+const UNREACHABLE_MX_LIMIT = 2;
+// When a delivery got no reply from any mail server, direct delivery pauses this long: retrying at once
+// only adds connections to the count that keeps a provider's port-25 limit engaged (Hostinger: 5 a minute).
+const DIRECT_PAUSE_MS = 5 * 60 * 1000;
+let directPausedUntil = 0;
+
+function pauseDirectDelivery(reason) {
+    directPausedUntil = Date.now() + DIRECT_PAUSE_MS;
+    console.warn(`[MailServer] Direct delivery paused until ${new Date(directPausedUntil).toISOString()}: ${reason}`);
+}
+
+/** 'fallback': deliver direct-to-MX and use the configured relay only when that fails; 'always': relay only. */
+async function relayMode() {
+    return String(await getOption('mail_relay_mode', 'always')) === 'fallback' ? 'fallback' : 'always';
+}
+
 /** One validated address per family, the family that last worked first (at most two connection attempts per MX). */
 function pickDeliveryAddresses(addrs) {
     const v4 = addrs.find(a => net.isIPv4(a));
@@ -3480,6 +3530,8 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
 
     let lastErr = null;
     let permanent = false;
+    let unreachableMx = 0;   // MX hosts tried on every address without a single SMTP reply
+    let anyReply = false;    // some MX answered (a reply, a TLS handshake): the network path works
     mxLoop:
     for (const mx of mxRecords) {
         // SECURITY (M2-SSRF): resolve this MX host and reject if it points at an internal/private IP
@@ -3511,6 +3563,7 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                 // On a TLS *verification* failure (and only that), retry THIS host once with verification
                 // disabled, logging the downgrade explicitly. Other failures fall through to the next MX.
                 if (isTlsVerifyError(e)) {
+                    anyReply = true; // a TLS handshake: the host answered
                     console.warn(`[MailServer][TLS] STARTTLS verification FAILED for ${mx.exchange} (${e.message}) — retrying with verification DISABLED (downgraded, opportunistic encryption only).`);
                     try {
                         return delivered(await sendVia(pinnedIp, mx.exchange, false), { tlsDowngraded: true });
@@ -3525,6 +3578,7 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                 // The host refused STARTTLS with a reply: deliver to it without TLS, as opportunistic TLS
                 // does, and say so in the log.
                 if (isStartTlsRefused(e)) {
+                    anyReply = true; // an SMTP reply: the host answered
                     console.warn(`[MailServer][TLS] ${mx.exchange} refused STARTTLS (${e.responseCode}) — retrying WITHOUT TLS (opportunistic, plaintext).`);
                     try {
                         return delivered(await sendVia(pinnedIp, mx.exchange, false, true), { tlsDowngraded: true, plaintext: true });
@@ -3552,12 +3606,24 @@ async function deliverDirect(recipient, mail, dkimOptions, heloName) {
                     console.warn(`[MailServer] ${mx.exchange} unreachable at ${pinnedIp} (${e.message}) — trying ${candidates[i + 1]}.`);
                     continue;
                 }
+                // Reaching here, the earlier addresses of this host were unreachable too (see above).
+                const replied = !isUnreachable(e);
+                if (replied) anyReply = true;
+                // Every address of this host gave no reply. When that happens on more than one host the
+                // problem is OUR outbound port 25 (a provider filter or rate limit), not theirs: each
+                // further host only adds connections to the count that keeps it blocked.
+                if (!replied && ++unreachableMx >= UNREACHABLE_MX_LIMIT) {
+                    console.warn(`[MailServer] ${unreachableMx} mail servers of ${domain} gave no reply on port 25 — stopping here; outbound port 25 looks blocked or rate-limited.`);
+                    break mxLoop;
+                }
                 continue mxLoop;
             }
         }
     }
     const err = new Error(`Direct delivery to ${recipient} failed: ${lastErr ? lastErr.message : 'no MX reachable'}`);
     err.permanent = permanent;
+    // No server answered at all: the caller pauses direct delivery (see pauseDirectDelivery).
+    err.unreachable = !anyReply && unreachableMx > 0;
     throw err;
 }
 
@@ -3674,6 +3740,11 @@ async function deliverRetry(email, recipients, force) {
         });
         // NOT-A-USER-PATH: re-reads the same, already-authorized row to report its new delivery state.
         const after = await Email.findById(email.id);
+        // Held, not sent: it waits for the sending rate or for direct delivery to resume (sendMail's
+        // `queued`). "Delivered" would be false — and the row says it is waiting.
+        if (result.queued) {
+            return { status: 202, body: { success: true, pending: true, waiting: true, id: email.id, status: after ? after.delivery_status : 'retry', message: 'Waiting in the queue: it goes out when the sending rate or a pause of direct delivery allows.' } };
+        }
         if (result.success) {
             return { status: 200, body: { success: true, id: email.id, status: after ? after.delivery_status : 'sent', message: 'Delivered.' } };
         }
@@ -4766,7 +4837,7 @@ exports.init = async function (bridge) {
             smtp_listen_port: '25', smtp_proxy_ips: '', smtp_catch_all: '0',
             mail_helo_host: '',
             mail_server: '', mail_port: '587', mail_secure: '0', mail_user: '', mail_pass: '',
-            mail_relay_require_tls: '1',
+            mail_relay_require_tls: '1', mail_relay_mode: 'always',
             mail_security_dkim_domain: '', mail_security_dkim_selector: 'default',
             mail_security_dkim_private_key: '',
             // Defaults reflect the SAFE posture (H12): DNSBL + SPF default ON, SPF reject default ON.
@@ -4807,6 +4878,11 @@ exports.init = async function (bridge) {
             mail_user: o.mail_user,
             mail_pass_set: o.mail_pass ? true : false,
             mail_relay_require_tls: o.mail_relay_require_tls,
+            // 'always' (every external message through the relay) or 'fallback' (direct first, the relay
+            // when that fails or is paused).
+            mail_relay_mode: o.mail_relay_mode === 'fallback' ? 'fallback' : 'always',
+            // While a delivery with no reply from any mail server keeps direct delivery paused (ISO).
+            direct_paused_until: directPausedUntil > Date.now() ? new Date(directPausedUntil).toISOString() : null,
             // The general queue's sending rate (messages per minute, 0 = no cap).
             [SEND_RATE_OPTION]: String(parsePerMinute(o[SEND_RATE_OPTION])),
             // Whether the configured relay answered its last check, and why not (see initTransporter).
@@ -4871,7 +4947,7 @@ exports.init = async function (bridge) {
             'smtp_listen_port', 'smtp_proxy_ips', 'smtp_catch_all',
             'mail_helo_host',
             // Relay / smarthost (mail_user/mail_pass route to the encrypted secrets table via isSecretOption).
-            'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls',
+            'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls', 'mail_relay_mode',
             'mail_security_dkim_domain', 'mail_security_dkim_selector',
             'mail_security_dnsbl_enabled', 'mail_security_spf_enabled', 'mail_security_spf_reject',
             'mail_security_dmarc_enabled',
@@ -4885,6 +4961,7 @@ exports.init = async function (bridge) {
         if (req.body.mail_quota_default_mb !== undefined) req.body.mail_quota_default_mb = String(Math.min(Math.max(parseInt(req.body.mail_quota_default_mb, 10) || 0, 0), 1048576));
         if (req.body.mail_forwarding_allowed !== undefined) req.body.mail_forwarding_allowed = req.body.mail_forwarding_allowed === '0' || req.body.mail_forwarding_allowed === false ? '0' : '1';
         if (req.body[SEND_RATE_OPTION] !== undefined) req.body[SEND_RATE_OPTION] = String(parsePerMinute(req.body[SEND_RATE_OPTION]));
+        if (req.body.mail_relay_mode !== undefined) req.body.mail_relay_mode = req.body.mail_relay_mode === 'fallback' ? 'fallback' : 'always';
 
         // The system Sent log's retention: one of the offered choices, nothing else. A SHORTER period
         // (or "keep nothing") deletes what it no longer covers right away — the screen asks first.
