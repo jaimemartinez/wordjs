@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.18] - 2026-10-27
+
 ## [2.11.17] - 2026-10-27
 
 ### Security
