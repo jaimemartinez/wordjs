@@ -291,12 +291,23 @@ describe('Audit log hash chain', () => {
     });
 
     test('syslog over TCP (octet-counted RFC 5424) and UDP', async () => {
-        const tcpLines: string[] = [];
-        const tcp = net.createServer((s: any) => { let buf = ''; s.on('data', (c: any) => { buf += c; }); s.on('end', () => tcpLines.push(buf)); });
+        // Each receiver resolves a waiter the moment what it holds satisfies it — never after a fixed tick.
+        const waiters: Array<() => void> = [];
+        const wake = () => { for (const w of waiters.splice(0)) w(); };
+        const until = (what: string, ok: () => boolean) => new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error(`timed out waiting for ${what}`)), 10_000);
+            const check = () => { if (ok()) { clearTimeout(timeout); resolve(); } else waiters.push(check); };
+            check();
+        });
+        const tcpConns: string[] = [];
+        const tcp = net.createServer((s: any) => {
+            const i = tcpConns.push('') - 1;
+            s.on('data', (c: any) => { tcpConns[i] += c; wake(); });
+        });
         await new Promise<void>((r) => tcp.listen(0, '127.0.0.1', r));
         const udpMsgs: string[] = [];
         const udp = dgram.createSocket('udp4');
-        udp.on('message', (m: any) => udpMsgs.push(String(m)));
+        udp.on('message', (m: any) => { udpMsgs.push(String(m)); wake(); });
         await new Promise<void>((r) => udp.bind(0, '127.0.0.1', r));
         try {
             const tcpCfg = { mode: 'syslog', host: '127.0.0.1', port: tcp.address().port, transport: 'tcp', allowPrivate: true };
@@ -304,24 +315,23 @@ describe('Audit log hash chain', () => {
             await record('user.role_change', 'tcp-1');
             const sent = await post('/audit/export/flush');
             assert.ok(sent.body.delivered >= 1, JSON.stringify(sent.body));
-            for (let i = 0; i < 40 && !tcpLines.length; i++) await new Promise((r) => setTimeout(r, 25));
-            const all = tcpLines.join('');
-            const m = /^(\d+) (<109>1 .*)$/s.exec(all);
-            assert.ok(m, `octet counted: ${all.slice(0, 120)}`);
+            await until('the tcp-1 frame', () => tcpConns.some((x) => x.includes('"targetId":"tcp-1"')));
+            const conn = tcpConns.find((x) => x.includes('"targetId":"tcp-1"')) as string;
+            const m = /^(\d+) (<109>1 .*)$/s.exec(conn);
+            assert.ok(m, `octet counted: ${conn.slice(0, 120)}`);
             assert.ok(/ wordjs - audit - \{/.test((m as RegExpExecArray)[2]));
-            assert.ok(all.includes('"targetId":"tcp-1"'));
 
             const udpCfg = { mode: 'syslog', host: '127.0.0.1', port: udp.address().port, transport: 'udp', allowPrivate: true };
             assert.strictEqual((await put('/audit/settings', { export: udpCfg, currentPassword: PASSWORD })).status, 200);
             await record('user.role_change', 'udp-1');
             await post('/audit/export/flush');
-            for (let i = 0; i < 20 && !udpMsgs.length; i++) await new Promise((r) => setTimeout(r, 25));
+            await until('the udp-1 datagram', () => udpMsgs.some((x) => x.includes('"targetId":"udp-1"')));
             assert.ok(udpMsgs.some((x) => x.startsWith('<109>1 ') && x.includes('"targetId":"udp-1"')), JSON.stringify(udpMsgs));
 
             // The test goes where the SAVED copy goes, never to an address in the request.
             const ok = await post('/audit/export/test', { export: { mode: 'webhook', url: 'https://elsewhere.example/x' } });
             assert.strictEqual(ok.body.ok, true, JSON.stringify(ok.body));
-            for (let i = 0; i < 20 && !udpMsgs.some((x) => x.includes('audit.export.test')); i++) await new Promise((r) => setTimeout(r, 25));
+            await until('the test datagram', () => udpMsgs.some((x) => x.includes('"action":"audit.export.test"')));
             assert.ok(udpMsgs.some((x) => x.includes('"action":"audit.export.test"')), 'the test event reached the saved receiver');
             // Without the private-network tick, a private receiver is refused.
             assert.strictEqual((await put('/audit/settings', { export: { ...tcpCfg, allowPrivate: false }, currentPassword: PASSWORD })).status, 200);
@@ -330,6 +340,40 @@ describe('Audit log hash chain', () => {
         } finally {
             tcp.close();
             udp.close();
+            await put('/audit/settings', { export: { mode: 'off' }, currentPassword: PASSWORD });
+        }
+    });
+
+    test('a flush asked for while one is running also delivers the rows sealed after that one began', async () => {
+        const got: string[] = [];
+        let hold: (() => void) | null = null;
+        let held: () => void = () => {};
+        const firstHeld = new Promise<void>((r) => { held = r; });
+        const recv = http.createServer((req: any, res: any) => {
+            let body = '';
+            req.on('data', (c: any) => { body += c; });
+            req.on('end', () => {
+                const finish = () => { got.push(...JSON.parse(body).events.map((e: any) => e.targetId)); res.end('ok'); };
+                if (hold === null) { hold = finish; held(); } else finish();
+            });
+        });
+        await new Promise<void>((r) => recv.listen(0, '127.0.0.1', r));
+        try {
+            const url = `http://127.0.0.1:${recv.address().port}/audit`;
+            assert.strictEqual((await put('/audit/settings', { export: { mode: 'webhook', url, allowPrivate: true }, currentPassword: PASSWORD })).status, 200);
+            const ex = require('../core/audit-export');
+            await record('user.role_change', 'early');
+            const first = inSite(() => ex.flushExport());
+            await firstHeld; // the first pass is now waiting on the receiver, its batch already read
+            await record('user.role_change', 'late');
+            const second = inSite(() => ex.flushExport());
+            (hold as unknown as () => void)();
+            await first;
+            await second;
+            assert.ok(got.includes('early'), JSON.stringify(got));
+            assert.ok(got.includes('late'), `the second flush resolved before "late" was sent: ${JSON.stringify(got)}`);
+        } finally {
+            recv.close();
             await put('/audit/settings', { export: { mode: 'off' }, currentPassword: PASSWORD });
         }
     });
