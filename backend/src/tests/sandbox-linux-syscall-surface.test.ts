@@ -84,11 +84,27 @@ test('the probe proves each row on the kernel: another pid\'s priority, truncati
     assert.match(src, /os\.setPriority\(0,os\.getPriority\(0\)\)/, 'its own priority stays settable');
     assert.match(src, /fs\.constants\.O_RDONLY\|fs\.constants\.O_TRUNC/);
     assert.match(src, /fs\.chmodSync\(inside,384\)/);
-    assert.match(src, /fs\.fstatSync\(4\)/);
+    assert.match(src, /fs\.fstatSync\(32\)/);
     assert.match(src, /fs\.fchmodSync\(pfd,448\)/, 'the W^X row still makes its payload executable, with the call that remains');
     const mod = fs.readFileSync(require('path').join(__dirname, '..', 'core', 'sandbox-linux.ts'), 'utf8');
-    assert.match(mod, /stdio: \['ignore', 'ignore', 'pipe', 'ipc', 'pipe'\]/, 'the probe hands the child an extra fd 4 to be closed');
+    // The extra fd sits far above what Node opens at startup, so Node can never reuse its number.
+    const stdio = linux.__probeStdio();
+    assert.strictEqual(stdio.length, 33);
+    assert.deepStrictEqual(stdio.slice(0, 4), ['ignore', 'ignore', 'pipe', 'ipc']);
+    assert.strictEqual(stdio[32], 'pipe', 'the probe hands the child an extra fd 32 to be closed');
+    assert.ok(stdio.slice(4, 32).every((x: string) => x === 'ignore'));
+    assert.match(mod, /stdio: probeStdio\(\)/);
     assert.match(mod, /m\.fdCode === 'EBADF'/);
     assert.match(mod, /&& confinedSurface && allowedOk\)/, 'the confined leg must pass the syscall-surface checks to certify');
     assert.doesNotThrow(() => new Function(src));
+});
+
+test('the kernel rlimit caps are set by prlimit from a system path, with no shell in the launch', () => {
+    const iso = require('../core/plugin-isolate');
+    assert.deepStrictEqual(iso.__rlimitArgs(1024, true), ['--as=1048576', '--nofile=4096', '--']);
+    assert.deepStrictEqual(iso.__rlimitArgs(1024, false), ['--as=1048576', '--']);
+    for (const p of iso.__prlimitCandidates) assert.ok(require('path').posix.isAbsolute(p), `${p} is a fixed absolute path`);
+    const mod = fs.readFileSync(require('path').join(__dirname, '..', 'core', 'plugin-isolate.ts'), 'utf8');
+    assert.doesNotMatch(mod, /spawn\('sh'/, 'no isolated-plugin launch goes through a shell');
+    assert.match(mod, /spawn\(prlimitPath\(\) as string, \[\.\.\.rlimitArgs\(capKb, osCapNofile\), \.\.\.nodeArgv\]/);
 });

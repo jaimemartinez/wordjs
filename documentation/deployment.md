@@ -586,7 +586,7 @@ Each isolated child is held to a **768 MB resident budget** plus a 256 MB JS hea
 |---|---|---|---|
 | **Preventive** | cgroup v2 `MemoryMax` via `systemd-run --user --scope` — the kernel OOM-kills only the offending child the instant it exceeds budget | **Linux** (systemd, user scopes) | **OFF** (opt-in) |
 | **Reactive** | host-side RSS poll that `SIGKILL`s a child over budget (`/proc` on Linux, `tasklist` on Windows, `ps` on macOS) | **Linux / Windows / macOS** | ON (used when the cgroup cap is not active) |
-| **Loose backstop** | kernel `RLIMIT_AS` virtual ceiling (`ulimit -v`) + the 256 MB JS-heap flag | **Linux**; only on another POSIX host if its enforcement probe proves the limit actually bites | ON when probe-certified |
+| **Loose backstop** | kernel `RLIMIT_AS` virtual ceiling (util-linux `prlimit`) + the 256 MB JS-heap flag | **Linux**; only on another POSIX host if its enforcement probe proves the limit actually bites | ON when probe-certified |
 
 Because each plugin is a **separate process**, an OOM or crash never takes down the host on *any* platform — even with no cap configured.
 

@@ -229,7 +229,7 @@ export type ShimArgsOptions = {
 /**
  * Build the argv for the shim, WITHOUT the interpreter itself - prepend PERL_BIN, exactly as the macOS
  * path prepends SEATBELT_BIN to seatbeltArgs(). The caller therefore decides where this sits, which lets it compose in front
- * of the `sh -c 'ulimit …; exec "$@"'` memory-cap wrapper the same way the other two do.
+ * of the `prlimit … --` memory-cap launcher the same way the other two do.
  *
  * Shape: [SHIM_PATH, --read-root=…, …, <zone>, …, <0|1>, '--', …nodeArgs]
  * The network flag is the LAST token before `--` and must be exactly 0 or 1, which is what makes the
@@ -343,6 +343,17 @@ const DEFAULT_EGRESS_TCP_PORTS = [53, 80, 443];
  *                lookup can never be mistaken for a denied connect).
  *   sent       - implicit: that the message arrived AT ALL is the fork-IPC round-trip.
  */
+// The extra descriptor the probe hands over for the shim to close. Far above anything Node opens while it
+// starts (epoll, eventfd, the signal pipe, io_uring): a closed LOW number is reused by Node itself before
+// the probe code runs, and fstat would then find Node's own descriptor and read as "inherited".
+const PROBE_EXTRA_FD = 32;
+function probeStdio(): any[] {
+    const stdio: any[] = ['ignore', 'ignore', 'pipe', 'ipc'];
+    while (stdio.length < PROBE_EXTRA_FD) stdio.push('ignore');
+    stdio.push('pipe');
+    return stdio;
+}
+
 const PROBE_SRC = [
     'var fs=require("fs");var net=require("net");var cp=require("child_process");var os=require("os");',
     'var out={wrote:false,readSystem:false,exactRead:false,siblingCode:"NONE",readCode:"NONE",outCode:"NONE",signalCode:"NONE",processCode:"NONE",execCode:"NONE",capsCode:"NONE",netCode:"SKIP",unixCode:"SKIP",portCode:"SKIP",prioCode:"NONE",selfPrioCode:"NONE",truncCode:"NONE",chmodCode:"NONE",fdCode:"NONE"};',
@@ -351,7 +362,7 @@ const PROBE_SRC = [
     'try{os.setPriority(victim,19);out.prioCode="OPEN";}catch(e){out.prioCode=sysCode(e);}',
     'try{os.setPriority(0,os.getPriority(0));out.selfPrioCode="OPEN";}catch(e){out.selfPrioCode=sysCode(e);}',
     'try{var tf=fs.openSync(truncFile,fs.constants.O_RDONLY|fs.constants.O_TRUNC);fs.closeSync(tf);out.truncCode="OPEN";}catch(e){out.truncCode=sysCode(e);}',
-    'try{fs.fstatSync(4);out.fdCode="OPEN";}catch(e){out.fdCode=sysCode(e);}',
+    'try{fs.fstatSync(PROBE_EXTRA_FD);out.fdCode="OPEN";}catch(e){out.fdCode=sysCode(e);}'.replace('PROBE_EXTRA_FD', String(PROBE_EXTRA_FD)),
     'try{fs.writeFileSync(inside,"wjs");out.wrote=fs.readFileSync(inside,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}',
     'try{fs.readFileSync(process.execPath);out.readSystem=true;}catch(e){out.readSystem=false;}',
     'try{out.exactRead=fs.readFileSync(exactFile,"utf8")==="exact";}catch(e){out.exactRead=false;}',
@@ -446,8 +457,9 @@ function runProbeChild(pre: string[], inside: string, outside: string, denyNet: 
         if ((overall as any).unref) (overall as any).unref();
         try {
             proc = spawnl(exe, args, {
-                // fd 4 is an extra pipe nobody asked the child to keep: the shim must close it before exec.
-                stdio: ['ignore', 'ignore', 'pipe', 'ipc', 'pipe'],
+                // fd PROBE_EXTRA_FD is an extra pipe nobody asked the child to keep: the shim must close it
+                // before exec.
+                stdio: probeStdio(),
                 serialization: 'advanced',
                 timeout: Math.max(1000, timeoutMs - 3000),
             });
@@ -771,5 +783,6 @@ module.exports = {
     // is tested directly rather than inferred from an argv.
     shimPath,
     __probeSrc: PROBE_SRC,
+    __probeStdio: probeStdio,
     __refusalCodes: REFUSAL_CODES,
 };

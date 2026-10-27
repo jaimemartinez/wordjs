@@ -695,12 +695,14 @@ async function awaitKeySettled(key: string, timeoutMs = 30000): Promise<boolean>
 // OWN OS process, so off-heap growth is the CHILD's rss — bounded per-child in loadIsolatedPlugin —
 // not the host's. A worker_thread shared the host rss and could OOM-crash it; a child cannot.)
 
-// --- KERNEL-ENFORCED memory cap (RLIMIT_AS via `ulimit -v`) ---------------------------------------
+// --- KERNEL-ENFORCED memory cap (RLIMIT_AS via prlimit) -------------------------------------------
 // We prefer a KERNEL cap on the child's address space over a pure userspace poll: it holds even if the
 // host event loop is wedged, and it bounds
-// off-heap (Buffer/ArrayBuffer) growth the V8 heap flag can't. The wrapper `sh -c 'ulimit -v N; exec
-// node …'` preserves the fork-style IPC channel — the inherited NODE_CHANNEL_FD + its fd survive the
-// shell's `exec`, so the exec'd node attaches IPC exactly as a forked child would. V8's pointer-
+// off-heap (Buffer/ArrayBuffer) growth the V8 heap flag can't. util-linux `prlimit --as=N -- node …` sets
+// the limits on itself and execs the command, with no shell: argv only, and the binary is taken from a
+// fixed list of system paths, never from PATH. That exec preserves the fork-style IPC channel — the
+// inherited NODE_CHANNEL_FD + its fd survive it, so the exec'd node attaches IPC exactly as a forked
+// child would. Without prlimit (macOS, a minimal image) there is no kernel rlimit cap. V8's pointer-
 // compression cage reserves a large VIRTUAL range (~4 GB) that RLIMIT_AS counts, so the cap must be
 // GENEROUS — it is a coarse virtual *backstop* (bounds pathological allocation; kernel-enforced even if
 // the host loop is wedged), NOT a tight RSS cap. The precise
@@ -709,12 +711,30 @@ async function awaitKeySettled(key: string, timeoutMs = 30000): Promise<boolean>
 // child's footprint — cage + ts-node — not a bare `node` that under-counts it and false-kills loads).
 // Result (cached Promise): null = unavailable (→ plain fork + /proc poll), number = RLIMIT_AS in KiB.
 let osCapProbe: Promise<number | null> | undefined;
+// util-linux prlimit, from the system directories only: never resolved through PATH or the environment.
+const PRLIMIT_CANDIDATES = ['/usr/bin/prlimit', '/bin/prlimit', '/usr/sbin/prlimit', '/sbin/prlimit'];
+let prlimitBin: string | null | undefined;
+function prlimitPath(): string | null {
+    if (prlimitBin !== undefined) return prlimitBin;
+    prlimitBin = null;
+    for (const p of PRLIMIT_CANDIDATES) {
+        try { if (fs.statSync(p).isFile()) { fs.accessSync(p, fs.constants.X_OK); prlimitBin = p; break; } } catch { /* next */ }
+    }
+    return prlimitBin;
+}
+// Whether RLIMIT_NOFILE is applied with the address-space cap (a host whose hard limit is below FD_CAP
+// refuses to raise it, and then only the address-space cap is set).
+let osCapNofile = false;
+/** prlimit's arguments for an address-space cap of `kb` KiB (and the fd cap when `nofile`), then `--`. */
+function rlimitArgs(kb: number, nofile: boolean): string[] {
+    return [`--as=${kb * 1024}`, ...(nofile ? [`--nofile=${FD_CAP}`] : []), '--'];
+}
 function probeOsMemoryCap(): Promise<number | null> {
     if (osCapProbe) return osCapProbe;
     osCapProbe = (async () => {
-        if (process.platform === 'win32') return null; // no POSIX ulimit / RLIMIT_AS
+        if (process.platform === 'win32') return null; // no POSIX RLIMIT_AS
         if (process.platform === 'darwin') {
-            // Darwin accepts `ulimit -v` but aliases RLIMIT_AS to an unenforced RLIMIT_RSS. A successful
+            // Darwin accepts an address-space limit but aliases RLIMIT_AS to an unenforced RLIMIT_RSS. A successful
             // shell command is therefore not evidence of a cap. Measure the bite first and never print
             // "kernel memory cap active" unless the impossible-limit control proves enforcement.
             let enforcement = 'unknown';
@@ -738,30 +758,41 @@ function probeOsMemoryCap(): Promise<number | null> {
         // Probe with the SAME execArgv the real child uses (ts-node in dev) so the validated cap reflects
         // the real startup footprint (cage + ts-node compiler), not a bare `node` that under-counts it.
         const execArgv = __filename.endsWith('.ts') ? ['-r', TS_NODE_REGISTER] : [];
-        // The probe child boots node UNDER the candidate RLIMIT_AS through the SAME shell wrapper the real
+        // The probe child boots node UNDER the candidate RLIMIT_AS through the SAME prlimit launcher the real
         // load uses, and sends ONE IPC message. We accept a cap only if node both starts AND its IPC
-        // channel survives the shell `exec` (process.send works) — this self-validates the kernel cap +
+        // channel survives prlimit's exec (process.send works) — this self-validates the kernel cap +
         // IPC-preservation on the ACTUAL host, so the path needs no per-platform assumptions and falls
         // back cleanly to plain fork wherever it doesn't hold.
         // Exit only AFTER the IPC write flushes (send callback) — exiting synchronously after send would
         // drop the message and falsely fail the probe even where the cap works. Backstop self-exit so a
         // stuck candidate fails fast rather than waiting out the outer spawn timeout.
         const probeSrc = 'if(!process.send){process.exit(3)}process.send("ok",function(){process.exit(0)});setTimeout(function(){process.exit(4)},8000)';
+        const prlimit = prlimitPath();
+        if (!prlimit) {
+            log.info('[Sandbox] kernel rlimit cap unavailable here (no util-linux prlimit); relying on /proc RSS poll + process separation.');
+            return null;
+        }
+        const bootsUnder = (kb: number, nofile: boolean) => new Promise<boolean>((res) => {
+            let c: any, got = false, done = false;
+            const finish = (v: boolean) => { if (!done) { done = true; try { if (c) c.kill(); } catch { /* */ } res(v); } };
+            try {
+                // The same launcher the real load uses: prlimit <limits> -- node …execArgv -e src.
+                c = spawn(prlimit, [...rlimitArgs(kb, nofile), process.execPath, ...execArgv, '-e', probeSrc],
+                    { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 20000 });
+            } catch { return res(false); }
+            c.on('message', (m: any) => { if (m === 'ok') got = true; });
+            c.on('error', () => finish(false));
+            c.on('exit', (code: number) => finish(got && code === 0));
+        });
         for (const mb of candidatesMb) {
-            const kb = mb * 1024; // `ulimit -v` unit is KiB
-            const ok = await new Promise<boolean>((res) => {
-                let c: any, got = false, done = false;
-                const finish = (v: boolean) => { if (!done) { done = true; try { if (c) c.kill(); } catch { /* */ } res(v); } };
-                try {
-                    // Same `exec "$@"` wrapper the real load uses; $0 = label, $@ = [node, …execArgv, -e, src].
-                    c = spawn('sh', ['-c', `ulimit -v ${kb} 2>/dev/null; exec "$@"`, 'wjs-probe', process.execPath, ...execArgv, '-e', probeSrc],
-                        { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 20000 });
-                } catch { return res(false); }
-                c.on('message', (m: any) => { if (m === 'ok') got = true; });
-                c.on('error', () => finish(false));
-                c.on('exit', (code: number) => finish(got && code === 0));
-            });
-            if (ok) { log.info({ mb: logSafe(mb) }, `[Sandbox] kernel memory cap active: RLIMIT_AS ${logSafe(mb)} MB per isolated child.`); return kb; }
+            const kb = mb * 1024; // the cap is kept in KiB; prlimit takes bytes
+            for (const nofile of [true, false]) {
+                if (await bootsUnder(kb, nofile)) {
+                    osCapNofile = nofile;
+                    log.info({ mb: logSafe(mb) }, `[Sandbox] kernel memory cap active: RLIMIT_AS ${logSafe(mb)} MB per isolated child${nofile ? `, RLIMIT_NOFILE ${FD_CAP}` : ''}.`);
+                    return kb;
+                }
+            }
         }
         log.info('[Sandbox] kernel rlimit cap unavailable here; relying on /proc RSS poll + process separation.');
         return null;
@@ -2060,7 +2091,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // Measured on a real macOS runner (backend/scripts/diagnose-macos-isolate.mjs):
     //
     //     L0 bare fork ......... BOOTED     L2 + Seatbelt ......... DIED
-    //     L1 + ulimit wrapper .. BOOTED     L6 compiled + Seatbelt  BOOTED
+    //     L1 + prlimit cap ... BOOTED     L6 compiled + Seatbelt  BOOTED
     //
     //     Error: EPERM: operation not permitted, uv_cwd
     //         at findAndReadConfig (ts-node/dist/configuration.js)
@@ -2202,9 +2233,9 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // -- LINUX ZERO-CONFIGURATION CONFINEMENT (Landlock + seccomp-bpf) -----------------------------
     // This is a PREFIX, like Seatbelt, so it sits in the same argv slot and
     // composes with everything already there:
-    //   · the memory-cap wrapper — `sh -c 'ulimit -v N; ulimit -n M; exec "$@"' wjs-sandbox <prefix> node …`.
-    //     The shell sets both rlimits and execs perl; perl applies Landlock+seccomp to ITSELF and execs
-    //     node. Rlimits survive execve, so the caps still bite the process that matters.
+    //   · the memory-cap launcher — `prlimit --as=N --nofile=M -- <prefix> node …`. prlimit sets both
+    //     rlimits and execs perl; perl applies Landlock+seccomp to ITSELF and execs node. Rlimits survive
+    //     execve, so the caps still bite the process that matters.
     //   · the cgroup scope — the prefix sits inside `systemd-run
     //     --scope … -- env -u … <prefix> node …`, under the same MemoryMax/CPUQuota.
     //   · the permission-model flags and --disallow-code-generation-from-strings are part of `execArgv`,
@@ -2310,10 +2341,10 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
             }
             // seatbeltArgs() returns ARGUMENTS, not a command line, so the
             // caller decides where they sit. `[sandbox-exec, '-p', <profile>]` composes in front of the
-            // node argv, INCLUDING inside the `sh -c 'ulimit …; exec "$@"'`
-            // memory-cap wrapper: two execs in a row, and fd 3 (NODE_CHANNEL_FD) survives both, because
+            // node argv, INCLUDING after the `prlimit … --`
+            // memory-cap launcher: two execs in a row, and fd 3 (NODE_CHANNEL_FD) survives both, because
             // neither is a fork and neither touches the descriptor table. Each leg is separately
-            // probe-verified with its own IPC round-trip — the shell leg by probeOsMemoryCap, the
+            // probe-verified with its own IPC round-trip — the prlimit leg by probeOsMemoryCap, the
             // sandbox-exec leg by probeSeatbelt — which is the only reason this composition is asserted
             // rather than assumed.
             seatbeltPre = [mac.SEATBELT_BIN, ...mac.seatbeltArgs(profile, [])];
@@ -2405,21 +2436,22 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 ...zeroConfPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
                 { stdio: childStdio, serialization: 'advanced', env: cgroupClientEnv(workerEnv) });
         } else if (capKb) {
-            // KERNEL-capped path: a shell sets RLIMIT_AS, then `exec`s node KEEPING the inherited IPC fd
-            // (NODE_CHANNEL_FD + serialization mode are injected into the child env by the 'ipc' stdio and
-            // survive the exec). argv after the shell name = [node, …execArgv, HEAP_FLAG, WORKER, cfg];
-            // `exec "$@"` runs it, so cfg lands at process.argv[2] exactly like fork(WORKER,[cfg]).
+            // KERNEL-capped path: prlimit sets RLIMIT_AS (and RLIMIT_NOFILE), then execs node KEEPING the
+            // inherited IPC fd (NODE_CHANNEL_FD + serialization mode are injected into the child env by the
+            // 'ipc' stdio and survive the exec). argv after `--` = [node, …execArgv, HEAP_FLAG, WORKER, cfg],
+            // so cfg lands at process.argv[2] exactly like fork(WORKER,[cfg]). No shell is involved.
             // Each platform contributes at most one native prefix. Current macOS does not reach this
             // branch because its enforcement probe correctly rejects Darwin's inert RLIMIT_AS alias.
             // Two prefixes, ONE slot, and at most one is non-empty: Seatbelt on macOS, Landlock on Linux.
-            //   sh -c 'ulimit …; exec "$@"' wjs-sandbox /usr/bin/perl <shim> <zones> 1 -- node …
-            // i.e. the shell sets the rlimits and execs perl, which confines ITSELF and execs node. Three
+            //   prlimit --as=N --nofile=M -- /usr/bin/perl <shim> <zones> 1 -- node …
+            // i.e. prlimit sets the rlimits and execs perl, which confines ITSELF and execs node. Three
             // execs at most, no fork, no change to the descriptor table — so fd 3 (the IPC socketpair)
-            // reaches node exactly as it does through the shell alone.
+            // reaches node exactly as it does through prlimit alone.
             const nodeArgv = [...seatbeltPre, ...zeroConfPre, nativeNodePath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
             // Also cap file descriptors (RLIMIT_NOFILE, per-process) alongside the RLIMIT_AS memory backstop,
-            // so a plugin can't exhaust the host fd table. Best-effort (2>/dev/null); exec runs regardless.
-            child = spawn('sh', ['-c', `ulimit -v ${capKb} 2>/dev/null; ulimit -n ${FD_CAP} 2>/dev/null; exec "$@"`, 'wjs-sandbox', ...nodeArgv], {
+            // so a plugin can't exhaust the host fd table, wherever the probe found the host allows it.
+            // probeOsMemoryCap returned a number, so prlimit was found and is the launcher it validated.
+            child = spawn(prlimitPath() as string, [...rlimitArgs(capKb, osCapNofile), ...nodeArgv], {
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
@@ -3828,6 +3860,8 @@ module.exports = {
     __nativeSandboxRequired: nativeSandboxRequired,
     __sourceWorkerExempt: sourceWorkerExempt,
     __egressTcpPortsFor: egressTcpPortsFor,
+    __rlimitArgs: rlimitArgs,
+    __prlimitCandidates: PRLIMIT_CANDIDATES,
     __appContainerLaunchZones: appContainerLaunchZones,
     // The reactive CPU watchdog's DECISION, exported as a PURE function for exactly the reason
     // __platformLaunchDecision is: the property that matters — an unbroken 60 s burn kills, a shorter
