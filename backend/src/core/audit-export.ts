@@ -103,8 +103,9 @@ async function saveConfig(next: ExportConfig, secret?: string | null): Promise<v
 type State = { lastAttemptAt: number | null; lastSuccessAt: number | null; lastError: string | null; delivered: number };
 const state: State = { lastAttemptAt: null, lastSuccessAt: null, lastError: null, delivered: 0 };
 
-function siteLabel(): string {
-    try { return String(require('../config/app').siteUrl || os.hostname()); } catch { return os.hostname(); }
+/** The site's own address (the per-site `siteurl` option), so a receiver shared by several sites can tell them apart. */
+async function siteLabel(): Promise<string> {
+    try { return String((await require('./options').getOption('siteurl', '')) || os.hostname()); } catch { return os.hostname(); }
 }
 
 function toEvent(row: any) {
@@ -131,17 +132,18 @@ function resolveHost(c: ExportConfig): Promise<string> {
 }
 
 /** RFC 5424: facility 13 (log audit), severity 5 (notice) → PRI 109. */
-function syslogLine(ev: any): string {
+function syslogLine(site: string, ev: any): string {
     const ts = ev.createdAt ? `${ev.createdAt.replace(' ', 'T')}Z` : '-';
     const host = (os.hostname() || '-').replace(/\s/g, '').slice(0, 255) || '-';
-    return `<109>1 ${ts} ${host} wordjs - audit - ${JSON.stringify({ site: siteLabel(), ...ev })}`;
+    return `<109>1 ${ts} ${host} wordjs - audit - ${JSON.stringify({ site, ...ev })}`;
 }
 
 async function sendSyslog(c: ExportConfig, events: any[]): Promise<void> {
     if (!c.allowPrivate && net.isIP(c.host.replace(/^\[|\]$/g, ''))) {
         if (require('./egress-guard').isBlockedIp(c.host.replace(/^\[|\]$/g, ''))) throw new Error(`${c.host} is a private address; tick "the receiver is on a private network" to allow it`);
     }
-    const lines = events.map(syslogLine);
+    const site = await siteLabel();
+    const lines = events.map((ev) => syslogLine(site, ev));
     if (c.transport === 'udp') {
         const address = await resolveHost(c);
         const sock = dgram.createSocket(net.isIPv6(address) ? 'udp6' : 'udp4');
@@ -171,7 +173,7 @@ async function sendWebhook(c: ExportConfig, events: any[], secret: string): Prom
     const u = new URL(c.url);
     const egress = require('./egress-guard');
     if (!c.allowPrivate) await egress.assertUrlAllowed(u.href);
-    const body = JSON.stringify({ source: 'wordjs', site: siteLabel(), events });
+    const body = JSON.stringify({ source: 'wordjs', site: await siteLabel(), events });
     const ts = Math.floor(Date.now() / 1000);
     const headers: Record<string, string> = {
         'Content-Type': 'application/json', 'Content-Length': String(Buffer.byteLength(body)),
