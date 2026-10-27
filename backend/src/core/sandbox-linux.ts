@@ -356,7 +356,7 @@ function probeStdio(): any[] {
 
 const PROBE_SRC = [
     'var fs=require("fs");var net=require("net");var cp=require("child_process");var os=require("os");',
-    'var out={wrote:false,readSystem:false,exactRead:false,siblingCode:"NONE",readCode:"NONE",outCode:"NONE",signalCode:"NONE",processCode:"NONE",execCode:"NONE",capsCode:"NONE",netCode:"SKIP",unixCode:"SKIP",portCode:"SKIP",prioCode:"NONE",selfPrioCode:"NONE",truncCode:"NONE",chmodCode:"NONE",fdCode:"NONE"};',
+    'var out={wrote:false,readSystem:false,exactRead:false,siblingCode:"NONE",readCode:"NONE",outCode:"NONE",signalCode:"NONE",processCode:"NONE",execCode:"NONE",capsCode:"NONE",netCode:"SKIP",unixCode:"SKIP",portCode:"SKIP",prioCode:"NONE",selfPrioCode:"NONE",truncCode:"NONE",chmodCode:"NONE",fdCode:"NONE",copyCode:"NONE"};',
     'var inside=process.argv[1];var outside=process.argv[2];var denyNet=process.argv[3]==="1";var unixPath=process.argv[4];var exactFile=process.argv[5];var siblingFile=process.argv[6];var portTarget=Number(process.argv[7]||0);var victim=Number(process.argv[8]||0);var truncFile=process.argv[9]||"";',
     'function sysCode(e){return (e&&e.info&&e.info.code)||(e&&e.code)||"THROW";}',
     'try{os.setPriority(victim,19);out.prioCode="OPEN";}catch(e){out.prioCode=sysCode(e);}',
@@ -373,6 +373,8 @@ const PROBE_SRC = [
     'try{var q=cp.spawnSync(process.execPath,["-e","process.exit(0)"]);out.processCode=q.error?((q.error&&q.error.code)||"THROW"):(q.status===0?"OPEN":"FAIL");}catch(e){out.processCode=(e&&e.code)||"THROW";}',
     'try{var payload=inside+".sh";fs.writeFileSync(payload,"#!/bin/sh\\nexit 0\\n");var pfd=fs.openSync(payload,"r+");fs.fchmodSync(pfd,448);fs.closeSync(pfd);var x=cp.spawnSync(payload,[],{encoding:"utf8"});out.execCode=x.error?((x.error&&x.error.code)||"THROW"):(x.status===0?"OPEN":"FAIL");}catch(e){out.execCode=(e&&e.code)||"THROW";}',
     'try{fs.chmodSync(inside,384);out.chmodCode="OPEN";}catch(e){out.chmodCode=sysCode(e);}',
+    // An ordinary copy inside the zone: libuv sets the copy's mode and timestamps on its descriptor.
+    'try{fs.copyFileSync(inside,inside+".copy");out.copyCode=fs.readFileSync(inside+".copy","utf8")==="wjs"?"OK":"DIFFERENT";}catch(e){out.copyCode=sysCode(e);}',
     'try{var st=fs.readFileSync("/proc/self/status","utf8");var bad=[];for(var k of ["CapInh","CapPrm","CapEff","CapAmb"]){var m=st.match(new RegExp("^"+k+":\\\\s*([0-9a-f]+)","mi"));if(!m||!/^0+$/.test(m[1]))bad.push(k);}out.capsCode=bad.length?"OPEN:"+bad.join(","):"ZERO";var b=st.match(/^CapBnd:\\s*([0-9a-f]+)/mi);out.bndCode=!b?"MISSING":(/^0+$/.test(b[1])?"ZERO":"SET");out.euid=process.geteuid?process.geteuid():-1;}catch(e){out.capsCode=(e&&e.code)||"THROW";}',
     'function finish(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
@@ -398,7 +400,7 @@ const PROBE_SRC = [
  */
 const REFUSAL_CODES = new Set(['EPERM', 'EACCES']);
 
-type ProbeMsg = { wrote?: boolean; readSystem?: boolean; exactRead?: boolean; siblingCode?: string; readCode?: string; outCode?: string; signalCode?: string; processCode?: string; execCode?: string; capsCode?: string; bndCode?: string; euid?: number; netCode?: string; unixCode?: string; portCode?: string; prioCode?: string; selfPrioCode?: string; truncCode?: string; chmodCode?: string; fdCode?: string };
+type ProbeMsg = { wrote?: boolean; readSystem?: boolean; exactRead?: boolean; siblingCode?: string; readCode?: string; outCode?: string; signalCode?: string; processCode?: string; execCode?: string; capsCode?: string; bndCode?: string; euid?: number; netCode?: string; unixCode?: string; portCode?: string; prioCode?: string; selfPrioCode?: string; truncCode?: string; chmodCode?: string; fdCode?: string; copyCode?: string };
 /** Extra probe inputs: a loopback port outside the egress list, a sacrificial process, and a read-only file. */
 type ProbeExtra = { port: number; victimPid: number; truncFile: string };
 type ProbeRun = { msg: ProbeMsg | null; code: number | null; stderr: string };
@@ -627,7 +629,8 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 && control.msg.execCode === 'OPEN' && control.msg.netCode === 'CONNECTED'
                 && control.msg.unixCode === 'CONNECTED' && control.msg.portCode === 'CONNECTED'
                 && control.msg.prioCode === 'OPEN' && control.msg.selfPrioCode === 'OPEN'
-                && control.msg.truncCode === 'OPEN' && control.msg.chmodCode === 'OPEN' && control.msg.fdCode === 'OPEN');
+                && control.msg.truncCode === 'OPEN' && control.msg.chmodCode === 'OPEN' && control.msg.fdCode === 'OPEN'
+                && control.msg.copyCode === 'OK');
             if (!controlOk) {
                 zeroConfState = 'degraded';
                 zeroConfNote = 'the probe ABORTED: an UNCONFINED control child was itself refused, so a refusal from the confined child would prove nothing (an offline or read-only host does this)';
@@ -677,7 +680,8 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             // The syscall surface beyond Landlock: another process's priority, truncating a read-only file,
             // changing a file's mode, and a descriptor the launcher did not mean to hand over.
             const surfaceOk = (m: ProbeMsg | null) => !!(m && REFUSAL_CODES.has(String(m.prioCode)) && m.selfPrioCode === 'OPEN'
-                && REFUSAL_CODES.has(String(m.truncCode)) && REFUSAL_CODES.has(String(m.chmodCode)) && m.fdCode === 'EBADF');
+                && REFUSAL_CODES.has(String(m.truncCode)) && REFUSAL_CODES.has(String(m.chmodCode)) && m.fdCode === 'EBADF'
+                && m.copyCode === 'OK');
             const confinedSurface = surfaceOk(confined.msg);
 
             // Certify the network-GRANTED shape too. Landlock and the dangerous-syscall filter must stay
@@ -740,7 +744,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 + `capabilities=${capsDropped ? 'zero' : logSafe(`${(confined.msg && confined.msg.capsCode) || 'unknown'}/bounding=${(confined.msg && confined.msg.bndCode) || 'unknown'}`)} `
                 + `rawIpConnect=${netRefused ? 'refused' : logSafe((confined.msg && confined.msg.netCode) || 'unknown')} `
                 + `unixConnect=${unixRefused ? 'refused' : logSafe((confined.msg && confined.msg.unixCode) || 'unknown')} `
-                + `syscallSurface=${confinedSurface ? 'refused' : logSafe(`prio:${(confined.msg && confined.msg.prioCode) || '?'}/self:${(confined.msg && confined.msg.selfPrioCode) || '?'}/trunc:${(confined.msg && confined.msg.truncCode) || '?'}/chmod:${(confined.msg && confined.msg.chmodCode) || '?'}/fd:${(confined.msg && confined.msg.fdCode) || '?'}`)} `
+                + `syscallSurface=${confinedSurface ? 'refused' : logSafe(`prio:${(confined.msg && confined.msg.prioCode) || '?'}/self:${(confined.msg && confined.msg.selfPrioCode) || '?'}/trunc:${(confined.msg && confined.msg.truncCode) || '?'}/chmod:${(confined.msg && confined.msg.chmodCode) || '?'}/fd:${(confined.msg && confined.msg.fdCode) || '?'}/copy:${(confined.msg && confined.msg.copyCode) || '?'}`)} `
                 + `egressPorts=${allowedPortOk ? (portsByKernel ? 'kernel' : 'unavailable') : logSafe((allowed.msg && allowed.msg.portCode) || 'unknown')} `
                 + `networkGrantedShape=${allowedOk ? 'ok' : 'FAILED'} `
                 + `shimExit=${logSafe(confined.code)} shimSays=${logSafe(confined.stderr.trim().slice(0, 200))}`);

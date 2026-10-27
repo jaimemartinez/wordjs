@@ -145,10 +145,12 @@ if ($arch eq 'x86_64') {
         # semtimedop (the SysV call the list above missed), mount_setattr, quotactl_fd, statmount,
         # listmount and lsm_set_self_attr.
         220, 442, 443, 457, 458, 460,
-        # Ownership, mode, timestamp and extended-attribute changes: Landlock governs none of them at any
-        # ABI, so without this a child could re-mode or re-stamp files it may only read. fchmod (91) stays:
-        # it needs an open descriptor, and libuv's copyFile sets the copy's mode with it.
-        90, 268, 452, 92, 93, 94, 260, 132, 235, 261, 280,
+        # Ownership, mode and extended-attribute changes by path: Landlock governs none of them at any
+        # ABI, so without this a child could re-mode a host file outside its zones. fchmod (91) stays: it
+        # needs an open descriptor, and libuv's copyFile sets the copy's mode with it. Timestamps stay
+        # settable: libuv's copyFile stamps the copy (utimensat on its descriptor), and so do the common
+        # copy and archive libraries.
+        90, 268, 452, 92, 93, 94, 260,
         188, 189, 190, 197, 198, 199, 463, 466,
     );
 }
@@ -169,7 +171,7 @@ elsif ($arch eq 'aarch64') {
         200, 201, 202, 242,
         279, 281, 447, 425, 426, 427, 428, 429, 430, 431, 432, 433,
         442, 443, 457, 458, 460,
-        53, 452, 54, 55, 88,
+        53, 452, 54, 55,
         5, 6, 7, 14, 15, 16, 463, 466,
     );
 }

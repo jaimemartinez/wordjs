@@ -4,8 +4,9 @@
  *   · Another process's limits, priority and scheduling (prlimit64, setpriority, ioprio_set, sched_set*):
  *     refused unless the pid argument is 0 - the child keeps its own.
  *   · semtimedop, mount_setattr, quotactl_fd, statmount, listmount, lsm_set_self_attr: refused.
- *   · chmod/chown/utimes/xattr by path (Landlock has no such rights at any ABI): refused; fchmod stays,
- *     because libuv's copyFile uses it on the descriptor it just created.
+ *   · chmod/chown/xattr by path (Landlock has no such rights at any ABI): refused; fchmod stays,
+ *     because libuv's copyFile uses it on the descriptor it just created. Timestamps stay settable:
+ *     copyFile stamps the copy too, and the probe certifies that a copy works inside the sandbox.
  *   · fcntl F_SETOWN/F_SETOWN_EX and ioctl FIOSETOWN/SIOCSPGRP (choosing who gets SIGIO): refused.
  *   · Landlock ABI < 3 cannot refuse truncation: truncate(2) and an O_RDONLY|O_TRUNC open are refused by
  *     seccomp there (openat2, whose flags BPF cannot see, answers ENOSYS).
@@ -36,8 +37,11 @@ test('the missing calls are on both architectures\' denylists', () => {
 
 test('mode, owner, timestamp and xattr changes by path are refused; fchmod is kept for copyFile', () => {
     const X = blocked(x86), A = blocked(arm);
-    for (const nr of [90, 268, 452, 92, 93, 94, 260, 132, 235, 261, 280, 188, 189, 190, 197, 198, 199]) assert.ok(X.has(nr), `x86_64 ${nr}`);
-    for (const nr of [53, 452, 54, 55, 88, 5, 6, 7, 14, 15, 16]) assert.ok(A.has(nr), `aarch64 ${nr}`);
+    for (const nr of [90, 268, 452, 92, 93, 94, 260, 188, 189, 190, 197, 198, 199]) assert.ok(X.has(nr), `x86_64 ${nr}`);
+    // Timestamps stay settable: libuv's copyFile stamps the copy through utimensat on its descriptor.
+    for (const nr of [132, 235, 261, 280]) assert.ok(!X.has(nr), `x86_64 ${nr} (timestamps) must stay allowed`);
+    for (const nr of [53, 452, 54, 55, 5, 6, 7, 14, 15, 16]) assert.ok(A.has(nr), `aarch64 ${nr}`);
+    assert.ok(!A.has(88), 'aarch64 utimensat (timestamps) must stay allowed');
     assert.ok(!X.has(91), 'x86_64 fchmod stays (libuv copyFile)');
     assert.ok(!A.has(52), 'aarch64 fchmod stays (libuv copyFile)');
 });
@@ -84,6 +88,7 @@ test('the probe proves each row on the kernel: another pid\'s priority, truncati
     assert.match(src, /os\.setPriority\(0,os\.getPriority\(0\)\)/, 'its own priority stays settable');
     assert.match(src, /fs\.constants\.O_RDONLY\|fs\.constants\.O_TRUNC/);
     assert.match(src, /fs\.chmodSync\(inside,384\)/);
+    assert.match(src, /fs\.copyFileSync\(inside,inside\+"\.copy"\)/, 'a copy inside the zone is part of the certified surface');
     assert.match(src, /fs\.fstatSync\(32\)/);
     assert.match(src, /fs\.fchmodSync\(pfd,448\)/, 'the W^X row still makes its payload executable, with the call that remains');
     const mod = fs.readFileSync(require('path').join(__dirname, '..', 'core', 'sandbox-linux.ts'), 'utf8');
@@ -95,6 +100,7 @@ test('the probe proves each row on the kernel: another pid\'s priority, truncati
     assert.ok(stdio.slice(4, 32).every((x: string) => x === 'ignore'));
     assert.match(mod, /stdio: probeStdio\(\)/);
     assert.match(mod, /m\.fdCode === 'EBADF'/);
+    assert.match(mod, /&& m\.copyCode === 'OK'\)/);
     assert.match(mod, /&& confinedSurface && allowedOk\)/, 'the confined leg must pass the syscall-surface checks to certify');
     assert.doesNotThrow(() => new Function(src));
 });
