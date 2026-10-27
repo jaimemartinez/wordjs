@@ -18,6 +18,7 @@ const { isUniqueViolation } = require('../core/db-errors');
 const { EMAIL_FORMAT_RE, normalizeAddress } = require('../core/email-address');
 const accountCapabilities = require('../core/account-capabilities');
 const { LEGACY_META_KEY } = require('../core/legacy-account-flags');
+const log = require('../core/module-logger').moduleLogger('models/User');
 
 const SALT_ROUNDS = 12;
 /** The shape bcrypt (bcryptjs) produces: `$2a$`/`$2b$`/`$2y$`, a two-digit cost, 53 base64 characters. */
@@ -451,8 +452,24 @@ class User {
         return user;
     }
 
+    /**
+     * The ONE account a lookup names, or null — also when it names several. Uniqueness of logins and
+     * emails is a database rule only where its unique index could be built (core/unique-integrity): on a
+     * database that still holds duplicates, `get` would hand back whichever row the engine reads first,
+     * and a sign-in, a password reset or a plugin's lookup would act on that arbitrary account. Two
+     * matches are refused instead, and Site Health lists them for an administrator to resolve.
+     */
+    static async _onlyRow(sql: string, params: any[], what: string) {
+        const rows = (await dbAsync.all(`${sql} ORDER BY id ASC LIMIT 2`, params)) || [];
+        if (rows.length > 1) {
+            log.warn({ ids: rows.map((r: any) => r.id) }, `[users] a ${what} lookup matched more than one account; refused until the duplicates are resolved (Admin → Site Health → Duplicate records)`);
+            return null;
+        }
+        return rows[0] || null;
+    }
+
     static async findByLogin(login: string) {
-        const row = await dbAsync.get('SELECT * FROM users WHERE user_login = ?', [login]);
+        const row = await User._onlyRow('SELECT * FROM users WHERE user_login = ?', [login], 'login');
         if (!row) return null;
 
         const user = new User(row);
@@ -465,7 +482,7 @@ class User {
         // lowercased, so the column's LOWER() only has to ASCII-fold legacy mixed-case rows. This
         // matches non-ASCII confusable variants that SQLite's ASCII-only LOWER() alone would miss.
         const normalized = normalizeEmail(email);
-        const row = await dbAsync.get('SELECT * FROM users WHERE LOWER(user_email) = ?', [normalized]);
+        const row = await User._onlyRow('SELECT * FROM users WHERE LOWER(user_email) = ?', [normalized], 'email');
         if (!row) return null;
 
         const user = new User(row);

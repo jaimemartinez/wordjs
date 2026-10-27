@@ -6,6 +6,24 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **Audit log integrity.** Every audit entry is sealed into a hash chain. Admin → Audit and Site Health check it and
+  name the first entry that was changed or removed outside WordJS (`GET /api/v1/audit/verify`). Retention keeps the
+  chain verifiable.
+- **External copy of the audit log.** Admin → Audit can send every entry, with its place in the chain and its hashes,
+  to a syslog server (TLS, TCP or UDP) or an HTTPS webhook signed with HMAC-SHA256. Deliveries resume after an outage;
+  Site Health reports a copy that is off or failing.
+- **Duplicate records.** A new screen (linked from Site Health) lists logins, email addresses, page/post addresses and
+  term slugs stored more than once, and resolves each one: the chosen record keeps the value, the others get a new
+  unique one, nothing is deleted, and every change is audited. The unique index is then built without a restart.
+
+### Changed
+- Shortening the audit log's retention, or changing its external copy, asks for the administrator's password (and a
+  2FA code when enabled). The window moved from the generic settings API to `PUT /api/v1/audit/settings`; a stored
+  value under 90 days is read as 90.
+- The schema migrations that build unique indexes stay pending, and run again at every boot, until their index
+  exists. Sign-in, password reset and other lookups by login or email refuse a value two accounts share.
+
 ### Fixed
 - **mail-server 3.3.6: the server overview counts mail on PostgreSQL and MySQL, and keeps itself current.**
   - **«Received» and «Sent · last 14 days» and the traffic chart read 0 on PostgreSQL and MySQL.** Those databases

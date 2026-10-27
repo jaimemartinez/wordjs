@@ -933,6 +933,10 @@ class Post {
             params.push(...clause.params);
         }
 
+        // Deterministic where the unique (slug, type) index could not be built yet (duplicates, see
+        // core/unique-integrity): the published row first, then the oldest — never whichever row the
+        // engine happens to read first. Each candidate is still authorized on its own row by the caller.
+        sql += " ORDER BY CASE WHEN post_status = 'publish' THEN 0 ELSE 1 END, id ASC";
         const row = await dbAsync.get(sql, params);
         if (!row) {
             // Negative cache, short TTL. create() dels this key, so a brand-new post with a

@@ -2106,6 +2106,58 @@ export const auditApi = {
             `/audit?${params.toString()}`
         );
     },
+    /** Recompute the hash chain over the log (backend core/audit-chain). */
+    verify: () => apiGet<AuditChainReport>("/audit/verify"),
+    settings: () => apiGet<AuditSettings>("/audit/settings"),
+    /** Shortening retention or changing the copy needs currentPassword (+ mfaCode with 2FA). */
+    saveSettings: (body: { retentionDays?: number; export?: AuditExportConfig & { secret?: string }; currentPassword?: string; mfaCode?: string }) =>
+        apiPut<AuditSettings>("/audit/settings", body),
+    /** One test event through the SAVED copy (the backend never takes an address from the request). */
+    testExport: () => apiPost<{ ok: boolean; error?: string }>("/audit/export/test", {}),
+    flushExport: () => apiPost<{ delivered: number; export: AuditExportStatus }>("/audit/export/flush", {}),
+};
+
+export interface AuditChainReport {
+    ok: boolean;
+    complete: boolean;
+    checked: number;
+    pending: number;
+    oldestPendingAt: string | null;
+    head: { seq: number; hash: string } | null;
+    anchor: { seq: number; hash: string } | null;
+    firstBreak: { seq: number | null; id: number | null; reason: "start" | "gap" | "link" | "altered" } | null;
+}
+export interface AuditExportConfig {
+    mode: "off" | "syslog" | "webhook";
+    host: string;
+    port: number;
+    transport: "udp" | "tcp" | "tls";
+    url: string;
+    allowPrivate: boolean;
+}
+export interface AuditExportStatus {
+    config: AuditExportConfig;
+    hasSecret: boolean;
+    cursor: number;
+    behind: number;
+    oldestUndeliveredAt: string | null;
+    lastAttemptAt: string | null;
+    lastSuccessAt: string | null;
+    lastError: string | null;
+}
+export interface AuditSettings { retentionDays: number; choices: number[]; export: AuditExportStatus }
+
+// ── Admin → Duplicate records (backend routes/database-integrity.ts) ────────────────────────────────
+export type UniqueRuleId = "users.login" | "users.email" | "posts.slug" | "terms.slug";
+export interface UniqueRuleStatus { id: UniqueRuleId; table: string; index: string; enforced: boolean; duplicateGroups: number; error?: string }
+export interface DuplicateGroup { key: string; count: number; rows: Array<Record<string, unknown> & { id: number }> }
+export interface DuplicateChange { id: number; field: string; from: string; to: string }
+export const databaseIntegrityApi = {
+    status: () => apiGet<{ rules: UniqueRuleStatus[] }>("/database-integrity"),
+    duplicates: (rule: UniqueRuleId) => apiGet<{ rule: UniqueRuleId; groups: DuplicateGroup[] }>(`/database-integrity/${encodeURIComponent(rule)}/duplicates`),
+    resolve: (body: { rule: UniqueRuleId; key: string; keepId: number; currentPassword: string; mfaCode?: string }) =>
+        apiPost<{ changes: DuplicateChange[]; rules: UniqueRuleStatus[] }>("/database-integrity/resolve", body),
+    enforce: () => apiPost<{ enforced: UniqueRuleId[]; missing: UniqueRuleId[]; rules: UniqueRuleStatus[] }>("/database-integrity/enforce", {}),
 };
 
 // ── Multi-factor auth (TOTP) ─────────────────────────────────────────────────────────────────────

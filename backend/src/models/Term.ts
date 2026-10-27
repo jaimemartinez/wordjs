@@ -216,7 +216,10 @@ class Term {
       FROM terms t
       JOIN term_taxonomy tt ON t.term_id = tt.term_id
       WHERE t.slug = ? AND tt.taxonomy = ?
+      ORDER BY t.term_id ASC
     `, [slug, taxonomy]);
+        // ORDER BY: where the unique slug index could not be built yet (duplicates, core/unique-integrity)
+        // the same slug resolves to the same, oldest term every time instead of whichever row comes first.
         return row ? new Term(row) : null;
     }
 

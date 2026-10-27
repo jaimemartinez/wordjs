@@ -262,9 +262,13 @@ describe("DataTable cards fit a phone even with a long URL", () => {
         expect(audit).not.toMatch(/inline-block text-\[11px\] font-black uppercase tracking-wider px-2 py-1 rounded-md break-words/);
     });
 
-    it("Auditoría offers the retention windows the backend accepts", () => {
-        for (const v of ['"90"', '"180"', '"365"', '"730"', '"0"']) expect(audit).toContain(`value: ${v}`);
-        expect(audit).toContain("settingsApi.update({ audit_retention_days: value })");
+    it("Auditoría offers the retention windows the backend accepts, through its own API", () => {
+        // The window moved to AuditSettingsPanel (PUT /audit/settings, which re-authenticates a shorter one).
+        const panel = fs.readFileSync(path.resolve(__dirname, "../audit/AuditSettingsPanel.tsx"), "utf8");
+        for (const v of ['"90"', '"180"', '"365"', '"730"', '"0"']) expect(panel).toContain(`value: ${v}`);
+        expect(panel).toContain("auditApi.saveSettings({ retentionDays: Number(value)");
+        expect(audit).toContain("<AuditSettingsPanel />");
+        expect(audit).not.toContain("audit_retention_days");
     });
 });
 

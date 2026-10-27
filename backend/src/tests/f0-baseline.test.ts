@@ -186,6 +186,8 @@ describe('F0 live REST characterization', () => {
             contentAccess: '/api/v1/content-access',
             editor: '/api/v1/editor',
             emailTemplates: '/api/v1/email-templates',
+            // Added with Admin → Duplicate records (routes/database-integrity.ts).
+            databaseIntegrity: '/api/v1/database-integrity',
         });
     });
 
