@@ -6,6 +6,18 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **mail-server 3.3.5: the relay as a backup, and direct delivery that backs off.** On a server whose provider
+  limits outgoing port 25 (Hostinger allows 5 a minute), a failed delivery to Gmail tried every mail server over
+  IPv4 and IPv6: up to 10 connections per message, enough to keep the limit engaged.
+  - **A delivery stops after two mail servers of the recipient gave no reply at all.** Direct delivery then
+    pauses for 5 minutes. Messages that would go out during the pause wait in the queue without spending a retry
+    attempt, and *Configuration* shows the pause and when it ends.
+  - **«Use the relay»** in the relay settings has two choices:
+    - **«Always»** works as before: all outgoing mail goes through the relay.
+    - **«Only when direct delivery fails»** delivers straight to the recipients' servers and sends a message
+      through the relay when they give no answer or while direct delivery is paused.
+
 ## [2.11.13] - 2026-10-26
 
 ### Security
