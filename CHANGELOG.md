@@ -6,6 +6,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **conference-manager 2.36.22: cupos at a glance and family groups in the admin's edit form.** «Localidades» opens
+  with the conference's totals: assigned places (the sum of every locality's cupo), registered, places still
+  available and localities without a limit. Editing a participant, the grouping field («Grupo familiar») now lists
+  the groups of the person's locality, with who is in each, as the coordinator's portal does.
+
 ## [2.11.18] - 2026-10-27
 
 ## [2.11.17] - 2026-10-27
