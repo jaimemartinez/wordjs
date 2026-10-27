@@ -1855,6 +1855,21 @@ function egressTcpPortsFor(slug: string): number[] {
     } catch { /* no approved destinations */ }
     return Array.from(ports).sort((a, b) => a - b);
 }
+/**
+ * The TCP ports of the loopback destinations an administrator approved for this plugin (a relay or a
+ * tunnel on the host itself). macOS refuses loopback to every plugin unless one of these names it.
+ */
+function egressLoopbackTcpPortsFor(slug: string): number[] {
+    const ports = new Set<number>();
+    try {
+        for (const dest of require('./plugin-permissions').getPrivateDestinations(slug) || []) {
+            const m = /^(?:\[(::1)\]|(127\.\d{1,3}\.\d{1,3}\.\d{1,3})):(\d{1,5})$/.exec(String(dest));
+            const port = m ? Number(m[3]) : 0;
+            if (port >= 1 && port <= 65535) ports.add(port);
+        }
+    } catch { /* no approved destinations */ }
+    return Array.from(ports).sort((a, b) => a - b);
+}
 /** Did an administrator approve at least one private destination for this plugin? */
 function egressTcpPortsHasPrivate(slug: string): boolean {
     try { const l = require('./plugin-permissions').getPrivateDestinations(slug); return Array.isArray(l) && l.length > 0; } catch { return false; }
@@ -2332,6 +2347,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 readOnlyFiles: tsNodeProjectFiles,
                 denyNetwork: !netGranted,
                 egressTcpPorts: netGranted ? egressTcpPortsFor(slug) : [],
+                loopbackTcpPorts: netGranted ? egressLoopbackTcpPortsFor(slug) : [],
                 appRoot: APP_ROOT,
                 nodePath: process.execPath,
             });
@@ -3860,6 +3876,7 @@ module.exports = {
     __nativeSandboxRequired: nativeSandboxRequired,
     __sourceWorkerExempt: sourceWorkerExempt,
     __egressTcpPortsFor: egressTcpPortsFor,
+    __egressLoopbackTcpPortsFor: egressLoopbackTcpPortsFor,
     __rlimitArgs: rlimitArgs,
     __prlimitCandidates: PRLIMIT_CANDIDATES,
     __appContainerLaunchZones: appContainerLaunchZones,

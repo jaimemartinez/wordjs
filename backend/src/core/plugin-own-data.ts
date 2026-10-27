@@ -9,10 +9,16 @@
  * privilege needed), a directory symlink elsewhere. Paths the plugin builds with `__dirname` keep working,
  * and every layer checks the link's TARGET, which is the plugin's writable zone.
  *
- * The move is a rename on the same volume (both live under the install root), so nothing is copied and
- * nothing is lost; a failure part-way puts the folder back and refuses the launch rather than starting the
- * plugin without its data (mail-server would otherwise mint a new key and lose access to every stored
- * secret).
+ * The move is a rename when both folders are on the same volume, so nothing is copied. Where they are not
+ * (a container whose `backend/data` is its own volume), each entry is copied beside its destination,
+ * compared file by file, renamed into place and only then removed from the code directory. Every step can
+ * be interrupted and the next start finishes it: the source is removed last, a half-made copy is
+ * discarded, and an entry already moved is recognised by its content. A failure that cannot be finished
+ * puts the folder back and refuses the launch rather than starting the plugin without its data (a plugin
+ * would otherwise mint a new key and lose access to every secret it stored).
+ *
+ * Two shapes are refused, never rearranged: a `data` link to an existing folder WordJS did not choose (an
+ * operator may keep the plugin's data there on purpose), and a `data` folder that is a mount point.
  */
 const fs = require('fs');
 const path = require('path');
@@ -40,17 +46,76 @@ function removeLink(link: string): void {
     try { fs.unlinkSync(link); } catch { fs.rmdirSync(link); }
 }
 
-/** Move every entry of `from` into `to`; an entry that already exists there goes to a dated folder. */
+const INCOMING_RE = /\.incoming-\d+-\d+$/;
+
+function fileDigest(p: string): string {
+    return require('crypto').createHash('sha256').update(fs.readFileSync(p)).digest('hex');
+}
+
+function isLink(p: string): boolean {
+    try { return fs.lstatSync(p).isSymbolicLink(); } catch { return false; }
+}
+
+/** Same tree: same names, types, link targets and file contents. Links are compared, never followed. */
+function sameTree(a: string, b: string): boolean {
+    let sa: any, sb: any;
+    try { sa = fs.lstatSync(a); sb = fs.lstatSync(b); } catch { return false; }
+    if (sa.isSymbolicLink() || sb.isSymbolicLink()) {
+        return sa.isSymbolicLink() && sb.isSymbolicLink() && fs.readlinkSync(a) === fs.readlinkSync(b);
+    }
+    if (sa.isDirectory() || sb.isDirectory()) {
+        if (!sa.isDirectory() || !sb.isDirectory()) return false;
+        const na = fs.readdirSync(a).sort();
+        const nb = fs.readdirSync(b).sort();
+        if (na.length !== nb.length || na.some((n: string, i: number) => n !== nb[i])) return false;
+        return na.every((n: string) => sameTree(path.join(a, n), path.join(b, n)));
+    }
+    return sa.isFile() && sb.isFile() && sa.size === sb.size && fileDigest(a) === fileDigest(b);
+}
+
+/**
+ * Move one entry (file, folder or link) to `dest`, which must not exist. A rename when it can be; across
+ * volumes, a copy next to `dest` that is compared with the source and renamed into place, and only then is
+ * the source removed. Links are copied as links, never followed.
+ */
+function moveEntry(src: string, dest: string): void {
+    try { fs.renameSync(src, dest); return; } catch (e: any) { if (!e || e.code !== 'EXDEV') throw e; }
+    const tmp = `${dest}.incoming-${process.pid}-${Date.now()}`;
+    try {
+        fs.cpSync(src, tmp, { recursive: true, verbatimSymlinks: true, preserveTimestamps: true, errorOnExist: true, force: false });
+        if (!sameTree(src, tmp)) throw new Error(`the copy of ${src} does not match the original`);
+        fs.renameSync(tmp, dest);
+    } catch (e) {
+        try { fs.rmSync(tmp, { recursive: true, force: true }); } catch { /* best effort */ }
+        throw e;
+    }
+    fs.rmSync(src, { recursive: true, force: true });
+}
+
+/** Discard half-made copies an interrupted move left in `dir` (their sources are still complete). */
+function discardIncoming(dir: string): void {
+    let names: string[];
+    try { names = fs.readdirSync(dir); } catch { return; }
+    for (const n of names) {
+        if (INCOMING_RE.test(n)) { try { fs.rmSync(path.join(dir, n), { recursive: true, force: true }); } catch { /* */ } }
+    }
+}
+
+/**
+ * Move every entry of `from` into `to`. An entry already there with the same content (a move interrupted
+ * after its copy landed) is only removed from `from`; a different one goes to a dated folder.
+ */
 function mergeInto(from: string, to: string): void {
     const conflicts = path.join(to, `.migrated-${new Date().toISOString().replace(/[:.]/g, '-')}`);
     for (const entry of fs.readdirSync(from)) {
         const src = path.join(from, entry);
         let dest = path.join(to, entry);
-        if (fs.existsSync(dest)) {
+        if (fs.existsSync(dest) || isLink(dest)) {
+            if (sameTree(src, dest)) { fs.rmSync(src, { recursive: true, force: true }); continue; }
             fs.mkdirSync(conflicts, { recursive: true });
             dest = path.join(conflicts, entry);
         }
-        fs.renameSync(src, dest);
+        moveEntry(src, dest);
     }
 }
 
@@ -66,6 +131,8 @@ function prepareOwnDataLink(appRoot: string, slug: string): OwnDataOutcome {
     // No code directory, nothing to run and nothing to link: the launch fails on its own, for that reason.
     if (!fs.existsSync(p.own)) return 'absent';
     fs.mkdirSync(path.dirname(target), { recursive: true, mode: 0o700 });
+    discardIncoming(path.dirname(target));
+    discardIncoming(target);
     let st: any;
     try { st = fs.lstatSync(link); } catch { st = null; }
 
@@ -76,8 +143,14 @@ function prepareOwnDataLink(appRoot: string, slug: string): OwnDataOutcome {
             fs.mkdirSync(target, { recursive: true, mode: 0o700 });
             return 'linked';
         }
-        // A link that points anywhere else is not one this module made: replace it (the code directory is
-        // read-only to the plugin, so only something outside the sandbox could have changed it).
+        // A link to a folder that exists is not one this module made: an operator may keep the plugin's
+        // data there on purpose, so it is never replaced (that would hide the data from the plugin).
+        let elsewhere = false;
+        try { elsewhere = !!points && fs.statSync(path.resolve(path.dirname(link), points)).isDirectory(); } catch { /* dangling */ }
+        if (elsewhere) {
+            throw new Error(`the plugin's data path ${link} links to another folder: move that folder's contents into ${target} and remove the link, then start the plugin again`);
+        }
+        // A dangling link holds nothing: point it at the plugin's data folder.
         fs.mkdirSync(target, { recursive: true, mode: 0o700 });
         removeLink(link);
         fs.symlinkSync(target, link, linkType());
@@ -92,13 +165,19 @@ function prepareOwnDataLink(appRoot: string, slug: string): OwnDataOutcome {
         return 'created';
     }
 
+    // A mount point cannot be moved, or replaced by a link, without unmounting it.
+    let parentDev: number | null = null;
+    try { parentDev = fs.statSync(p.own).dev; } catch { /* */ }
+    if (parentDev !== null && st.dev !== parentDev) {
+        throw new Error(`the plugin's data folder ${link} is a mount point: mount it at ${target} instead, then start the plugin again`);
+    }
     // A real folder: move its contents into the private data directory, then link.
     let outcome: OwnDataOutcome;
     const targetExists = fs.existsSync(target);
     const targetEmpty = targetExists && fs.readdirSync(target).length === 0;
     if (!targetExists || targetEmpty) {
         if (targetEmpty) fs.rmdirSync(target);
-        fs.renameSync(link, target);
+        moveEntry(link, target);
         outcome = 'migrated';
     } else {
         mergeInto(link, target);
@@ -111,7 +190,7 @@ function prepareOwnDataLink(appRoot: string, slug: string): OwnDataOutcome {
         // Put the folder back where the plugin expects it, so nothing is lost and a later launch retries.
         try {
             if (!fs.existsSync(link)) {
-                if (outcome === 'migrated') fs.renameSync(target, link);
+                if (outcome === 'migrated') moveEntry(target, link);
                 else { fs.mkdirSync(link); mergeInto(target, link); }
             }
         } catch { /* the data stays complete in `target`; the error below names it */ }
@@ -137,4 +216,4 @@ function discardIfEmpty(dataPath: string): boolean {
     return true;
 }
 
-module.exports = { prepareOwnDataLink, discardIfEmpty };
+module.exports = { prepareOwnDataLink, discardIfEmpty, __moveEntry: moveEntry, __sameTree: sameTree };

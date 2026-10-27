@@ -273,6 +273,11 @@ export type SeatbeltProfileOptions = {
      * with Landlock). Every other TCP port and every loopback destination is refused by the kernel.
      */
     egressTcpPorts?: number[];
+    /**
+     * The loopback TCP ports of destinations an administrator approved for this plugin (a relay or a
+     * tunnel on the host itself): allowed again after the loopback refusal, those ports only.
+     */
+    loopbackTcpPorts?: number[];
     /** The application root. Read-only to the child except for the writable zones above. */
     appRoot: string;
     /** Narrow code/dependency roots. When present these replace the legacy whole-appRoot read grant. */
@@ -306,6 +311,8 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     const denyNetwork = !!(opts && opts.denyNetwork);
     const rawNode = (opts && opts.nodePath) || process.execPath;
     const egressPorts = Array.from(new Set((Array.isArray(opts && opts.egressTcpPorts) ? (opts.egressTcpPorts as number[]) : [53, 80, 443])
+        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535))).sort((a, b) => a - b);
+    const loopbackPorts = Array.from(new Set((Array.isArray(opts && opts.loopbackTcpPorts) ? (opts.loopbackTcpPorts as number[]) : [])
         .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535))).sort((a, b) => a - b);
 
     // ── Resolve every caller-supplied path to the spellings the kernel will actually check ──────────
@@ -634,9 +641,12 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
         for (const port of egressPorts) L.push(`(allow network-outbound (remote tcp "*:${port}"))`);
         L.push('(allow network-outbound (remote udp "*:*"))                 ;; UDP clients (DNS to a resolver), as on Linux');
         L.push('(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder"))) ;; getaddrinfo()');
-        L.push(';; The host itself is never a destination: loopback services (the backend, its database, a local');
-        L.push(';; cache) stay out of reach whatever the port. Last, so it wins over the allows above.');
+        L.push(';; The host itself is not a destination: loopback services (the backend, its database, a local');
+        L.push(';; cache) stay out of reach whatever the port. After the allows above, so it wins over them; only');
+        L.push(';; an administrator-approved loopback destination is allowed again, on its own port.');
         L.push('(deny network-outbound (remote ip "localhost:*"))');
+        if (loopbackPorts.length) L.push(';; Loopback destinations an administrator approved for this plugin, on their ports only.');
+        for (const port of loopbackPorts) L.push(`(allow network-outbound (remote tcp "localhost:${port}"))`);
         L.push('(allow file-read* (literal "/private/etc/resolv.conf") (literal "/etc/resolv.conf") (subpath "/private/var/run/resolv.conf")) ;; DNS configuration');
         L.push('(allow mach-lookup');
         L.push('    (global-name "com.apple.SystemConfiguration.configd") ;; interface/DNS configuration');

@@ -84,6 +84,29 @@ test('macOS: only the plugin\'s TCP ports, UDP clients, mDNSResponder - and neve
     assert.ok(!/remote tcp/.test(denied), 'a denied plugin gets no port at all');
 });
 
+test('an approved loopback destination is honoured for any plugin: its port on Linux, and on macOS loopback for that port only', () => {
+    const perms = require('../core/plugin-permissions');
+    const realPrivate = perms.getPrivateDestinations;
+    try {
+        perms.getPrivateDestinations = () => ['127.0.0.1:2525', '[::1]:6000', '10.0.0.5:5432', '127.0.0.2:8025'];
+        assert.deepStrictEqual(isolate.__egressLoopbackTcpPortsFor('sample-relay'), [2525, 6000, 8025], 'loopback destinations only, never a LAN one');
+        assert.ok([2525, 6000, 5432, 8025].every((n) => isolate.__egressTcpPortsFor('sample-relay').includes(n)), 'every approved port reaches the Linux port rules');
+        perms.getPrivateDestinations = () => [];
+        assert.deepStrictEqual(isolate.__egressLoopbackTcpPortsFor('sample-relay'), []);
+    } finally { perms.getPrivateDestinations = realPrivate; }
+
+    const p = mac.buildSeatbeltProfile({ writableDirs: ['/srv/wordjs/backend/data/plugin-own/x'], denyNetwork: false, egressTcpPorts: [443, 2525], loopbackTcpPorts: [2525], appRoot: '/srv/wordjs/backend', nodePath: '/usr/local/bin/node' });
+    const deny = p.indexOf('(deny network-outbound (remote ip "localhost:*"))');
+    const allowLoop = p.indexOf('(allow network-outbound (remote tcp "localhost:2525"))');
+    assert.ok(deny > 0 && allowLoop > deny, 'the approved loopback port is allowed again AFTER the loopback refusal');
+    assert.ok(!/remote tcp "localhost:(?!2525")/.test(p), 'no other loopback port');
+    assert.deepStrictEqual(mac.auditProfile(p), []);
+    const none = mac.buildSeatbeltProfile({ writableDirs: ['/srv/z'], denyNetwork: false, egressTcpPorts: [443], appRoot: '/srv/wordjs/backend', nodePath: '/usr/local/bin/node' });
+    assert.ok(!/remote tcp "localhost:/.test(none), 'without an approval loopback stays refused');
+    const isoSrc = fs.readFileSync(path.join(__dirname, '..', 'core', 'plugin-isolate.ts'), 'utf8');
+    assert.match(isoSrc, /loopbackTcpPorts: netGranted \? egressLoopbackTcpPortsFor\(slug\) : \[\]/);
+});
+
 test('macOS probe: the granted shape must be refused a loopback port', () => {
     const mod = fs.readFileSync(path.join(__dirname, '..', 'core', 'sandbox-macos.ts'), 'utf8');
     assert.match(mod, /allowed\.netCode === 'CONNECTED' && refused\(allowed\.portCode\)/);
