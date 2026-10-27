@@ -94,8 +94,8 @@ function sandboxPaths(appRoot: string, slug: string, coreDir: string, siteId: nu
         ownWritable,
         // No APP_ROOT grant: configuration, the database and sibling plugins are deliberately absent.
         readOnly: [path.resolve(coreDir), path.join(root, 'node_modules'), own],
-        // The code directory is READ-ONLY at every layer: a plugin can never rewrite its own code or
-        // manifest. What it writes without a grant goes to its own data directory (site 1).
+        // The code directory of a plugin or a theme is READ-ONLY at every layer: it can never rewrite its
+        // own code or manifest. What it writes without a grant goes to its own data directory (site 1).
         writable: ownWritable ? [ownData, ...storage] : [...storage],
         // Windows needs directory traversal to reach the narrow descendants without inheriting a read ACE.
         traverse: [root, path.dirname(own)],

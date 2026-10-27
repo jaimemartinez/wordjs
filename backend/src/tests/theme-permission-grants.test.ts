@@ -185,12 +185,14 @@ test('filesystem: declared and not granted is denied in the theme child; granted
     // refuses the write: in both cases the theme does not get to write.
     if (state === 'running') assert.strictEqual(await fsProbe(), 'denied');
     else assert.strictEqual(state, 'blocked');
+    // The theme's own data/ (its private storage, a link out of the read-only code folder).
     assert.strictEqual(fs.existsSync(path.join(THEMES_DIR, FS_PROBE, 'data', 'probe.txt')), false);
 
     const granted = await request(app).put(`/api/v1/themes/${FS_PROBE}/permissions`).set(auth()).send({ granted: ['filesystem:write'] });
     assert.strictEqual(granted.status, 200, JSON.stringify(granted.body));
     assert.strictEqual(granted.body.logic.state, 'running');
     assert.strictEqual(await fsProbe(), 'wrote');
+    assert.ok(fs.existsSync(path.join(require('../core/sandbox-paths').ownDataDir(path.dirname(THEMES_DIR), `theme:${FS_PROBE}`), 'probe.txt')), 'the write landed in the own data directory of the theme');
 });
 
 test('a theme update that stops declaring a permission loses its grant; deleting a theme drops its record', async () => {

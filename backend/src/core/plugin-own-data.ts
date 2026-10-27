@@ -216,4 +216,13 @@ function discardIfEmpty(dataPath: string): boolean {
     return true;
 }
 
-module.exports = { prepareOwnDataLink, discardIfEmpty, __moveEntry: moveEntry, __sameTree: sameTree };
+/**
+ * Take `<dir>/data` off a code directory that is about to be replaced or removed, when it is the link to
+ * the own data directory: a recursive removal then never meets the link, and the data stays where it is.
+ */
+function detachOwnDataLink(dir: string): void {
+    const link = path.join(dir, 'data');
+    if (isLink(link)) removeLink(link);
+}
+
+module.exports = { prepareOwnDataLink, discardIfEmpty, detachOwnDataLink, __moveEntry: moveEntry, __sameTree: sameTree };

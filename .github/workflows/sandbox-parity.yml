@@ -197,6 +197,12 @@ jobs:
       # APPLICATION PACKAGES once the probe protected it (and read it before - the control); with the
       # private network ranges for apps set, internetClient alone must not reach the cloud metadata service
       # while privateNetworkClientServer does; owner rights and the AppContainer launch itself on real ACLs.
+      - name: Diagnose private-destination classification for AppContainers (informational)
+        if: runner.os == 'Windows'
+        continue-on-error: true
+        working-directory: backend
+        run: node -r ts-node/register scripts/diagnose-windows-netiso.js
+
       - name: Certify the Windows host settings (AppContainer, ACLs, private networks)
         if: runner.os == 'Windows'
         working-directory: backend

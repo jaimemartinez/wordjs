@@ -1151,12 +1151,13 @@ async function launchInAppContainer(opts: LaunchOpts): Promise<LaunchResult> {
         env: relayEnv,
     });
 
-    // The contained pid appears only after the relay's CreateProcess returns; poll briefly rather than
-    // block a load on it. A null pid is not fatal -- teardown goes through the job, not the pid; only the
-    // RSS poll and operator telemetry want it.
+    // The contained pid appears only after the relay's CreateProcess returns. A null pid is not fatal --
+    // teardown goes through the job, not the pid -- but the RSS poll needs it. The relay is a cold
+    // PowerShell start plus an Add-Type compile: ~20 s on a slow host (GitHub's Windows runners), so the
+    // wait covers that; it ends at once when the pid is written or the relay dies.
     let containedPid: number | null = null;
     if (pidFile) {
-        const deadline = Date.now() + 15000;
+        const deadline = Date.now() + 45000;
         while (Date.now() < deadline) {
             if (child.exitCode !== null && child.exitCode !== undefined) break; // relay already died; stop waiting
             try {

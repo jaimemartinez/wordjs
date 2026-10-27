@@ -812,6 +812,10 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
     const ownDir = nativePaths.own;
     const ownData = nativePaths.ownData;
     const viaDataLink = under(resolved, nativePaths.ownDataLink);
+    // A path inside the code dir whose real destination is the own data directory - `data/...`, or any
+    // other spelling that resolves through the `data` link. Decided by where the syscall lands.
+    const reachesOwnData = (): boolean => nativePaths.ownWritable
+        && under(resolved, ownDir) && under(canonicalize(resolved), canonicalize(ownData));
 
     // ── THE REVOCATION IS ENFORCED HERE, AT THE CALL, NOT BY A STATIC SCANNER ────────────────────────
     //
@@ -883,7 +887,7 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
             ? (isThemePublishedPath(ownDir, resolved) || isThemePublishedPath(ownReal, canon))
             : (isPluginPublishedPath(ownDir, resolved) || isPluginPublishedPath(ownReal, canon));
         // The `data` link leads out of the served tree into the own data directory, which nothing publishes.
-        const linkedData = viaDataLink && under(canon, canonicalize(ownData));
+        const linkedData = reachesOwnData();
         if (!linkedData && (!withinOwn || publishedInOwn)) {
             throttledWarn(`${pluginSlug}:published-write`, `[Security Block] Plugin '${pluginSlug}' tried to write into a PUBLICLY SERVED path: ${resolved}`);
             return false;
@@ -898,7 +902,9 @@ function isPathSafe(targetPath: string, isWrite = false, knownSlug?: string | nu
     // `<code dir>/data/...` is the own data directory by another name - but only while the link really
     // leads there (the path the syscall reaches is what is checked), and only for site 1's worker.
     if (viaDataLink) {
-        isAllowed = nativePaths.ownWritable && under(canonicalize(resolved), canonicalize(ownData));
+        isAllowed = reachesOwnData();
+    } else if (!isAllowed && isWrite && reachesOwnData()) {
+        isAllowed = true;
     }
     if (!isAllowed && isWrite && under(resolved, ownDir)) {
         throttledWarn(`${pluginSlug}:code-dir-write`, `[Security Block] Plugin '${pluginSlug}' tried to WRITE its own code folder, which is read-only (keep data under its data/ folder): ${resolved}`);
