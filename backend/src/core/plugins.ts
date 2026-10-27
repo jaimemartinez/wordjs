@@ -837,6 +837,12 @@ function validateManifestPermissions(permissions: any): string[] {
             return;
         }
         const allowed = KNOWN_PERMISSIONS[p.scope];
+        // The network permission may name the TCP ports the plugin connects to beyond DNS and the web
+        // (the kernel sandbox refuses every other port): at most 16 integers 1-65535.
+        if (p.scope === 'network' && p.ports !== undefined) {
+            const ok = Array.isArray(p.ports) && p.ports.length <= 16 && p.ports.every((n: any) => Number.isInteger(n) && n >= 1 && n <= 65535);
+            if (!ok) problems.push(`permissions[${i}].ports must be an array of at most 16 TCP port numbers (1-65535).`);
+        }
         if (allowed.length === 0) return; // scope-only (network)
         if (!allowed.includes(p.access)) {
             problems.push(`Permission "${p.scope}" has invalid access "${p.access}" (valid: ${allowed.join(', ')}).`);
@@ -2075,6 +2081,7 @@ function ensurePluginsDir() {
  * outside its zones — refused, logged on every queue pass (X4-15), and the caller got an empty install.
  * Never hands plugin-controlled paths to the guard bypass: the directory is the host's constant.
  */
+const reservedSlugsLogged = new Set<string>();
 function scanPlugins(): Plugin[] {
     return require('./plugin-context').runAsHost(() => scanPluginsImpl());
 }
@@ -2086,6 +2093,17 @@ function scanPluginsImpl(): Plugin[] {
 
     for (const entry of entries) {
         if (!entry.isDirectory()) continue;
+        // A directory whose name is a host-reserved slug (`core`, `theme-*`, `@*` — core/plugin-slug-policy)
+        // is never listed, so it can never be activated or loaded: the installer refuses such a slug, and
+        // a directory that reached plugins/ some other way is refused here, once per name in the log.
+        const reserved = require('./plugin-slug-policy').reservedPluginSlugReason(entry.name);
+        if (reserved) {
+            if (!reservedSlugsLogged.has(entry.name)) {
+                reservedSlugsLogged.add(entry.name);
+                log.warn(`[Plugins] Not loading plugins/${logSafe(entry.name)}: ${logSafe(reserved)}. Rename the directory to load it.`);
+            }
+            continue;
+        }
 
         const pluginDir = path.join(PLUGINS_DIR, entry.name);
         const manifestPath = path.join(pluginDir, 'manifest.json');
@@ -3283,6 +3301,14 @@ async function purgePluginSiteData(slug: string, accountCapabilities: string[], 
         try { siteIds = siteIds.concat(require('./network').listSites().map((s: any) => Number(s.id)).filter((id: number) => id !== siteContext.PRIMARY_SITE_ID)); }
         catch { /* single site */ }
     }
+    // The plugin's own data folder (what used to be its code dir's data/; core/plugin-own-data).
+    try {
+        const ownData = require('./sandbox-paths').ownDataDir(appRoot, slug);
+        if (fs.existsSync(ownData)) {
+            require('./plugin-context').runAsHost(() => fs.rmSync(ownData, { recursive: true, force: true }));
+            out.storageRemoved.push(path.relative(appRoot, ownData));
+        }
+    } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] could not remove its data folder`); }
     for (const siteId of siteIds) {
         for (const dir of privateStorageDirs(appRoot, slug, siteId)) {
             try {
@@ -3308,6 +3334,25 @@ function pluginWorkerSiteIds(): number[] {
 }
 
 /**
+ * The tables of the current site's database that carry `slug`'s prefix (wjp_<slug>_*). Used by the
+ * uninstall that drops them and by the installer, which reports the ones a previous uninstall kept.
+ * Throws when the database cannot be listed — callers decide whether that is fatal.
+ */
+async function listPluginTables(slug: string): Promise<string[]> {
+    const { dbAsync, getDbType } = require('../config/database');
+    const { isPostgres, isMySQL } = getDbType();
+    // Mirror plugin-worker.js's tablePrefix normalization exactly.
+    const prefix = ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
+    const rows = isPostgres
+        ? await dbAsync.all("SELECT tablename AS name FROM pg_tables WHERE schemaname = current_schema()")
+        : isMySQL
+            ? await dbAsync.all("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE()")
+            : await dbAsync.all("SELECT name FROM sqlite_master WHERE type='table'");
+    // Filter in JS by the exact plugin prefix (no LIKE params → no cross-driver escaping pitfalls).
+    return (rows || []).map((r: any) => String(r.name)).filter((n: string) => n.toLowerCase().startsWith(prefix));
+}
+
+/**
  * `retireSandbox: false` — the in-place UPDATE (runPluginUpdate): the plugin stays, under the same slug and
  * so the same AppContainer profile and zones, and its next launch is granted exactly what retiring would
  * revoke. Skipping it is what keeps an update from walking node_modules twice on Windows (FALLOS 149); the
@@ -3324,17 +3369,8 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
     try { await require('./plugin-assets').clearAssets(slug); } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] clearAssets failed`); }
     if (dropTables) {
         try {
-            const { dbAsync, getDbType } = require('../config/database');
-            const { isPostgres, isMySQL } = getDbType();
-            // Mirror plugin-worker.js's tablePrefix normalization exactly.
-            const prefix = ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
-            const rows = isPostgres
-                ? await dbAsync.all("SELECT tablename AS name FROM pg_tables WHERE schemaname = current_schema()")
-                : isMySQL
-                    ? await dbAsync.all("SELECT table_name AS name FROM information_schema.tables WHERE table_schema = DATABASE()")
-                    : await dbAsync.all("SELECT name FROM sqlite_master WHERE type='table'");
-            // Filter in JS by the exact plugin prefix (no LIKE params → no cross-driver escaping pitfalls).
-            const mine = (rows || []).map((r: any) => r.name).filter((n: string) => String(n).toLowerCase().startsWith(prefix));
+            const { dbAsync } = require('../config/database');
+            const mine = await listPluginTables(slug);
             const dropped = await dropTablesInDependencyOrder(mine, (name) => dbAsync.run(`DROP TABLE IF EXISTS "${String(name).replace(/"/g, '')}"`));
             result.tablesDropped.push(...dropped.dropped);
             if (dropped.kept.length) {
@@ -3347,6 +3383,8 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
     // Drop the plugin's DB role (Postgres) — AFTER its tables so DROP ROLE has no dependency errors. No-op else.
     try { await require('./plugin-db-isolation').deprovision(slug); }
     catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[uninstall ${logSafe(slug)}] db role drop failed`); }
+    // The code goes (or is replaced): its fingerprint is taken again at the next install's first launch.
+    try { require('./plugin-integrity').forgetPluginIntegrity(path.resolve(__dirname, '..', '..'), slug); } catch { /* recorded again at launch */ }
     if (process.platform === 'win32' && retireSandbox) {
         try {
             const appRoot = path.resolve(__dirname, '..', '..');
@@ -3379,6 +3417,7 @@ module.exports = {
     clearOrphanNotice,
     ORPHAN_NOTICE_PREFIX,
     uninstallPluginData,
+    listPluginTables,
     pluginWorkerSiteIds,
     activatePlugin,
     deactivatePlugin,

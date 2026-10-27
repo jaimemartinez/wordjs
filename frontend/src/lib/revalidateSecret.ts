@@ -1,6 +1,7 @@
 import fs from "fs";
 import path from "path";
 import https from "https";
+import { checkGatewayIdentity } from "./gatewayIdentity";
 
 /**
  * The shared secret that authenticates on-demand cache purges (see app/api/revalidate/route.ts).
@@ -123,7 +124,8 @@ export function readClusterIdentity(
  * Identical in shape and strictness to the backend's own gateway leg (`gatewayPurgeOptions`): the
  * cluster CA verifies the gateway, this node's `CN=frontend` certificate proves who is asking, and
  * `rejectUnauthorized` stays TRUE — the gateway's internal cert carries the advertise host in its
- * SANs, so ordinary hostname verification is enough and nothing has to be relaxed.
+ * SANs, so hostname verification passes — and the certificate must also NAME the gateway
+ * (`checkGatewayIdentity`), since every cluster certificate carries the loopback SANs.
  *
  * Exported so a test can assert the material really comes from the configured mTLS paths.
  */
@@ -139,6 +141,7 @@ export function clusterSecretRequestOptions(id: ClusterNodeIdentity): Record<str
         key: fs.readFileSync(id.key),
         cert: fs.readFileSync(id.cert),
         rejectUnauthorized: true,
+        checkServerIdentity: checkGatewayIdentity,
     };
 }
 

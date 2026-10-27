@@ -656,3 +656,26 @@ describe('plugin in-place update', () => {
         assert.deepStrictEqual(ad.seen.retireSandbox, [true]);
     });
 });
+
+describe('normSource (the source identity an update is gated on)', () => {
+    it('trims trailing slashes and case, and nothing else', () => {
+        const { normSource } = require('../core/plugin-origins');
+        assert.strictEqual(normSource('https://Market.Example.com/catalog///'), 'https://market.example.com/catalog');
+        assert.strictEqual(normSource('https://market.example.com//catalog/'), 'https://market.example.com//catalog');
+        assert.strictEqual(normSource('///'), '');
+        assert.strictEqual(normSource(null), '');
+        assert.strictEqual(normSource(undefined), '');
+        assert.strictEqual(normSource(42), '42');
+    });
+
+    it('is linear on a long run of slashes followed by another character', () => {
+        const { normSource } = require('../core/plugin-origins');
+        const crafted = 'https://x' + '/'.repeat(100000) + 'a';
+        const started = process.hrtime.bigint();
+        assert.strictEqual(normSource(crafted), crafted.toLowerCase());
+        assert.strictEqual(normSource(crafted + '/'.repeat(100000)), crafted.toLowerCase());
+        const ms = Number(process.hrtime.bigint() - started) / 1e6;
+        // The anchored regex took seconds here (quadratic); the walk takes well under one.
+        assert.ok(ms < 500, `normSource took ${ms.toFixed(1)} ms`);
+    });
+});

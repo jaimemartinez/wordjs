@@ -27,7 +27,20 @@ type MigrationCtx = {
     driverName: string;
 };
 
-type Migration = { id: string; up: (ctx: MigrationCtx) => Promise<void> };
+/**
+ * What `up` may answer. Nothing (or undefined) = applied, recorded. `{ deferred }` = the migration could not
+ * finish for a reason the DATA holds (rows that break a unique rule): it is NOT recorded, the boot goes on,
+ * and the next boot runs it again. A thrown error still aborts the boot.
+ */
+type MigrationResult = void | { deferred: string };
+type Migration = { id: string; up: (ctx: MigrationCtx) => Promise<MigrationResult> };
+
+/** `{ deferred }` while any of `rules` is not enforced by its unique index yet (see core/unique-integrity). */
+function deferUntilEnforced(tag: string, rules: string[], result: { enforced: string[]; missing: string[] }): MigrationResult {
+    const missing = rules.filter((r) => !result.enforced.includes(r));
+    if (!missing.length) return;
+    return { deferred: `[migration ${tag}] unique rule(s) ${missing.join(', ')} not enforced yet; resolve the duplicates in Admin → Site Health` };
+}
 
 // Ordered list of schema migrations. Empty = base schema only (the framework is wired and will apply
 // the first real migration the moment one is added here). KEEP IN ORDER; never edit an applied id.
@@ -37,64 +50,17 @@ const MIGRATIONS: Migration[] = [
         // duplicate logins/emails/slugs). Fresh installs get these in initializeSchema; this brings
         // EXISTING databases up to the same shape.
         //
-        // DEFENSIVE: existing data may already contain duplicates, which would make CREATE UNIQUE
-        // INDEX fail. We (1) detect & LOG duplicates first, then (2) attempt each index in its own
-        // try/catch. A failure here must NEVER abort boot — so this migration NEVER throws; it logs a
-        // clear warning and continues, and is recorded as applied so it doesn't retry every boot.
-        // (If duplicates are cleaned up later, the index can be created via a follow-up migration.)
+        // Existing data may already contain duplicates, which make CREATE UNIQUE INDEX fail. That must not
+        // abort boot, and it must not be FORGOTTEN either: the migration then answers `deferred`, so it is
+        // not recorded and runs again at the next boot, and the duplicates are listed in Admin → Site
+        // Health → Duplicate records, where an administrator resolves them (core/unique-integrity). MySQL
+        // builds only the login index here; its email and slug keys are migration 0020's.
         id: '0001_unique_constraints_users_posts',
         up: async (ctx: MigrationCtx) => {
-            // Each entry: a human label, a query that returns the duplicate groups (so we can log
-            // them), and the CREATE UNIQUE INDEX to attempt. Queries use ? placeholders only where
-            // needed; the Postgres driver normalizes them. LOWER() and partial-index WHERE clauses
-            // are valid on both SQLite (≥3.9) and Postgres.
-            const checks = [
-                {
-                    label: 'users.user_login',
-                    dupSql: 'SELECT user_login AS k, COUNT(*) AS c FROM users GROUP BY user_login HAVING COUNT(*) > 1',
-                    indexSql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login ON users (user_login)'
-                },
-                {
-                    // Case-insensitive email uniqueness. The authoritative fold is app-layer
-                    // (User.normalizeEmail: full-Unicode lowercase + NFC, applied on store/lookup);
-                    // this LOWER()-expression index is the DB backstop. SQLite LOWER() is ASCII-only,
-                    // so non-ASCII confusables ('Ä@x'/'ä@x') are caught by the app-layer fold, not here.
-                    label: 'users.user_email (case-insensitive)',
-                    dupSql: 'SELECT LOWER(user_email) AS k, COUNT(*) AS c FROM users GROUP BY LOWER(user_email) HAVING COUNT(*) > 1',
-                    indexSql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(user_email))'
-                },
-                {
-                    label: 'posts(post_name, post_type) [non-empty slugs]',
-                    dupSql: "SELECT post_name AS k, post_type AS t, COUNT(*) AS c FROM posts WHERE post_name <> '' GROUP BY post_name, post_type HAVING COUNT(*) > 1",
-                    indexSql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_name_type ON posts (post_name, post_type) WHERE post_name <> ''"
-                }
-            ];
-
-            for (const chk of checks) {
-                // 1. Detect & log duplicates (best-effort — never fatal).
-                try {
-                    const dups = (await ctx.all(chk.dupSql)) || [];
-                    if (dups.length > 0) {
-                        log.warn({ label: chk.label }, `⚠️  [migration 0001] ${dups.length} duplicate group(s) found for ${chk.label}; the unique index may not be created until these are resolved:`);
-                        for (const d of dups.slice(0, 20)) {
-                            const key = d.t !== undefined ? `${d.k} / ${d.t}` : d.k;
-                            log.warn(`      - "${key}" appears ${d.c} times`);
-                        }
-                        if (dups.length > 20) log.warn(`      ...and ${dups.length - 20} more`);
-                    }
-                } catch (e: any) {
-                    log.warn({ label: chk.label, err: e }, `⚠️  [migration 0001] duplicate scan for ${chk.label} skipped`);
-                }
-
-                // 2. Attempt the unique index. Failure (e.g. residual duplicates) is logged, not fatal.
-                try {
-                    await ctx.exec(chk.indexSql);
-                    log.info({ label: chk.label }, `   ✓ [migration 0001] unique index ensured for ${chk.label}`);
-                } catch (e: any) {
-                    log.warn({ label: chk.label, err: e }, `⚠️  [migration 0001] could NOT create unique index for ${chk.label} (continuing, data integrity not enforced for this column)`);
-                }
-            }
-            // Intentionally no throw: recorded-as-applied even if some indexes were skipped.
+            const ui = require('./unique-integrity');
+            const engine = ui.engineOf(ctx.driverName);
+            const rules = engine === 'mysql' ? ['users.login'] : ['users.login', 'users.email', 'posts.slug'];
+            return deferUntilEnforced('0001', rules, await ui.ensureUniqueIndexes(ctx, engine));
         }
     },
     {
@@ -1001,9 +967,8 @@ const MIGRATIONS: Migration[] = [
         id: '0020_mysql_unique_email_slug',
         up: async (ctx: MigrationCtx) => {
             if (ctx.driverName !== 'mysql' && ctx.driverName !== 'mariadb') return;
-            const { created, skipped } = await require('./mysql-unique-keys').ensureMysqlUniqueKeys(ctx);
-            if (created.length) log.info(`   ✓ [migration 0020] unique index(es) ${created.join(', ')} created`);
-            if (skipped.length) log.warn(`   ⚠️  [migration 0020] unique index(es) ${skipped.join(', ')} not created (see the lines above)`);
+            const ui = require('./unique-integrity');
+            return deferUntilEnforced('0020', ['users.email', 'posts.slug'], await ui.ensureUniqueIndexes(ctx, 'mysql'));
         }
     },
     {
@@ -1072,20 +1037,52 @@ const MIGRATIONS: Migration[] = [
         // column (core/mysql-unique-keys). Duplicates already stored are listed and the index waits.
         id: '0023_terms_unique_slug',
         up: async (ctx: MigrationCtx) => {
-            if (ctx.driverName === 'mysql' || ctx.driverName === 'mariadb') {
-                await require('./mysql-unique-keys').ensureMysqlUniqueKeys(ctx);
-                return;
+            const ui = require('./unique-integrity');
+            return deferUntilEnforced('0023', ['terms.slug'], await ui.ensureUniqueIndexes(ctx, ui.engineOf(ctx.driverName)));
+        }
+    },
+    {
+        // 0001, 0020 and 0023 used to be RECORDED even when duplicates kept their unique index from being
+        // built, so an install that hit that case never tried again. This one checks every rule and stays
+        // pending (deferred, retried at each boot) until all of them are enforced.
+        id: '0024_unique_rules_recheck',
+        up: async (ctx: MigrationCtx) => {
+            const ui = require('./unique-integrity');
+            return deferUntilEnforced('0024', ui.RULE_IDS, await ui.ensureUniqueIndexes(ctx, ui.engineOf(ctx.driverName)));
+        }
+    },
+    {
+        // Tamper evidence for the audit log (core/audit-chain): each row, once sealed, carries its place in
+        // the chain (chain_seq), the hash of the row before it (prev_hash) and its own hash (row_hash).
+        // Rows written before this migration are sealed by the first seal pass, in id order. chain_seq is
+        // UNIQUE so two nodes sealing at once cannot give two rows the same place.
+        id: '0025_audit_log_hash_chain',
+        up: async (ctx: MigrationCtx) => {
+            const isMysql = ctx.driverName === 'mysql' || ctx.driverName === 'mariadb';
+            const HASH = isMysql ? 'VARCHAR(64)' : 'TEXT';
+            const has = async (column: string): Promise<boolean> => {
+                try {
+                    if (ctx.isPostgres) {
+                        return !!(await ctx.get(`SELECT 1 AS ok FROM information_schema.columns WHERE table_schema = current_schema() AND table_name = 'audit_log' AND column_name = ? LIMIT 1`, [column]));
+                    }
+                    if (isMysql) {
+                        return !!(await ctx.get(`SELECT 1 AS ok FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'audit_log' AND column_name = ? LIMIT 1`, [column]));
+                    }
+                    const rows = (await ctx.all('PRAGMA table_info(audit_log)')) || [];
+                    return rows.some((r: any) => r && r.name === column);
+                } catch {
+                    return false;
+                }
+            };
+            for (const [column, type] of [['chain_seq', 'BIGINT'], ['prev_hash', HASH], ['row_hash', HASH]]) {
+                if (await has(column)) continue;
+                try {
+                    await ctx.exec(`ALTER TABLE audit_log ADD COLUMN ${column} ${type}`);
+                } catch (e: any) {
+                    if (!/duplicate column|already exists/i.test(String((e && e.message) || ''))) throw e;
+                }
             }
-            const dups = (await ctx.all("SELECT slug AS k, COUNT(*) AS c FROM terms WHERE slug <> '' GROUP BY slug HAVING COUNT(*) > 1")) || [];
-            if (dups.length) {
-                log.warn(`⚠️  [migration 0023] ${dups.length} term slug(s) appear more than once; the unique index waits until they are resolved: ${dups.slice(0, 20).map((d: any) => d.k).join(', ')}`);
-                return;
-            }
-            try {
-                await ctx.exec("CREATE UNIQUE INDEX IF NOT EXISTS uq_terms_slug ON terms (slug) WHERE slug <> ''");
-            } catch (e: any) {
-                log.warn({ err: e }, '⚠️  [migration 0023] could not create the unique index on terms.slug');
-            }
+            await ctx.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_log_chain_seq ON audit_log (chain_seq)');
         }
     }
 ];
@@ -1141,6 +1138,7 @@ const ENGINE_SPECIFIC_MIGRATIONS = [
     '0021_pg_search_unaccent_simple',
     '0022_pg_text_timestamp_format',
     '0023_terms_unique_slug',
+    '0024_unique_rules_recheck',
 ];
 
 async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string, migrations: Migration[] = MIGRATIONS): Promise<void> {
@@ -1167,8 +1165,20 @@ async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string
     log.info(`🧬 Schema migrations: applying ${pending.length} pending...`);
     const ctx: MigrationCtx = { exec, run, get, all, isPostgres, driverName };
     for (const m of pending) {
+        let result: MigrationResult;
         try {
-            await m.up(ctx);
+            result = await m.up(ctx);
+        } catch (e: any) {
+            // Fail closed: do NOT continue on a half-migrated schema.
+            log.error({ id: m.id, err: e }, `   ✗ schema migration ${m.id} FAILED`);
+            throw e;
+        }
+        if (result && typeof result === 'object' && result.deferred) {
+            // Not recorded: the next boot tries again. Later migrations do not depend on a unique index.
+            log.warn({ id: m.id }, `   ⏸ schema migration ${m.id} deferred: ${result.deferred}`);
+            continue;
+        }
+        try {
             // Idempotent recording: under the multi-node boot lock only one node applies migrations,
             // but make the INSERT conflict-safe too so a duplicate id can never crash a boot.
             await run(
@@ -1179,8 +1189,7 @@ async function runSchemaMigrations(db: any, isAsync: boolean, driverName: string
             );
             log.info({ id: m.id }, `   ✓ applied schema migration ${m.id}`);
         } catch (e: any) {
-            // Fail closed: do NOT continue on a half-migrated schema.
-            log.error({ id: m.id, err: e }, `   ✗ schema migration ${m.id} FAILED`);
+            log.error({ id: m.id, err: e }, `   ✗ schema migration ${m.id} could not be recorded`);
             throw e;
         }
     }

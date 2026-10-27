@@ -135,12 +135,12 @@ app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            // The only HTML this origin serves is the Swagger UI page at `${prefix}/docs`, whose
-            // swagger-ui-dist bootstrap is an inline <script> — that, and nothing else, is what
-            // 'unsafe-inline' is for. No script here is ever built from a string, so no 'unsafe-eval':
+            // The only HTML this origin serves is the Swagger UI page at `${prefix}/docs`, and every script
+            // on it is a file (swagger-ui-express emits its init code as swagger-ui-init.js, not inline), so
+            // no inline script is allowed. No script here is ever built from a string, so no 'unsafe-eval':
             // a theme is a token contract that ships no JavaScript, and a plugin's admin bundle is
-            // executed by the FRONTEND, under the frontend's own header (frontend/next.config.ts).
-            scriptSrc: ["'self'", "'unsafe-inline'"],
+            // executed by the FRONTEND, under the frontend's own header (frontend/src/lib/contentSecurityPolicy.ts).
+            scriptSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
             fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
             imgSrc: ["'self'", "data:", "blob:", "https:", "*"], // Allow images from everywhere (CMS content)
@@ -332,6 +332,18 @@ const apiRelativePath = (req: any): string => {
 };
 const isCollabPath = (req: any): boolean => /^\/collab(\/|$)/.test(apiRelativePath(req));
 
+// The API and upload limiters' stores are held here so work a request does past its one counted hit — the
+// REST sub-requests of a GraphQL query, each further file of a multipart GraphQL upload — is charged to
+// the same bucket (core/limiter-charge).
+const apiLimiterStore = limiterStore('rl:api:') || new rateLimit.MemoryStore();
+const uploadLimiterStore = limiterStore('rl:upload:') || new rateLimit.MemoryStore();
+const UPLOADS_PER_HOUR = 50; // per IP
+const chargerFor = (store: any, max: number) => async (req: Request, hits: number) => {
+    let total = 0;
+    for (let i = 0; i < hits; i++) total = Number((await store.increment(ipKey(req))).totalHits);
+    return total <= max;
+};
+
 const apiLimiter = rateLimit({
     // Same numbers as before (1000 / 15 min); they now live in config so an operator — or the
     // performance bench, which cannot measure a route the limiter is answering for — can raise them
@@ -341,7 +353,7 @@ const apiLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:api:'),
+    store: apiLimiterStore,
     passOnStoreError: true, // if the Redis store errors (outage), ALLOW the request rather than 500 the whole API
     // (#19) COLLABORATION DOES NOT SHARE THIS BUDGET. Inline editing is DEFAULT ON and commits one
     // transaction per keystroke, so its scheduler emits ~10 POST/s to /collab/:id/ops BY DESIGN. At
@@ -437,8 +449,9 @@ const authLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:auth:'),
-    passOnStoreError: true,
+    // Sign-in/installation doors keep counting through a Redis outage (core/limiter-fallback-store).
+    store: require('./core/limiter-fallback-store').withMemoryFallback(limiterStore('rl:auth:')),
+    passOnStoreError: false,
     message: { error: 'Too many attempts, please try again later.' }
 });
 
@@ -453,22 +466,25 @@ const loginIpLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:loginip:'),
-    passOnStoreError: true,
+    // Sign-in/installation doors keep counting through a Redis outage (core/limiter-fallback-store).
+    store: require('./core/limiter-fallback-store').withMemoryFallback(limiterStore('rl:loginip:')),
+    passOnStoreError: false,
     skipSuccessfulRequests: true, // only failed logins count toward the cap
     message: { error: 'Too many failed login attempts from your network, please try again later.' }
 });
 
 const uploadLimiter = rateLimit({
     windowMs: 60 * 60 * 1000, // 1 hour
-    max: 50, // Limit each IP to 50 uploads per hour
+    max: UPLOADS_PER_HOUR,
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:upload:'),
+    store: uploadLimiterStore,
     passOnStoreError: true,
     message: { error: 'Too many file uploads, please try again later.' }
 });
+require('./core/limiter-charge').registerLimiterCharge('api', chargerFor(apiLimiterStore, config.api.rateLimit.max));
+require('./core/limiter-charge').registerLimiterCharge('upload', chargerFor(uploadLimiterStore, UPLOADS_PER_HOUR));
 
 // Public form submissions (POST /forms/submit is unauthenticated and bot-attractive): a per-IP cap far
 // tighter than the global apiLimiter, but generous for a human filling a contact form.
@@ -489,8 +505,9 @@ const setupLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:setup:'),
-    passOnStoreError: true,
+    // Sign-in/installation doors keep counting through a Redis outage (core/limiter-fallback-store).
+    store: require('./core/limiter-fallback-store').withMemoryFallback(limiterStore('rl:setup:')),
+    passOnStoreError: false,
     message: { error: 'Too many setup attempts, please try again later.' }
 });
 
@@ -505,9 +522,10 @@ const mcpLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) => {
-        const h = String((req.headers && req.headers.authorization) || '');
-        if (h.startsWith('Bearer wja_')) {
-            return 'agent:' + require('crypto').createHash('sha256').update(h.slice(7)).digest('hex').slice(0, 32);
+        // The same reader agentAuth uses, so the bucket is keyed by exactly the token that authenticates.
+        const t = require('./middleware/auth').bearerToken(req);
+        if (t && t.startsWith('wja_')) {
+            return 'agent:' + require('crypto').createHash('sha256').update(t).digest('hex').slice(0, 32);
         }
         return ipKey(req);
     },
@@ -927,14 +945,14 @@ if (config.nodeEnv === 'development' && process.env.WORDJS_QUERY_STATS !== '1') 
     });
 }
 
-// Health check endpoint
+// Health check endpoint. Public and outside the API limiter, so it answers from a cached, deadline-bound
+// database probe (core/readiness databaseHealth): its cost is bounded by time, not by request rate.
 app.get('/health', async (req: Request, res: Response) => {
-    const SystemHealth = require('./core/system-health');
-    const status = await SystemHealth.checkDatabase();
+    const db = await require('./core/readiness').databaseHealth();
     res.json({
-        status: status.status === 'OK' ? 'ok' : 'error',
+        status: db === 'ok' ? 'ok' : 'error',
         timestamp: new Date().toISOString(),
-        details: config.nodeEnv === 'development' ? status : undefined
+        details: config.nodeEnv === 'development' ? { db, driver: config.dbDriver } : undefined
     });
 });
 
@@ -1233,8 +1251,8 @@ app.get('/api', (req: Request, res: Response) => {
     });
 });
 
-// Internal Routes (Gateway Hooks)
-app.use('/api/internal', require('./routes/internal'));
+// (No /api/internal router: its one hook, a secret-gated gateway-port update nothing ever called, was
+// removed. The gateway's control plane is its own mTLS listener; a path here is answered 404.)
 
 // NOTE: the public site is rendered by the Next.js frontend in BOTH split and monolith mode (the
 // gateway/monolith only route /api,/uploads,/themes,/plugins,/.well-known,/healthz,/readyz,/metrics to
@@ -1409,7 +1427,9 @@ async function initializeMainSite() {
                     key: fs.readFileSync(keyPath),
                     cert: fs.readFileSync(certPath),
                     ca: fs.readFileSync(caPath),
-                    rejectUnauthorized: true
+                    rejectUnauthorized: true,
+                    // The hostname AND the gateway's identity: every cluster leaf carries the loopback SANs.
+                    checkServerIdentity: require('./core/cert-manager').checkGatewayIdentity
                 };
             };
             refreshClientOpts();

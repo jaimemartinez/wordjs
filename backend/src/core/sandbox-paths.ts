@@ -32,9 +32,9 @@ function ownPluginDir(appRoot: string, slug: string): string {
 /**
  * MULTISITE: a plugin runs one worker per site, and each site's worker gets its OWN private storage —
  * site 1 keeps the directories it always had, any other site's are keyed by `s<id>:<slug>` (so they
- * never collide with site 1's, nor with each other). Its own code directory is shared by every site,
- * so only site 1's worker may write there (backwards-compatible private storage); another site's
- * worker can read its code but keeps its data in its own storage directories.
+ * never collide with site 1's, nor with each other). Its own code directory is shared by every site and
+ * is READ-ONLY to all of them; site 1's private data directory (ownDataDir) is where the plugin's own
+ * `data/` folder lives, reached through the `data` link in its code directory (see plugin-own-data).
  */
 function siteStorageSlug(slug: string, siteId: number = 1): string {
     return siteId === 1 ? String(slug || '') : `s${siteId}:${String(slug || '')}`;
@@ -56,12 +56,26 @@ function privateStorageDirs(appRoot: string, slug: string, siteId: number = 1): 
  * dropped. Inside the plugin's own storage every native layer already admits it, and io-guard admits a READ
  * here without a filesystem grant (the upload IS the request's input; writes stay gated like any storage).
  */
+/**
+ * The plugin's own data directory: what used to be `<code dir>/data`, kept OUTSIDE the code so the code
+ * directory can be read-only at every layer. `<code dir>/data` is a link to it (a junction on Windows), so
+ * a plugin that writes `path.join(__dirname, 'data', …)` keeps working. It needs no filesystem grant —
+ * it is the private storage every plugin has always had — and only site 1's worker writes it.
+ */
+function ownDataDir(appRoot: string, slug: string): string {
+    return path.join(path.resolve(appRoot), 'data', 'plugin-own', storageKey(String(slug || '')));
+}
+
 function uploadStagingDir(appRoot: string, slug: string, siteId: number = 1): string {
     return path.join(privateStorageDirs(path.resolve(appRoot), slug, siteId)[2], 'uploads');
 }
 
 function sandboxPaths(appRoot: string, slug: string, coreDir: string, siteId: number = 1): {
     own: string;
+    /** The plugin's own data directory (see ownDataDir), and the link to it inside the code directory. */
+    ownData: string;
+    ownDataLink: string;
+    /** Whether this worker uses ownData (site 1 only; the code directory is never writable). */
     ownWritable: boolean;
     readOnly: string[];
     writable: string[];
@@ -72,18 +86,21 @@ function sandboxPaths(appRoot: string, slug: string, coreDir: string, siteId: nu
     const own = ownPluginDir(root, slug);
     const storage = privateStorageDirs(root, slug, siteId);
     const ownWritable = siteId === 1;
+    const ownData = ownDataDir(root, slug);
     return {
         own,
+        ownData,
+        ownDataLink: path.join(own, 'data'),
         ownWritable,
         // No APP_ROOT grant: configuration, the database and sibling plugins are deliberately absent.
         readOnly: [path.resolve(coreDir), path.join(root, 'node_modules'), own],
-        // Own code remains writable for backwards-compatible private storage, but executable-file writes
-        // are rejected by io-guard and the native layers never grant executable mapping/FS_EXECUTE here.
-        writable: ownWritable ? [own, ...storage] : [...storage],
+        // The code directory of a plugin or a theme is READ-ONLY at every layer: it can never rewrite its
+        // own code or manifest. What it writes without a grant goes to its own data directory (site 1).
+        writable: ownWritable ? [ownData, ...storage] : [...storage],
         // Windows needs directory traversal to reach the narrow descendants without inheriting a read ACE.
         traverse: [root, path.dirname(own)],
         storage,
     };
 }
 
-module.exports = { storageKey, siteStorageSlug, ownPluginDir, privateStorageDirs, uploadStagingDir, sandboxPaths };
+module.exports = { storageKey, siteStorageSlug, ownPluginDir, ownDataDir, privateStorageDirs, uploadStagingDir, sandboxPaths };

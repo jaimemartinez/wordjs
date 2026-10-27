@@ -11,7 +11,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import DialogLayer from "@/components/DialogLayer";
-import { marketplaceApi, MarketplaceEntry, MarketplaceSourceStatus } from "@/lib/api";
+import { marketplaceApi, MarketplaceEntry, MarketplaceSourceStatus, marketplaceSourceKey, marketplaceSourceKeysPayload, normMarketplaceSource } from "@/lib/api";
 import { permMeta } from "@/lib/permissionMeta";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n, useOptionalI18n } from "@/contexts/I18nContext";
@@ -19,9 +19,27 @@ import { t as translate } from "@/lib/i18n";
 import { FaSyncAlt, FaDownload, FaCheck, FaThLarge, FaStore, FaCog, FaShieldAlt, FaCodeBranch, FaQuestionCircle } from "react-icons/fa";
 import type { IconType } from "react-icons";
 import { Button, Checkbox, EmptyState, IconButton, Input, SegmentedControl } from "@/components/ui";
+import ExistingDataDialog, { existingDataFrom, type ExistingDataChoice, type ExistingDataPrompt } from "./ExistingDataDialog";
 
 const permToken = (p: { scope: string; access?: string }) =>
     p.scope === 'network' ? 'network' : `${p.scope}:${p.access || 'read'}`;
+
+/**
+ * One source's catalog status in the sources editor: plugin count + signature (Signed (verified) / Unsigned)
+ * for a loaded source, or the error a refused one (unreachable, missing or invalid signature) answered.
+ */
+export function SourceStatusBadges({ status, t }: { status: MarketplaceSourceStatus | undefined; t: (key: string) => string }) {
+    if (!status) return null;
+    if (!status.ok) return <span title={status.error} className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100 shrink-0">error</span>;
+    return (
+        <>
+            {status.signature && (status.signature === "verified"
+                ? <span data-signature="verified" className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 shrink-0 inline-flex items-center gap-1"><FaShieldAlt aria-hidden /> {t("plugins.marketplace.signatureVerified")}</span>
+                : <span data-signature="unsigned" className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-slate-100 text-slate-500 border border-slate-200 shrink-0">{t("plugins.marketplace.signatureUnsigned")}</span>)}
+            <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 shrink-0">{status.count ?? 0}</span>
+        </>
+    );
+}
 
 /** `{name}` placeholders → values (inserted as text; React escapes them when rendered). */
 const fill = (template: string, values: Record<string, string | number>) =>
@@ -256,12 +274,17 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
     // Adopt / reinstall dialog: the permissions are approved again (one box per token, ticked by default)
     // and, on a source change, keeping the plugin's data is the administrator's explicit choice.
     const [adoptEntry, setAdoptEntry] = useState<MarketplaceEntry | null>(null);
+    // A fresh install found data a previous uninstall kept: the admin chooses to keep or discard it.
+    const [existingDataPrompt, setExistingDataPrompt] = useState<(ExistingDataPrompt & { entry: MarketplaceEntry }) | null>(null);
+    const [existingDataPending, setExistingDataPending] = useState<ExistingDataChoice | null>(null);
     const [adoptGrants, setAdoptGrants] = useState<Record<string, boolean>>({});
     const [keepData, setKeepData] = useState(true);
     // Configurable catalog sources (managed from the UI — no hard-coded URL).
     const [sourcesStatus, setSourcesStatus] = useState<MarketplaceSourceStatus[]>([]);
     const [showSources, setShowSources] = useState(false);
     const [srcList, setSrcList] = useState<string[]>([]);
+    // Optional Ed25519 public key pinned per source (by the URL as listed); '' = none.
+    const [srcKeys, setSrcKeys] = useState<Record<string, string>>({});
     const [defaultSrc, setDefaultSrc] = useState("");
     const [newSrc, setNewSrc] = useState("");
     const [savingSrc, setSavingSrc] = useState(false);
@@ -290,7 +313,9 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
         try {
             const s = await marketplaceApi.getSources();
             setDefaultSrc(s.default);
-            setSrcList(s.usingDefault ? [s.default] : s.configured);
+            const list = s.usingDefault ? [s.default] : s.configured;
+            setSrcList(list);
+            setSrcKeys(Object.fromEntries(list.map((u) => [u, marketplaceSourceKey(s.keys, u)])));
         } catch (e: any) {
             addToast(e?.message || t("plugins.marketplace.sourcesLoadFailed"), "error");
         }
@@ -311,8 +336,9 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
     const saveSources = async (list = srcList) => {
         setSavingSrc(true);
         try {
-            const res = await marketplaceApi.setSources(list);
+            const res = await marketplaceApi.setSources(list, marketplaceSourceKeysPayload(list, srcKeys));
             setSrcList(res.configured);
+            setSrcKeys(Object.fromEntries(res.configured.map((u) => [u, marketplaceSourceKey(res.keys, u)])));
             addToast(t(list.length ? "plugins.marketplace.sourcesSaved" : "plugins.marketplace.sourcesSavedEmpty"), "success");
             setShowSources(false);
             await load(true);
@@ -355,7 +381,7 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
         });
     }, [entries, search, category]);
 
-    const doInstall = async (entry: MarketplaceEntry) => {
+    const doInstall = async (entry: MarketplaceEntry, existingData?: ExistingDataChoice) => {
         setConfirmEntry(null);
         setInstalling((m) => ({ ...m, [entry.id]: true }));
         const isUpdate = !!(entry.installed && entry.updateAvailable);
@@ -369,15 +395,26 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                 );
                 setEntries((list) => list.map((e) => (e.id === entry.id ? { ...e, installedVersion: entry.version, updateAvailable: false, updatable: false } : e)));
             } else {
-                await marketplaceApi.install(entry.id);
+                await marketplaceApi.install(entry.id, existingData);
                 addToast(fill(t("plugins.marketplace.installed"), { name: entry.name }), "success");
                 setEntries((list) => list.map((e) => (e.id === entry.id ? { ...e, installed: true, installedVersion: e.version, updateAvailable: false } : e)));
             }
             onInstalled();
         } catch (e: any) {
-            addToast(e?.message || t(isUpdate ? "plugins.marketplace.updateFailed" : "plugins.marketplace.installFailed"), "error");
+            const leftovers = !isUpdate && !existingData ? existingDataFrom(e) : null;
+            if (leftovers) setExistingDataPrompt({ ...leftovers, entry });
+            else addToast(e?.message || t(isUpdate ? "plugins.marketplace.updateFailed" : "plugins.marketplace.installFailed"), "error");
         } finally {
             setInstalling((m) => ({ ...m, [entry.id]: false }));
+        }
+    };
+
+    const chooseExistingData = async (choice: ExistingDataChoice) => {
+        if (!existingDataPrompt) return;
+        setExistingDataPending(choice);
+        try { await doInstall(existingDataPrompt.entry, choice); } finally {
+            setExistingDataPending(null);
+            setExistingDataPrompt(null);
         }
     };
 
@@ -470,20 +507,33 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                         <Button variant="ghost" size="sm" onClick={() => setShowSources(false)}>{t("plugins.marketplace.close")}</Button>
                     </div>
                     <p className="text-[11px] text-slate-500 mb-4 leading-relaxed">
-                        {t("plugins.marketplace.sourcesHelp")}
+                        {t("plugins.marketplace.sourcesHelp")} {t("plugins.marketplace.publicKeyHelp")}
                     </p>
                     <div className="space-y-2 mb-4">
                         {srcList.map((u, i) => {
-                            const st = sourcesStatus.find((s) => s.url === u);
+                            const st = sourcesStatus.find((s) => normMarketplaceSource(s.url) === normMarketplaceSource(u));
                             return (
-                                <div key={u} className="flex items-center gap-2 bg-slate-50 border border-slate-150 rounded-xl px-3 py-2">
-                                    <span className="text-[11px] font-mono text-slate-400 w-4 shrink-0">{i + 1}</span>
-                                    <span className="flex-1 min-w-0 font-mono text-[11px] text-slate-700 truncate" title={u}>{u}</span>
-                                    {u === defaultSrc && <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">default</span>}
-                                    {st && (st.ok
-                                        ? <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 shrink-0">{st.count ?? 0}</span>
-                                        : <span title={st.error} className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100 shrink-0">error</span>)}
-                                    <IconButton size="sm" variant="danger" icon="fa-trash" label={t("plugins.marketplace.remove")} onClick={() => removeSource(u)} />
+                                <div key={u} className="bg-slate-50 border border-slate-150 rounded-xl px-3 py-2 space-y-1.5">
+                                    <div className="flex items-center gap-2">
+                                        <span className="text-[11px] font-mono text-slate-400 w-4 shrink-0">{i + 1}</span>
+                                        <span className="flex-1 min-w-0 font-mono text-[11px] text-slate-700 truncate" title={u}>{u}</span>
+                                        {u === defaultSrc && <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">default</span>}
+                                        <SourceStatusBadges status={st} t={t} />
+                                        <IconButton size="sm" variant="danger" icon="fa-trash" label={t("plugins.marketplace.remove")} onClick={() => removeSource(u)} />
+                                    </div>
+                                    {st && !st.ok && st.error && <p className="pl-6 text-[11px] text-rose-600 break-words">{st.error}</p>}
+                                    <div className="pl-6">
+                                        <Input
+                                            size="sm"
+                                            className="font-mono"
+                                            aria-label={`${t("plugins.marketplace.publicKey")} — ${u}`}
+                                            placeholder={t("plugins.marketplace.publicKey")}
+                                            spellCheck={false}
+                                            autoComplete="off"
+                                            value={srcKeys[u] || ""}
+                                            onChange={(e) => setSrcKeys((k) => ({ ...k, [u]: e.target.value }))}
+                                        />
+                                    </div>
                                 </div>
                             );
                         })}
@@ -655,6 +705,16 @@ export default function MarketplaceTab({ onInstalled, initialSearch = "" }: { on
                         </div>
                     </div>
                 </DialogLayer>
+            )}
+
+            {existingDataPrompt && (
+                <ExistingDataDialog
+                    prompt={existingDataPrompt}
+                    pending={existingDataPending}
+                    onChoose={chooseExistingData}
+                    onCancel={() => setExistingDataPrompt(null)}
+                    t={t}
+                />
             )}
 
             {/* Adopt / reinstall — the copy installed by upload or from another source takes this version in

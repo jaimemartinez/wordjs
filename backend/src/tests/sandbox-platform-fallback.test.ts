@@ -71,7 +71,7 @@ describe('platform launch decision — when the new layer is used, and (mostly) 
     });
 
     test('the Windows container is applied to compiled children; only ts-node development is exempt', () => {
-        assert.strictEqual(decide({ platform: 'win32', state: 'active', netGranted: false, tsNode: true }).use, false);
+        assert.strictEqual(decide({ platform: 'win32', state: 'active', netGranted: false, tsNode: true, env: { WORDJS_DEV_SANDBOX_EXEMPT: '1' } }).use, false);
         assert.strictEqual(decide({ platform: 'darwin', state: 'active', netGranted: false, tsNode: true }).use, true);
     });
 

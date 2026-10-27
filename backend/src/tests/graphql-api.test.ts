@@ -359,7 +359,8 @@ describe('server protection', () => {
         assert.ok(ms < 200, `refused in ${ms}ms`);
         assert.strictEqual(r.status, 400);
         assert.strictEqual(r.body.data, undefined, 'nothing executed');
-        assert.ok(r.body.errors.some((e: any) => e.extensions && e.extensions.code === 'GRAPHQL_COST_LIMIT'));
+        // Expanded, the chain passes both the cost and the field cap; whichever the walk meets first refuses it.
+        assert.ok(r.body.errors.some((e: any) => e.extensions && ['GRAPHQL_COST_LIMIT', 'GRAPHQL_FIELD_LIMIT'].includes(e.extensions.code)));
     });
 
     test('a fragment reused under one type is measured once and still counted at every spread', () => {
@@ -378,7 +379,11 @@ describe('server protection', () => {
         const spread = measureDoc(`fragment A on ContentNode { author { name } }
             { post(id: 1) { ...A ...A } other: post(id: 2) { ...A } }`);
         const inline = measureDoc(`{ post(id: 1) { a1: author { name } a2: author { name } } other: post(id: 2) { author { name } } }`);
-        assert.deepStrictEqual(spread, inline);
+        // Written out, the second `author` needs an alias the spreads do not: compare everything else.
+        const { aliases: _a, ...spreadRest } = spread;
+        const { aliases: _b, ...inlineRest } = inline;
+        assert.deepStrictEqual(spreadRest, inlineRest);
+        assert.deepStrictEqual([spread.aliases, inline.aliases], [1, 2]);
     });
 
     test('fragment arguments (graphql 17 experimental syntax) are a syntax error, even if a caller asks for them', async () => {

@@ -1,6 +1,6 @@
 import { describe, it, expect } from "vitest";
 import { NextRequest } from "next/server";
-import { proxy } from "../../proxy";
+import { routeRequest as proxy } from "../../proxy";
 import { canOpenAdminPath, sidebarSections, type AdminAccessUser } from "../adminAccess";
 import { fromRequestedSite, normalizeSiteHost, siteTags } from "../server-api";
 
@@ -97,13 +97,30 @@ describe("next.config: the multisite rewrite", () => {
             expect(beforeFiles.map((r: any) => [r.source, r.destination]), String(mode)).toEqual([
                 // '/:path+' first: Next chains matching beforeFiles rules, and '/' first had its result
                 // rewritten again (the home page of another site was a 404 in a production build).
-                ["/:path+", "/wjs-site/:siteHost/:path+"],
+                ["/:path((?!_next/|favicon\\.ico$).+)", "/wjs-site/:siteHost/:path"],
                 ["/", "/wjs-site/:siteHost"],
             ]);
             for (const r of beforeFiles) {
                 expect(r.destination.startsWith("/"), "relative: Next never proxies it").toBe(true);
                 expect(r.has).toEqual([{ type: "header", key: "x-wordjs-site-route", value: "(?<siteHost>[a-z0-9_][a-z0-9_.-]{0,252})" }]);
             }
+        }
+    });
+
+    it("never turns one of Next's own assets into a page, whatever header arrives (Next's own matcher)", async () => {
+        const { getPathMatch } = await import("next/dist/shared/lib/router/utils/path-match");
+        const { prepareDestination } = await import("next/dist/shared/lib/router/utils/prepare-destination");
+        const [rule] = (await rewrites()).beforeFiles;
+        const match = getPathMatch(rule.source, { removeUnnamedParams: true, strict: true });
+        for (const asset of ["/_next/static/chunks/app.js", "/_next/image", "/_next/data/x.json", "/favicon.ico"]) {
+            expect(match(asset), asset).toBe(false);
+        }
+        for (const [page, expected] of [["/about", "/wjs-site/two.example.org/about"], ["/blog/a/b", "/wjs-site/two.example.org/blog/a/b"], ["/favicon.ico.html", "/wjs-site/two.example.org/favicon.ico.html"], ["/_nextish", "/wjs-site/two.example.org/_nextish"], ["/faviconXico", "/wjs-site/two.example.org/faviconXico"]]) {
+            const params: any = match(page);
+            expect(params, page).toBeTruthy();
+            params.siteHost = "two.example.org";
+            const dest = prepareDestination({ appendParamsToQuery: false, destination: rule.destination, params, query: {} } as any);
+            expect(dest.parsedDestination.pathname, page).toBe(expected);
         }
     });
 });

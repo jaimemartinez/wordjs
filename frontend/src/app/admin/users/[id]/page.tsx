@@ -11,6 +11,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import UserMfaReset from "../UserMfaReset";
 import AccountCapabilityToggles, { grantedMap } from "../AccountCapabilityToggles";
 import { useRoleOptions } from "@/lib/useRoleOptions";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 export default function UserEditorPage() {
     const { t } = useI18n();
@@ -40,6 +41,8 @@ export default function UserEditorPage() {
     // What the record held when it was loaded — the comparison base for "did a gated field really change".
     const [loaded, setLoaded] = useState<{ email: string; personalEmail: string }>({ email: "", personalEmail: "" });
     const [currentPassword, setCurrentPassword] = useState("");
+    // The administrator's own confirmation for authority over a privileged account (see UserFormModal).
+    const stepUp = useMfaStepUp();
     const [saving, setSaving] = useState(false);
     const [, setHookTick] = useState(0);
 
@@ -85,18 +88,20 @@ export default function UserEditorPage() {
 
         try {
             if (userId) {
-                // Editing SOMEONE ELSE keeps the exact body it always sent (`loaded` and `formData`
-                // then differ only for that user's fields, and isOwn already gated the predicate).
+                // Editing SOMEONE ELSE sends the form, plus the step-up only once the server asked for it.
                 await usersApi.update(userId, isOwn
                     ? withSudoProof(loaded, formData, currentPassword)
-                    : formData);
+                    : { ...formData, ...stepUp.payload() });
                 setCurrentPassword("");
                 setLoaded({ email: formData.email, personalEmail: formData.personalEmail });
             } else {
-                await usersApi.create(formData);
+                await usersApi.create({ ...formData, ...stepUp.payload() });
             }
+            stepUp.reset();
             router.push("/admin/users");
         } catch (error) {
+            // Asked for the confirmation fields: they are on screen now, the next Save sends them.
+            if (stepUp.absorb(error)) return;
             console.error("Failed to save user:", error);
             // Show WHAT went wrong. Swallowing the backend code behind one generic string is how a 403
             // "current password is incorrect" reached the operator as "could not save the user", with no
@@ -213,6 +218,7 @@ export default function UserEditorPage() {
                             />
                         </div>
                     )}
+                    <MfaStepUpFields stepUp={stepUp} />
                 </div>
 
                 <div className="mt-8 flex justify-end gap-4">

@@ -11,13 +11,36 @@
 // list read: two version numbers that disagree name two different builds of the same package.
 exports.metadata = {
     name: 'Card Gallery',
-    version: '1.0.3',
+    version: '1.0.4',
     description: 'Manage multiple card galleries with promo cards (isolated)',
     author: 'WordJS'
 };
 
+// The host lets a plugin write only the options named after it ('card_gallery_…'), so every option this
+// plugin keeps is stored under that name. One an earlier version kept under its bare name is read from
+// there the first time and carried over.
+const OPTION_UNSET = '\u0000unset';
+function namespacedOptions(raw, ns) {
+    const nameOf = (key) => (String(key).startsWith(ns) ? String(key) : ns + String(key));
+    return {
+        async get(key, def = null) {
+            const name = nameOf(key);
+            let v = await raw.get(name, OPTION_UNSET);
+            if (v === OPTION_UNSET && name !== key) {
+                v = await raw.get(key, OPTION_UNSET);
+                if (v !== OPTION_UNSET && v !== null && v !== '') {
+                    try { await raw.set(name, v); } catch (e) { /* read from the old name again next time */ }
+                }
+            }
+            return v === OPTION_UNSET ? def : v;
+        },
+        set: (key, value) => raw.set(nameOf(key), value),
+    };
+}
+
 exports.init = function (wordjs) {
-    const { options, http, adminMenu } = wordjs;
+    const { http, adminMenu } = wordjs;
+    const options = namespacedOptions(wordjs.options, 'card_gallery_');
 
     // tiny id generator (no uuid dependency needed inside the isolate)
     const newId = () => Math.random().toString(36).slice(2, 10);

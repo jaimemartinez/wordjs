@@ -217,6 +217,8 @@ async function main() {
     // authenticates purge requests with it (from this file, on this machine — never from the backend's
     // config, which lives on another host); a co-located backend signs its direct purges with it.
     if (boot.revalidateSecret) cfg.revalidateSecret = boot.revalidateSecret;
+    // The gateway hands its management secret to a backend node only; a frontend keeps none.
+    if (!boot.gatewaySecret) delete cfg.gatewaySecret;
     if (role === 'backend') {
         cfg.host = '0.0.0.0';                 // accept the gateway from another machine
         cfg.port = svcPort;
@@ -236,7 +238,7 @@ async function main() {
     const run = (cmd, cwd) => execFileSync('npm', cmd, { cwd, stdio: 'inherit', shell: true });
     if (args.install) { console.log('📦 npm install...'); run(['install'], roleDir); }
     if (args.build && role === 'frontend') { console.log('🏗️  next build...'); run(['run', 'build'], roleDir); }
-    if (args.build && role === 'backend') { console.log('🏗️  tsc build...'); try { run(['run', 'build'], roleDir); } catch { console.warn('   (build failed — server.js will fall back to ts-node)'); } }
+    if (args.build && role === 'backend') { console.log('🏗️  tsc build...'); try { run(['run', 'build'], roleDir); } catch { console.warn('   (build failed — server.js refuses to start without dist/; run npm run build in backend/)'); } }
     if (args.start) {
         const logFile = path.join(roleDir, 'cluster-start.log');
         const out = fs.openSync(logFile, 'a');

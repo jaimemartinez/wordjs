@@ -511,7 +511,7 @@ Deleting a plugin (admin **Plugins** → delete, password-confirmed) removes its
 
 By default your plugin's **data tables are kept** (WordPress parity). Tick **"Also delete this plugin's data / tables"** in the delete dialog to additionally `DROP` the plugin's own `wjp_<slug>_*` tables, delete the options it created, revoke the account capabilities it declared and remove its private storage. Only what belongs to the plugin goes — core settings and other plugins are never touched ([plugin-database.md](plugin-database.md#lifecycle-uninstalling-and-dropdata)).
 
-> Options written via `wordjs.options.set` live in a **global** key space with no per-plugin namespace, so they are **not** auto-purged on delete. If your plugin stores option keys, prefix them with your slug and document how to remove them, or clean them up yourself.
+> `wordjs.options.set` writes only options **named after your slug** (`<slug>_…`, with every run of characters other than letters and digits turned into `_`: `photo-carousel` → `photo_carousel_…`); any other name is refused. Those are the options "Also delete this plugin's data" removes. Site settings are changed on their own admin screens, never by a plugin.
 
 ---
 
@@ -740,6 +740,18 @@ bypass egress filtering), so MX/TXT lookups go through the host-mediated `wordjs
 Outbound access opens **only** when an admin grants your plugin
 the **`network`** capability (declare `scope: "network"` in your manifest; the grant carries an
 exfiltration warning). This is the only network path — there is no trusted tier that bypasses it.
+
+**How the network reaches your plugin.** Your plugin's process has no network of its own on any platform: the
+kernel sandbox refuses its sockets. With `network`, every connection it opens goes through WordJS, which decides
+the destination and opens it, and your code does not notice: `net.connect`, `tls.connect` (STARTTLS included),
+`http`/`https`, `fetch`, WebSocket and a `new net.Socket().connect()` work as usual, and `dns.lookup` is answered
+by WordJS. UDP (`dgram`) is not available to plugins. Throughput is lower than a direct socket — fine for APIs
+and mail, not meant for bulk transfers.
+
+**TCP ports.** With `network`, your plugin may connect to DNS (53) and the web (80, 443). Name any other port
+your plugin needs on the same permission, and the administrator grants it with it:
+`{ "scope": "network", "ports": [25, 587], "reason": "…" }` (at most 16 ports, 1–65535). A private destination an
+administrator approves (`host:port`) adds its own port. A plugin holds at most 64 connections at once.
 
 Even **with** `network` granted, egress is confined to **public destinations only**. secure-require hands
 you the *egress-guarded* socket module (not the raw one) and the worker wraps the global `fetch` /
@@ -1027,12 +1039,13 @@ Every call is permission-checked on the host against your manifest.
 
 | Bridge call | Permission | Notes |
 | :--- | :--- | :--- |
-| `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) are **never** exposed — to any plugin. |
+| `wordjs.options.get(key, default)` / `set(key, value)` | `settings:read` / `write` | `set` writes only `<slug>_…` options (see above). Secret-named keys (`*secret*`, `*password*`, `*key*`, `*token*`, `dkim`, certs…) are **never** exposed — to any plugin. |
 | `wordjs.db.all(sql, params)` / `get(...)` / `run(...)` | `database:read` / `write` | Always scoped to your own `wjp_<slug>_` tables; SQL referencing core tables (`users`, `options`, `sessions`, …) is rejected. There is no unscoped mode. DDL is limited to your OWN `TABLE`/`INDEX`/`VIEW`/`TRIGGER` (SCHEMA/DATABASE/ROLE/FUNCTION/EXTENSION/… denied), an `ALTER … RENAME TO` target must keep your prefix, and a data-modifying `WITH` (a CTE containing insert/update/delete/replace/merge) counts as a write and needs `database:write`. |
 | `wordjs.db.batch(statements)` | `database:read` / `write` | Up to 200 `[sql, params]` pairs in ONE host round-trip — a transport optimisation only: each statement is re-checked with the same permission + SQL guard as the single-statement call, and DDL is refused (use `db.run` / `db.createTable`). Validated as a whole before anything runs, but **not** a transaction — a mid-batch failure leaves the earlier statements applied. |
 | `wordjs.db.createTable(name, columns)` | `database:write` | Does **not** add the prefix for you: `name` must already start with `wordjs.db.tablePrefix`, or the call throws (`Plugin tables must be named with the 'wjp_<slug>_' prefix`). Build it as `wordjs.db.tablePrefix + 'items'`. Emits `CREATE TABLE IF NOT EXISTS` and records your plugin as the table's creator. |
 | `wordjs.db.tablePrefix` | — | A plain string property, not an RPC: `wjp_` + your slug with every run of non-alphanumerics turned into `_`, lowercased, + `_` (`greeting-card` → `wjp_greeting_card_`). |
 | `wordjs.slug` | — | Your plugin's slug (its folder name). |
+| `path.join(__dirname, 'data', …)` | — (no grant needed) | **Your own data folder**, writable with no permission: your code folder is read-only to your plugin at every sandbox layer, and `data/` in it is a link to `backend/data/plugin-own/<key>` (a junction on Windows), created on the plugin's first start — an existing `data/` folder is moved there with everything in it. Write state there; a write anywhere else in your code folder is refused. The code and `manifest.json` are fingerprinted and checked before each start, so a plugin is not started with files changed after it was installed (an administrator can accept such files in Site Health). |
 | `wordjs.paths.data` / `.logs` / `.tmp` | — (raw `fs` on them needs `filesystem:read` / `write`) | Frozen absolute paths of your plugin's private storage directories (`backend/data/plugins/<key>`, `backend/logs/plugins/<key>`, `backend/os-tmp/plugins/<key>`, `<key>` derived from the slug) — a directory of your own under each shared root, never the root itself. They are created when the plugin holds a `filesystem` grant. |
 | `wordjs.db.getType()` | `database:read` | Returns `{ isPostgres, isMySQL, isSQLite, driver }` (`driver` is the full driver name, e.g. `'sqlite-native'`, `'sqlite-legacy'`, `'postgres'`, `'mysql'`, or `'mariadb'`) — branch your DDL on the `isPostgres`/`isMySQL` booleans rather than the raw `driver` string (`isMySQL` is `true` for both `'mysql'` and `'mariadb'`). Note `isSQLite` stays `true` under MySQL (the MySQL driver translates the SQLite dialect), so gate SQLite-only queries (`PRAGMA`/`sqlite_master`) on `isMySQL` explicitly. |
 | `wordjs.users.findByEmail / findByLogin / findById / search(...)` | `users:read` | **Safe projection** only: `{ id, userLogin, username, userEmail, displayName, role, pluginCapabilities, accountCapabilities }` — never `user_pass` or other credential fields. `pluginCapabilities` is the account's capabilities in your own namespace (§12a), the same list a route gets as `req.user.pluginCapabilities`; `accountCapabilities` is the account's admin-owned grants among the capabilities you declare (§12b) — read them, never re-derive a grant from `userEmail`, which the account itself can write. The sanctioned way to read users without core-table access. |
@@ -1050,11 +1063,11 @@ Every call is permission-checked on the host against your manifest.
 | `wordjs.notify(n)` | `notifications:send` | Push an admin notification. |
 | `wordjs.ai.complete({ prompt, system?, maxTokens? })` | `ai:use` | Text completion through the site's AI provider → `{ text, model }`. The key never reaches the plugin; 30 calls/minute (`ai-provider.md` §4). |
 | `wordjs.notify.registerTransport(name, handler)` | `notifications:provider` | Register a notification transport (sandboxed; needs the `notifications:provider` grant, shown as **administrator-level**: the transport receives the full content of what it delivers). |
-| `wordjs.smtp.listen(handlers, opts)` / `wordjs.smtp.status()` | `smtp:inbound` | Have the HOST listen on the SMTP port (a `claimPorts` entry, default 25; falls back to 2525 with the reason recorded) and call `handlers.connect/mailFrom/rcptTo/data/close` for each step — resolve nothing to accept or `{ code, message }` to refuse; `data` receives the raw message as a Buffer. **Exclusive:** at most one plugin may hold `smtp:inbound` (a second grant is refused with `409 plugin_grant_exclusive` naming the holder). Plugins never get a listening socket themselves on any platform. |
+| `wordjs.smtp.listen(handlers, opts)` / `wordjs.smtp.status()` | `smtp:inbound` | Have the HOST listen on the SMTP port (a `claimPorts` entry, default 25; falls back to 2525 with the reason recorded) and call `handlers.connect/mailFrom/rcptTo/data/close` for each step — resolve nothing to accept or `{ code, message }` to refuse; `data` receives the raw message as a Buffer. The host bounds what senders can make it hold: every message in progress — its bytes and the copy handed to the plugin — counts against one in-flight budget (`opts.maxInflightBytes`, default 256 MB, never less than three maximum-size messages), and a message that would exceed it is answered `452` (the sender retries later); one client address may hold `opts.maxClientsPerIp` connections (default 10), and more are answered `421`. The host does no reverse-DNS lookup per connection: `session.clientHostname` is the address literal (`[203.0.113.9]`). **Exclusive:** at most one plugin may hold `smtp:inbound` (a second grant is refused with `409 plugin_grant_exclusive` naming the holder). Plugins never get a listening socket themselves on any platform. |
 | `wordjs.adminMenu.add(item)` | `admin_menu:register` | Declarative sidebar item. Gated host-side like every other bridge call: the manifest must declare `admin_menu:register` **and** the admin must grant it, or the call throws a `Security Block` (`access: "admin"` does not imply it). `item.href` must be a same-origin relative path (a single leading `/`, no scheme, no `//` — e.g. `/admin/plugin/<slug>`) or the item is dropped with a warning; capped at 50 items per plugin. |
 | `wordjs.cron.schedule(ts, recurrence, hook, args)` | — | Host fires the hook back into the child process — only **your** callbacks, never core's. `recurrence` is a registered schedule name (`'hourly'`, `'twicedaily'`, `'daily'`, `'weekly'`, `'off'`); pass `false` for a one-off event at `ts`. An unregistered name is stored with a 0 interval, so it never repeats. |
 | `wordjs.crypto.randomToken(bytes=16)` / `randomInt(min, max)` | — | CSPRNG (no data access, no permission gate). Use instead of `Math.random` for tokens/access codes. **Async** in an isolated plugin (RPC to host) — `await` it. |
-| `wordjs.assets.enqueueScript(spec)` / `enqueueStyle(spec)` | `assets:write` | Load a `<script>`/`<style>` onto public pages. `spec = { handle, src, inFooter?, strategy?:'async'\|'defer', media? }`. **`src` must be a relative path inside your plugin's `public/` directory** with a servable extension — see §11a; anything else throws. The host verifies the file exists + can't escape and emits a **sanitized** tag served from `/plugins/<slug>/public/…` — you never control raw markup (the raw-HTML head/footer hooks stay denied). |
+| `wordjs.assets.enqueueScript(spec)` / `enqueueStyle(spec)` | `assets:write` | Load a `<script>`/`<style>` onto public pages. `spec = { handle, src, inFooter?, strategy?:'async'\|'defer', media? }`. A script that loads code from a third-party host (an analytics provider) names it in `origins` — up to four bare `https://host[:port]` origins: the public pages' Content-Security-Policy allows exactly the origins the active plugins declare, and no other host. Re-enqueue (same `handle`) when they change. **`src` must be a relative path inside your plugin's `public/` directory** with a servable extension — see §11a; anything else throws. The host verifies the file exists + can't escape and emits a **sanitized** tag served from `/plugins/<slug>/public/…` — you never control raw markup (the raw-HTML head/footer hooks stay denied). |
 
 ---
 
@@ -1096,8 +1109,8 @@ changes for you: keep shipping `client/admin/admin.css` and the manifest fields.
 `client/admin/admin.css`, which the host reads on your behalf), and `.html` cannot be created anywhere at
 all.
 
-**Why, plainly.** Your plugin's own directory is writable **without any grant** — that is deliberate, it
-is your scratch space. Previously the *entire* directory was also readable over HTTP by anyone, so those
+**Why, plainly.** Your plugin's `data/` folder is writable **without any grant** — that is deliberate, it
+is your scratch space (the code folder around it is read-only). Previously the *entire* directory was also readable over HTTP by anyone, so those
 two facts combined into an exfiltration channel that annulled the whole containment model: write
 `leak.txt`, then `GET https://site/plugins/<slug>/leak.txt` unauthenticated. The `network` permission,
 the egress guard and each platform's native network policy all police the *socket* —

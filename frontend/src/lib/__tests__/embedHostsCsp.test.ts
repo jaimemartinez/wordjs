@@ -9,14 +9,16 @@
  * far as the code was concerned the embed had resolved — just an empty hole, on the public site AND in
  * /admin, in all three deploy modes.
  *
- * The test drives the REAL producers on both sides: `nextConfig.headers()` (the function Next calls to
- * build the header) and `resolveVideoEmbedUrl` (the function the block calls to build the src). A test
+ * The test drives the REAL producers on both sides: `contentSecurityPolicy()` (the function src/proxy.ts
+ * builds every document's header with) and `resolveVideoEmbedUrl` (the function the block calls to build
+ * the src). A test
  * that compared two copies of the host list to each other would have passed while the header was
  * wrong — the header string is the thing the browser enforces, so the header string is what is read.
  */
 import { describe, expect, it } from 'vitest';
 import path from 'node:path';
 import nextConfig from '../../../next.config';
+import { contentSecurityPolicy, sanitizeScriptOrigins, DYNAMIC_DOCUMENT, type PolicyOptions } from '../contentSecurityPolicy';
 import { ALLOWED_EMBED_HOSTS, ALLOWED_IFRAME_HOSTS, resolveVideoEmbedUrl } from '../sanitize';
 // CommonJS with no `export` statement → tsc sees a script, not a module (backend/tsconfig.json sets
 // `moduleDetection: force`; the frontend's does not). Resolution and execution are fine.
@@ -25,14 +27,12 @@ import backendMeta from '../../../../backend/src/core/sanitize-meta';
 
 const be = backendMeta as unknown as { sanitize: (html: string) => string };
 
-async function cspDirectives(): Promise<Map<string, string[]>> {
-    const groups = await (nextConfig.headers as () => Promise<any[]>)();
-    const csp = groups
-        .flatMap((g: any) => g.headers as Array<{ key: string; value: string }>)
-        .find((h) => h.key === 'Content-Security-Policy');
-    expect(csp, 'every route must still carry a CSP').toBeTruthy();
+/** The public pages' policy (the default), or a dynamic document's (`nonce`). */
+async function cspDirectives(opts: PolicyOptions = {}): Promise<Map<string, string[]>> {
+    const csp = contentSecurityPolicy(opts);
+    expect(csp, 'every document must carry a CSP').toBeTruthy();
     const out = new Map<string, string[]>();
-    for (const directive of csp!.value.split(';')) {
+    for (const directive of csp.split(';')) {
         const [name, ...values] = directive.trim().split(/\s+/);
         if (name) out.set(name, values);
     }
@@ -83,11 +83,22 @@ describe('frame-src is derived from ALLOWED_EMBED_HOSTS', () => {
         expect((await cspDirectives()).get('frame-src')).toContain(origin);
     });
 
-    it('the structural directives this header exists for are untouched', async () => {
-        const csp = await cspDirectives();
+    it('the structural directives this header exists for are untouched, in both shapes', async () => {
+      for (const opts of [{}, { nonce: 'abc' }]) {
+        const csp = await cspDirectives(opts);
         expect(csp.get('frame-ancestors')).toEqual(["'self'"]);
         expect(csp.get('object-src')).toEqual(["'none'"]);
         expect(csp.get('base-uri')).toEqual(["'self'"]);
+        expect(csp.get('form-action')).toEqual(["'self'"]);
+        expect(csp.get('script-src-attr')).toEqual(["'none'"]);
+      }
+    });
+
+    it('next.config no longer fixes a policy at build time: src/proxy.ts writes it per request', async () => {
+        const groups = await (nextConfig.headers as () => Promise<any[]>)();
+        const keys = groups.flatMap((g: any) => (g.headers as Array<{ key: string }>).map((h) => h.key.toLowerCase()));
+        expect(keys).not.toContain('content-security-policy');
+        expect(keys).toContain('x-frame-options');
     });
 });
 
@@ -99,27 +110,49 @@ describe('frame-src is derived from ALLOWED_EMBED_HOSTS', () => {
  * too. This reads the header the browser actually receives, so re-adding the keyword fails the build.
  */
 describe("script-src is narrowed: no 'unsafe-eval'", () => {
-    it('the removed keyword cannot creep back in', async () => {
-        const scriptSrc = (await cspDirectives()).get('script-src');
+    it('the removed keyword cannot creep back in (outside development)', async () => {
+      for (const opts of [{}, { nonce: 'abc' }, { scriptOrigins: ['https://plausible.io'] }]) {
+        const scriptSrc = (await cspDirectives(opts)).get('script-src');
         expect(scriptSrc, 'script-src must be present, not left to default-src').toBeTruthy();
         expect(scriptSrc).not.toContain("'unsafe-eval'");
         // Nor may it hide in a sibling script directive, or in worker-src (workers execute script too).
         for (const name of ['script-src-elem', 'script-src-attr', 'worker-src', 'default-src']) {
             expect(
-                (await cspDirectives()).get(name) ?? [],
+                (await cspDirectives(opts)).get(name) ?? [],
                 `${name} must not allow 'unsafe-eval' either`,
             ).not.toContain("'unsafe-eval'");
         }
+      }
+        expect((await cspDirectives({ dev: true })).get('script-src')).toContain("'unsafe-eval'");
     });
 
-    it('and the values that MUST stay are still there', async () => {
-        // Guards against "fixing" the assertion above by gutting the directive.
-        //   blob:           — plugin admin bundles via import(URL.createObjectURL(blob)) (pluginBundleLoader)
-        //   https:          — analytics-tag's third-party tags, incl. an admin-entered Matomo origin
-        //   'unsafe-inline' — the Next.js App Router bootstrap (nonce migration is a documented follow-up)
-        const scriptSrc = (await cspDirectives()).get('script-src')!;
-        expect(scriptSrc).toEqual(["'self'", "'unsafe-inline'", 'blob:', 'https:']);
+    it('the public pages: the site, blob:, the Next bootstrap and ONLY the origins plugins declare', async () => {
+        //   blob:           — plugin bundles via import(URL.createObjectURL(blob)) (pluginBundleLoader)
+        //   'unsafe-inline' — the Next.js bootstrap of a page served from the ISR cache (no per-request nonce)
+        //   no https:       — a third-party script host must be DECLARED by the plugin that loads it
+        expect((await cspDirectives()).get('script-src')).toEqual(["'self'", "'unsafe-inline'", 'blob:']);
+        expect((await cspDirectives({ scriptOrigins: ['https://www.googletagmanager.com', 'https://stats.example.com:8443'] })).get('script-src'))
+            .toEqual(["'self'", "'unsafe-inline'", 'blob:', 'https://www.googletagmanager.com', 'https://stats.example.com:8443']);
         expect((await cspDirectives()).get('worker-src')).toEqual(["'self'", 'blob:']);
+    });
+
+    it('a declared origin can never widen the header beyond one https origin', () => {
+        expect(sanitizeScriptOrigins(['https:', '*', 'https://*.example.com', "'unsafe-eval'", 'http://x.example.com',
+            'https://x.example.com/path', 'https://a.example.com; script-src *', 'data:', 'https://localhost', 7, null])).toEqual([]);
+        expect(sanitizeScriptOrigins(['https://Plausible.io', 'https://plausible.io'])).toEqual(['https://plausible.io']);
+        expect(sanitizeScriptOrigins('https://plausible.io')).toEqual([]);
+    });
+
+    it('the dynamic documents: a nonce and strict-dynamic, no inline script, no host by name', async () => {
+        const scriptSrc = (await cspDirectives({ nonce: 'n0nce', scriptOrigins: ['https://plausible.io'] })).get('script-src')!;
+        expect(scriptSrc).toEqual(["'self'", "'nonce-n0nce'", "'strict-dynamic'", 'blob:']);
+        expect(scriptSrc).not.toContain("'unsafe-inline'");
+        for (const p of ['/admin', '/admin/plugin/tracking', '/login', '/login/handoff', '/register', '/reset-password', '/verify-email', '/install', '/migration', '/portal/x']) {
+            expect(DYNAMIC_DOCUMENT.test(p), p).toBe(true);
+        }
+        for (const p of ['/', '/about', '/administrator', '/blog/admin', '/portalx', '/feed.xml']) {
+            expect(DYNAMIC_DOCUMENT.test(p), p).toBe(false);
+        }
     });
 });
 

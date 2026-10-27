@@ -640,18 +640,26 @@ describe('multisite: a registered frontend node relays the address of its server
     // Separate mode: a frontend node renders another site's page and fetches that site's data through
     // this listener, addressed to the MAIN site's address, naming the site in X-Forwarded-Host. Without
     // the relay rule the gateway judged the Host and the backend served the main site's data (lab finding).
+    //
+    // The node proves itself with the relay proof (hostEdge.relayProof): an address is shared by every
+    // process on that machine, a local reverse proxy that passes its clients' X-Forwarded-Host through
+    // included, so the address alone relays nothing.
     const config = { networkSites: [{ id: 2, url: 'https://two.example.org', status: 'active' }] };
     const state = { policy: sitePolicy({ config }) };
+    const SECRET = 'a'.repeat(64);
+    const PROOF = hostEdge.relayProof(SECRET);
+    const relayOpts = { relayPeers: () => new Set(['127.0.0.1', '::1']), relayKey: () => PROOF };
+    const asNode = (more) => Object.assign({ 'x-wordjs-relay': PROOF }, more);
     let relay;
     let plain;
     before(async () => {
-        relay = await edgeServer(state, { relayPeers: () => new Set(['127.0.0.1', '::1']) });
+        relay = await edgeServer(state, relayOpts);
         plain = await edgeServer(state);
     });
     after(async () => { await relay.close(); await plain.close(); });
 
     it('names the site the node asked for, upstream and to the frontend', async () => {
-        const r = await relay.get('example.com', '/api/v1/settings', { headers: { 'x-forwarded-host': 'two.example.org' } });
+        const r = await relay.get('example.com', '/api/v1/settings', { headers: asNode({ 'x-forwarded-host': 'two.example.org' }) });
         assert.strictEqual(r.status, 200);
         assert.strictEqual(relay.reached.at(-1).xfh, 'two.example.org');
         assert.strictEqual(relay.reached.at(-1).site, 'two.example.org');
@@ -659,22 +667,57 @@ describe('multisite: a registered frontend node relays the address of its server
 
     it('an IP-literal main address, as a separate-mode node dials it, relays too', async () => {
         const ipState = { policy: sitePolicy({ config: Object.assign({}, config, { siteUrl: 'https://192.0.2.10:3000' }) }) };
-        const s = await edgeServer(ipState, { relayPeers: () => new Set(['127.0.0.1', '::1']) });
+        const s = await edgeServer(ipState, relayOpts);
         try {
-            await s.get('192.0.2.10:3000', '/', { headers: { 'x-forwarded-host': 'two.example.org' } });
+            await s.get('192.0.2.10:3000', '/', { headers: asNode({ 'x-forwarded-host': 'two.example.org' }) });
             assert.strictEqual(s.reached.at(-1).site, 'two.example.org');
         } finally { await s.close(); }
     });
 
     it('never from a peer that is not a registered node: the Host decides, as before', async () => {
-        await plain.get('example.com', '/api/v1/settings', { headers: { 'x-forwarded-host': 'two.example.org' } });
+        await plain.get('example.com', '/api/v1/settings', { headers: asNode({ 'x-forwarded-host': 'two.example.org' }) });
         assert.strictEqual(plain.reached.at(-1).xfh, 'example.com');
         assert.strictEqual(plain.reached.at(-1).site, undefined);
     });
 
+    it('never from the node ADDRESS alone: a local reverse proxy passing a client header through is judged by Host', async () => {
+        // nginx on the frontend's machine (here: loopback) keeps the client's Host and passes the
+        // client's own X-Forwarded-Host along — a cache in front would then store site two under site one.
+        for (const headers of [{ 'x-forwarded-host': 'two.example.org' }, { 'x-forwarded-host': 'two.example.org', 'x-wordjs-relay': 'f'.repeat(64) }, { 'x-forwarded-host': 'two.example.org', 'x-wordjs-relay': PROOF.slice(1) }]) {
+            await relay.get('example.com', '/', { headers });
+            assert.strictEqual(relay.reached.at(-1).xfh, 'example.com', JSON.stringify(headers));
+            assert.strictEqual(relay.reached.at(-1).site, undefined);
+        }
+        // No key configured (the cluster has no secret yet): nobody relays, the proof included.
+        const keyless = await edgeServer(state, { relayPeers: relayOpts.relayPeers, relayKey: () => null });
+        try {
+            await keyless.get('example.com', '/', { headers: asNode({ 'x-forwarded-host': 'two.example.org' }) });
+            assert.strictEqual(keyless.reached.at(-1).site, undefined);
+        } finally { await keyless.close(); }
+    });
+
+    it('the proof is judged at the edge and never forwarded upstream', async () => {
+        const seen = [];
+        const req = { headers: { host: 'example.com', 'x-wordjs-relay': PROOF }, socket: {} };
+        hostEdge.pinForwardedHeaders(req);
+        seen.push(req.headers['x-wordjs-relay']);
+        const up = { headers: { host: 'example.com', 'x-wordjs-relay': PROOF }, socket: {} };
+        hostEdge.pinUpgradeHeaders(up);
+        seen.push(up.headers['x-wordjs-relay']);
+        assert.deepStrictEqual(seen, [undefined, undefined]);
+    });
+
+    it('relayProof: a fixed derivation (the frontend computes the same), never the secret, none for a short secret', () => {
+        assert.strictEqual(hostEdge.relayProof('0123456789abcdef0123456789abcdef'), '911d1e14f9ad1f0abba7beecceefa28ba4a508bbe4110430fc3658a4baf1ca6b');
+        assert.notStrictEqual(PROOF, SECRET);
+        assert.strictEqual(hostEdge.relayProof(''), null);
+        assert.strictEqual(hostEdge.relayProof('short'), null);
+        assert.strictEqual(hostEdge.relayProof(undefined), null);
+    });
+
     it('never for a Host the network does not answer (a rebinding page), nor to name an undeclared host', async () => {
-        assert.strictEqual((await relay.get('evil.example', '/', { headers: { 'x-forwarded-host': 'two.example.org' } })).status, 421);
-        await relay.get('example.com', '/', { headers: { 'x-forwarded-host': 'nowhere.example' } });
+        assert.strictEqual((await relay.get('evil.example', '/', { headers: asNode({ 'x-forwarded-host': 'two.example.org' }) })).status, 421);
+        await relay.get('example.com', '/', { headers: asNode({ 'x-forwarded-host': 'nowhere.example' }) });
         assert.strictEqual(relay.reached.at(-1).xfh, 'example.com', 'an undeclared name is ignored, the Host stands');
         assert.strictEqual(relay.reached.at(-1).site, undefined);
     });
@@ -1168,11 +1211,12 @@ describe('the pushed-policy file, as a worker reads it', () => {
             config: { siteUrl: 'https://192.0.2.10:3000', networkSites: [{ id: 2, url: 'https://two.example.org:3000', status: 'active' }] },
         });
         const source = hostEdge.createPushedPolicySource({ file, checkEveryMs: 0, logger: silent });
-        const s = await edgeServer({ policy: () => source.get() }, { relayPeers: () => new Set(['127.0.0.1', '::1']) });
+        const proof = hostEdge.relayProof('b'.repeat(64));
+        const s = await edgeServer({ policy: () => source.get() }, { relayPeers: () => new Set(['127.0.0.1', '::1']), relayKey: () => proof });
         try {
             assert.strictEqual((await s.get('two.example.org:3000', '/')).status, 200);
             assert.strictEqual(s.reached.at(-1).site, 'two.example.org', 'a browser on the site');
-            await s.get('192.0.2.10:3000', '/api/v1/settings', { headers: { 'x-forwarded-host': 'two.example.org:3000' } });
+            await s.get('192.0.2.10:3000', '/api/v1/settings', { headers: { 'x-forwarded-host': 'two.example.org:3000', 'x-wordjs-relay': proof } });
             assert.strictEqual(s.reached.at(-1).site, 'two.example.org', 'a frontend node rendering the site');
             assert.strictEqual(s.reached.at(-1).xfh, 'two.example.org:3000');
             assert.strictEqual((await s.get('three.example.org:3000', '/')).status, 421);

@@ -60,7 +60,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE (core/query-params): a parameter declared scalar arrives once, as a string,
 // or the request is a 400. Same rule firstNonStringField()/invalidParamType() below apply to this
 // file's list and body fields — this is that rule for a single value, reusable by the other routers.
-const { scalarQueryParam, requireRouteId, isRouteId } = require('../core/query-params');
+const { scalarQueryParam, requireRouteId, isRouteId, MAX_ID } = require('../core/query-params');
 const { perPageParam, pageOffset } = require('../core/pagination');
 const { saveRevision, isRevisionableMeta } = require('../core/revisions');
 const { revisionSourceFor } = require('../core/agent-publishing');
@@ -88,6 +88,7 @@ const {
 // isRestExposedPostType answers "may the GENERIC /posts surface touch this type at all" — see below.
 const {
     capsFor, capsForType, canEditPostRecord, canDeletePostRecord,
+    isTrashedPostRecord, withPreTrashStatus,
     isRestExposedPostType,
     canManagePostRecord, canReadPostContent, isPasswordProtected, publicPostMeta,
     isInternalPostType, isCanonicalPostTypeName, readPolicyForType,
@@ -357,6 +358,13 @@ function toNonNegativeInt(raw: unknown): number | null {
  * under STRICT_TRANS_TABLES rejects with ERROR 1366.
  */
 function toInt(raw: unknown): number | null {
+    const n = toSafeInt(raw);
+    // Both columns this parses for (post_parent, menu_order) are 32-bit integers: a wider value is not a
+    // value they can hold, and Postgres would answer it with an error.
+    return n !== null && n >= -MAX_ID - 1 && n <= MAX_ID ? n : null;
+}
+
+function toSafeInt(raw: unknown): number | null {
     if (typeof raw === 'number') return Number.isSafeInteger(raw) ? raw : null;
     if (typeof raw !== 'string') return null;
     const s = raw.trim();
@@ -371,6 +379,25 @@ function toInt(raw: unknown): number | null {
 
 /** The 404 body every route in this file uses for "no such post". */
 const NOT_FOUND = { code: 'rest_post_invalid_id', message: 'Invalid post ID.', data: { status: 404 } };
+
+/**
+ * A TRASHED ENTRY IS READ-ONLY until it is restored. Every write to it in place — the body, the meta,
+ * the language, the translation group, a revision restore — answers 409 and points at POST
+ * /posts/:id/restore, the one way out of the trash (it puts the previous status back and applies the
+ * publish gate to it). canEditPostRecord also refuses a trashed record, so the surfaces that only ask
+ * the gate (collab, presence, attachments) are covered; this answer exists so the editor can tell the
+ * user what to do instead of a bare 403.
+ */
+const POST_TRASHED = {
+    code: 'rest_post_trashed',
+    message: 'This entry is in the trash. Restore it before editing it.',
+    data: { status: 409 }
+};
+function refuseTrashedEdit(res: Response, post: any): boolean {
+    if (!isTrashedPostRecord(post)) return false;
+    res.status(409).json(POST_TRASHED);
+    return true;
+}
 
 /**
  * THE DEFAULT CATEGORY (Settings → default_category, WordPress parity). An entry of a type that uses the
@@ -1577,7 +1604,7 @@ router.post('/', authenticate, asyncHandler(async (req: AuthenticatedRequest<Rec
  *       404:
  *         description: Post not found
  *       409:
- *         description: X-Collab-Epoch names a live editing session generation that no longer exists (collab_epoch_stale) - the content was changed outside that session after the editor loaded it. Nothing was written.
+ *         description: X-Collab-Epoch names a live editing session generation that no longer exists (collab_epoch_stale) - the content was changed outside that session after the editor loaded it - or the entry is in the trash and must be restored first (rest_post_trashed). Nothing was written.
  */
 router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, ContentUpdateInput>, res: Response) => {
     // The TWIN of the check in POST / — the same table, the same reason, and the field that mattered
@@ -1600,6 +1627,7 @@ router.put('/:id', authenticate, asyncHandler(async (req: AuthenticatedRequest<I
     // could otherwise rewrite or unpublish their own editor-published post via plain edit_posts (audit LOW).
     // The three-part rule now lives in core/post-capabilities so the meta route enforces the SAME one.
     const pcaps = capsForType(post.type || post.postType || 'post') || capsFor('post');
+    if (refuseTrashedEdit(res, post)) return;
     if (!canEditPostRecord(req.user, post)) {
         return res.status(403).json({
             code: 'rest_forbidden',
@@ -1881,8 +1909,9 @@ router.delete('/:id', authenticate, asyncHandler(async (req: AuthenticatedReques
     if (await refuseAttachmentWrite(res, req.user, post)) return;
 
     // Type-aware permissions: post.type picks the capability family, and deleting an already-published
-    // post additionally requires delete_published_<type>s (mirrors the edit gate).
-    if (!canDeletePostRecord(req.user, post)) {
+    // post additionally requires delete_published_<type>s (mirrors the edit gate). A trashed entry is
+    // judged by the status it had before the trash (withPreTrashStatus).
+    if (!canDeletePostRecord(req.user, await withPreTrashStatus(post))) {
         return res.status(403).json({
             code: 'rest_forbidden',
             message: 'You cannot delete this post.',
@@ -1960,8 +1989,9 @@ router.post('/:id/restore', authenticate, asyncHandler(async (req: Authenticated
     if (await refuseAttachmentWrite(res, req.user, post)) return;
 
     // Untrashing is the inverse of trashing, so it clears the SAME bar as DELETE (WordPress gates the
-    // "Restore" link on delete_post): whoever could move this post to the trash may take it back out.
-    if (!canDeletePostRecord(req.user, post)) {
+    // "Restore" link on delete_post): whoever could move this post to the trash may take it back out —
+    // judged by the status it had before the trash, as DELETE does.
+    if (!canDeletePostRecord(req.user, await withPreTrashStatus(post))) {
         return res.status(403).json({
             code: 'rest_forbidden',
             message: 'You cannot restore this post.',
@@ -2043,6 +2073,8 @@ router.post('/:id/restore', authenticate, asyncHandler(async (req: Authenticated
  *         description: This caller may not edit the post (rest_forbidden), or the key is server-managed (rest_protected_meta)
  *       404:
  *         description: No such post, a malformed id, or an internal post type (rest_post_invalid_id)
+ *       409:
+ *         description: The entry is in the trash; restore it first (rest_post_trashed)
  *       413:
  *         description: The value is past the meta complexity bounds (rest_meta_value_too_complex)
  *       500:
@@ -2112,6 +2144,7 @@ router.post('/:id/meta', authenticate, asyncHandler(async (req: AuthenticatedReq
     // alias of `_wjs_review_comments` updates that row on MySQL but is treated as public content here.
     const storageKey = storageMetaKey(key as string, post.postType);
     const gate = NON_CONTENT_META_KEYS.has(storageKey) ? canEditPostIgnoringPublished : canEditPostRecord;
+    if (refuseTrashedEdit(res, post)) return;
     if (!gate(req.user, post)) {
         return res.status(403).json({
             code: 'rest_forbidden',
@@ -2306,6 +2339,8 @@ router.get('/:id/meta', optionalAuth, asyncHandler(async (req: MaybeAuthenticate
  *         description: This caller may not edit the post (rest_forbidden)
  *       404:
  *         description: No such post, a malformed id, or an internal post type (rest_post_invalid_id)
+ *       409:
+ *         description: The entry is in the trash; restore it first (rest_post_trashed)
  */
 router.put('/:id/language', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, LanguageBody>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
@@ -2315,6 +2350,7 @@ router.put('/:id/language', authenticate, asyncHandler(async (req: Authenticated
         return res.status(404).json(NOT_FOUND);
     }
     if (await refuseAttachmentWrite(res, req.user, post)) return;
+    if (refuseTrashedEdit(res, post)) return;
     if (!canEditPostRecord(req.user, post)) {
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit this post.', data: { status: 403 } });
     }
@@ -2455,6 +2491,8 @@ router.get('/:id/translations', optionalAuth, asyncHandler(async (req: MaybeAuth
  *         description: This caller may not edit both posts (rest_forbidden)
  *       404:
  *         description: Either post is missing, has a malformed id, or is an internal post type (rest_post_invalid_id)
+ *       409:
+ *         description: The entry is in the trash; restore it first (rest_post_trashed)
  */
 router.post('/:id/translations', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams, TranslationBody>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
@@ -2469,6 +2507,7 @@ router.post('/:id/translations', authenticate, asyncHandler(async (req: Authenti
     }
     if (await refuseAttachmentWrite(res, req.user, post)) return;
     if (await refuseAttachmentWrite(res, req.user, other)) return;
+    if (refuseTrashedEdit(res, post) || refuseTrashedEdit(res, other)) return;
     if (!canEditPostRecord(req.user, post) || !canEditPostRecord(req.user, other)) {
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit both posts.', data: { status: 403 } });
     }
@@ -2521,6 +2560,8 @@ router.post('/:id/translations', authenticate, asyncHandler(async (req: Authenti
  *         description: This caller may not edit the post (rest_forbidden)
  *       404:
  *         description: No such post, a malformed id, or an internal post type (rest_post_invalid_id)
+ *       409:
+ *         description: The entry is in the trash; restore it first (rest_post_trashed)
  */
 router.delete('/:id/translations', authenticate, asyncHandler(async (req: AuthenticatedRequest<IdParams>, res: Response) => {
     const postId = parseInt(req.params.id, 10);
@@ -2530,6 +2571,7 @@ router.delete('/:id/translations', authenticate, asyncHandler(async (req: Authen
         return res.status(404).json(NOT_FOUND);
     }
     if (await refuseAttachmentWrite(res, req.user, post)) return;
+    if (refuseTrashedEdit(res, post)) return;
     if (!canEditPostRecord(req.user, post)) {
         return res.status(403).json({ code: 'rest_forbidden', message: 'You cannot edit this post.', data: { status: 403 } });
     }

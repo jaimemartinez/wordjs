@@ -122,6 +122,11 @@ function isPublishedFamilyStatus(status: unknown): boolean {
  */
 function canEditPostRecord(user: any, post: any): boolean {
     if (!user || !post) return false;
+    // A trashed entry is not editable by anyone: the way out of the trash is POST /posts/:id/restore,
+    // which puts back the status it had and applies the publish gate to it. Editing it in place would
+    // judge the write against 'trash' — not a published-family status — so a rewrite of a trashed
+    // PUBLISHED entry needed only the bare edit capability, and the next Restore served it live.
+    if (isTrashedPostRecord(post)) return false;
     const caps = capsForType(post.type || post.postType || 'post') || capsFor('post');
     const isOwn = post.authorId === user.id;
     let allowed = isOwn ? user.can(caps.edit) : user.can(caps.editOthers);
@@ -130,6 +135,29 @@ function canEditPostRecord(user: any, post: any): boolean {
     // see isPublishedFamilyStatus — not only the literal 'publish'.
     if (isPublishedFamilyStatus(post.postStatus) && !user.can(caps.editPublished)) allowed = false;
     return allowed;
+}
+
+/** Is this record in the trash? Accepts a Post instance (postStatus) and a raw row (post_status). */
+function isTrashedPostRecord(post: any): boolean {
+    if (!post) return false;
+    return (post.postStatus !== undefined ? post.postStatus : post.post_status) === 'trash';
+}
+
+/**
+ * The record as the DELETE-family gate must judge it: a trashed entry is judged by the status it had
+ * before it was trashed (`_wp_trash_meta_status`, written by Post.trash), not by 'trash'. Otherwise the
+ * author of a published entry an editor trashed — someone without delete_published_<type>s — could
+ * delete it for good or restore it, because 'trash' is not a published-family status. A trashed row
+ * without that meta (trashed before it existed, or imported) is judged as published: the stricter answer
+ * when nobody can tell what it was. Any other record is returned unchanged.
+ */
+async function withPreTrashStatus(post: any): Promise<any> {
+    if (!isTrashedPostRecord(post)) return post;
+    const Post = require('../models/Post');
+    const stored = await Post.getMeta(post.id, '_wp_trash_meta_status');
+    const original = typeof stored === 'string' && stored && stored !== 'trash' ? stored : 'publish';
+    const view = Object.create(Object.getPrototypeOf(post));
+    return Object.assign(view, post, post.postStatus !== undefined ? { postStatus: original } : { post_status: original });
 }
 
 /** Delete twin of canEditPostRecord, generated from the same declared operation map. */
@@ -421,6 +449,7 @@ function isCanonicalPostTypeName(name: unknown): name is string {
 
 module.exports = {
     capsFor, capsForType, canEditPostRecord, canDeletePostRecord,
+    isTrashedPostRecord, withPreTrashStatus,
     canReadPostRecord, canReadUnpublishedPostRecord, isRestExposedPostType,
     isPublishedFamilyStatus, PUBLISHED_FAMILY_STATUSES,
     canManagePostRecord, isPasswordProtected, canReadPostContent,

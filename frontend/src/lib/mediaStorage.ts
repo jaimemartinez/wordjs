@@ -92,8 +92,10 @@ export function browserLoadsImage(url: string, timeoutMs = 15000): Promise<boole
  * The whole connection test: the server writes and reads a probe, this browser loads it from the
  * public URL, and the server deletes it. Steps come back in that order.
  */
-export async function runConnectionTest(form: MediaStorageForm): Promise<MediaStorageTestResult> {
-    const body = writeBody({ ...form, driver: "s3" });
+export async function runConnectionTest(form: MediaStorageForm, stepUp: { currentPassword?: string } = {}): Promise<MediaStorageTestResult> {
+    // `stepUp`: the administrator's password, sent only once the server asked for it (403
+    // rest_sudo_required: the stored secret would be used with another endpoint, region or bucket).
+    const body = { ...writeBody({ ...form, driver: "s3" }), ...stepUp };
     const first = await apiPost<MediaStorageTestResult>("/media-storage/test", body);
     if (!first.probe || !first.publicUrl) return first;
     const loaded = await browserLoadsImage(first.publicUrl);
@@ -156,7 +158,7 @@ export function progressPercent(p: MediaStorageProgress | null): number {
 export const mediaStorageApi = {
     get: () => apiGet<MediaStorageView>("/media-storage"),
     save: (form: MediaStorageForm) => apiPut<MediaStorageView>("/media-storage", writeBody(form)),
-    test: (form: MediaStorageForm) => runConnectionTest(form),
+    test: (form: MediaStorageForm, stepUp: { currentPassword?: string } = {}) => runConnectionTest(form, stepUp),
     migrate: (direction: "offload" | "restore", opts: { deleteLocal?: boolean; restart?: boolean } = {}) =>
         apiPost<MediaStorageView>("/media-storage/migrate", { direction, ...opts }),
 };

@@ -44,6 +44,10 @@ interface ListenOptions {
     banner?: string;
     /** The host name the server greets with (220 <name> ESMTP) — the plugin's HELO name. */
     name?: string;
+    /** Bytes all in-progress messages may hold together before new data is refused with 452. */
+    maxInflightBytes?: number;
+    /** Simultaneous connections one client address may hold. */
+    maxClientsPerIp?: number;
 }
 
 interface Status {
@@ -63,6 +67,58 @@ const DEFAULT_PORT = 25;
 const DEFAULT_FALLBACK = 2525;
 const HARD_MAX_SIZE = 50 * 1024 * 1024;
 const PHASE_TIMEOUT_MS = 25000; // under the isolate's 30 s RPC timeout, so a slow plugin is not recycled
+const DEFAULT_INFLIGHT_BYTES = 256 * 1024 * 1024;
+const HARD_MAX_INFLIGHT_BYTES = 1024 * 1024 * 1024;
+const DEFAULT_CLIENTS_PER_IP = 10;
+
+/**
+ * A listener-wide byte budget. Each message takes a reservation, grows it chunk by chunk (`take` answers
+ * false once the budget would be exceeded) and releases all of it exactly once when it is done.
+ */
+function byteBudget(limit: number) {
+    let used = 0;
+    return {
+        get used() { return used; },
+        limit,
+        reserve() {
+            let held = 0;
+            let open = true;
+            return {
+                take(n: number): boolean {
+                    if (!open || used + n > limit) return false;
+                    used += n;
+                    held += n;
+                    return true;
+                },
+                release() {
+                    if (!open) return;
+                    open = false;
+                    used -= held;
+                    held = 0;
+                },
+            };
+        },
+    };
+}
+
+/** Simultaneous connections per client address, capped at `max`. */
+function connectionSlots(max: number) {
+    const counts = new Map<string, number>();
+    return {
+        max,
+        count(ip: string) { return counts.get(ip) || 0; },
+        acquire(ip: string): boolean {
+            const n = counts.get(ip) || 0;
+            if (n >= max) return false;
+            counts.set(ip, n + 1);
+            return true;
+        },
+        release(ip: string) {
+            const n = (counts.get(ip) || 0) - 1;
+            if (n > 0) counts.set(ip, n); else counts.delete(ip);
+        },
+    };
+}
 
 let server: any = null;
 let owner: string | null = null;
@@ -152,14 +208,26 @@ function probe(port: number): Promise<{ ok: boolean; code?: string }> {
     });
 }
 
-/** This node's non-loopback IPv4 addresses, split into public and private (RFC 1918, CGNAT, link-local). */
-function nodeAddresses(): { public: string[]; private: string[] } {
-    const out = { public: [] as string[], private: [] as string[] };
+/**
+ * This node's non-loopback addresses: IPv4 split into public and private (RFC 1918, CGNAT, link-local), and
+ * the GLOBAL IPv6 ones (`public6`, 2000::/3 in canonical form — link-local, ULA and documentation addresses
+ * are left out). A sandboxed plugin cannot list interfaces, and a mail plugin sends over IPv6 as well, so it
+ * needs both to tell the operator which addresses their DNS must cover.
+ */
+function nodeAddresses(interfaces?: Record<string, any[] | undefined>): { public: string[]; private: string[]; public6: string[] } {
+    const out = { public: [] as string[], private: [] as string[], public6: [] as string[] };
     const isPrivate = (ip: string) => /^(10\.|127\.|169\.254\.|192\.168\.|172\.(1[6-9]|2\d|3[01])\.|100\.(6[4-9]|[7-9]\d|1[01]\d|12[0-7])\.)/.test(ip);
+    const canonical6 = (ip: string) => { try { return new URL(`http://[${ip.split('%')[0]}]/`).hostname.slice(1, -1); } catch { return ''; } };
     try {
-        for (const list of Object.values(require('os').networkInterfaces() || {}) as any[]) {
+        for (const list of Object.values(interfaces || require('os').networkInterfaces() || {}) as any[]) {
             for (const a of list || []) {
-                if (!a || a.internal || (a.family !== 'IPv4' && a.family !== 4)) continue;
+                if (!a || a.internal) continue;
+                if (a.family === 'IPv6' || a.family === 6) {
+                    const ip = canonical6(String(a.address || ''));
+                    if (/^[23][0-9a-f]{0,3}:/.test(ip) && !/^2001:db8:/.test(ip) && !out.public6.includes(ip)) out.public6.push(ip);
+                    continue;
+                }
+                if (a.family !== 'IPv4' && a.family !== 4) continue;
                 const bucket = isPrivate(a.address) ? out.private : out.public;
                 if (!bucket.includes(a.address)) bucket.push(a.address);
             }
@@ -251,6 +319,9 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
     const proxyIps = validIps(opts && opts.proxyIps);
     const maxSize = Math.min(Math.max(Number(opts && opts.maxSize) || 25 * 1024 * 1024, 1024 * 1024), HARD_MAX_SIZE);
     const maxClients = Math.min(Math.max(Number(opts && opts.maxClients) || 50, 1), 200);
+    // Room for at least one message of the largest size plus its base64 copy, whatever is configured.
+    const inflight = byteBudget(Math.min(Math.max(Number(opts && opts.maxInflightBytes) || DEFAULT_INFLIGHT_BYTES, maxSize * 3), HARD_MAX_INFLIGHT_BYTES));
+    const perIp = connectionSlots(Math.min(Math.max(Number(opts && opts.maxClientsPerIp) || Math.min(DEFAULT_CLIENTS_PER_IP, maxClients), 1), maxClients));
 
     status = { owner: slug, requestedPort: port, boundPort: null, degraded: false, reason: null, proxyIps };
     const p = await probe(port);
@@ -277,8 +348,22 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
         size: maxSize,
         maxClients,
         socketTimeout: 60 * 1000,
+        // No PTR lookup per connection: a resolver round trip that any sender can trigger (and stall) costs
+        // the host before the plugin is even asked; the client's IP is what every check uses.
+        disableReverseLookup: true,
+        // On stop/restart, connections still open are cut after this long instead of the library's 30 s.
+        closeTimeout: 5 * 1000,
+        // Bounds the commands a client may send before authenticating, should AUTH ever be required here.
+        maxAllowedUnauthenticatedCommands: 20,
         banner: opts && opts.banner ? String(opts.banner).replace(/[\r\n]+/g, ' ').slice(0, 120) : undefined,
         onConnect(session: any, callback: any) {
+            // One address may hold only a share of the listener's client slots (the PROXY-protocol client
+            // address when a trusted proxy is configured), so a single sender cannot take them all.
+            const ip = String(session.remoteAddress || '');
+            if (!perIp.acquire(ip)) {
+                return callback(smtpError(421, '4.7.0 Too many connections from your address, try again later'));
+            }
+            session.__wjsIp = ip;
             session.__wjsId = `s${++sessionSeq}`;
             ask(invoke, 'connect', [sessionView(session)]).then((v) => settle(callback, v));
         },
@@ -289,17 +374,43 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
             ask(invoke, 'rcptTo', [{ address: String((address && address.address) || '') }, sessionView(session)]).then((v) => settle(callback, v));
         },
         onData(stream: any, session: any, callback: any) {
-            const chunks: Buffer[] = [];
+            // Every byte held for this message — the received chunks, then the base64 copy handed to the
+            // plugin — is reserved from the listener-wide budget and given back once the transaction ends,
+            // however it ends. Once the budget is spent the rest of the message is read and discarded and
+            // the sender gets a temporary 452, so concurrent messages cannot exhaust the host's memory.
+            const reservation = inflight.reserve();
+            let chunks: Buffer[] = [];
             let size = 0;
-            stream.on('data', (c: Buffer) => { size += c.length; if (size <= maxSize) chunks.push(c); });
-            stream.on('error', (e: any) => callback(smtpError(451, `4.3.0 ${String(e && e.message || 'stream error')}`)));
+            let overBudget = false;
+            let answered = false;
+            const answer = (err?: any, v?: Verdict) => {
+                if (answered) return;
+                answered = true;
+                chunks = [];
+                reservation.release();
+                if (err) callback(err); else settle(callback, v);
+            };
+            stream.on('data', (c: Buffer) => {
+                size += c.length;
+                if (size > maxSize || overBudget) return;
+                if (!reservation.take(c.length)) { overBudget = true; chunks = []; return; }
+                chunks.push(c);
+            });
+            stream.on('error', (e: any) => answer(smtpError(451, `4.3.0 ${String(e && e.message || 'stream error')}`)));
+            stream.on('close', () => { if (!stream.readableEnded) answer(smtpError(451, '4.3.0 Message transfer interrupted')); });
             stream.on('end', () => {
-                if (stream.sizeExceeded) return callback(smtpError(552, '5.3.4 Message exceeds the maximum size'));
-                const raw = Buffer.concat(chunks).toString('base64');
-                ask(invoke, 'data', [raw, sessionView(session)]).then((v) => settle(callback, v));
+                if (stream.sizeExceeded) return answer(smtpError(552, '5.3.4 Message exceeds the maximum size'));
+                const message = Buffer.concat(chunks);
+                chunks = [];
+                if (overBudget || !reservation.take(Math.ceil(message.length / 3) * 4)) {
+                    return answer(smtpError(452, '4.3.1 Insufficient system resources, try again later'));
+                }
+                const raw = message.toString('base64');
+                ask(invoke, 'data', [raw, sessionView(session)]).then((v) => answer(null, v));
             });
         },
         onClose(session: any) {
+            if (session && session.__wjsIp) { perIp.release(session.__wjsIp); session.__wjsIp = null; }
             if (session && session.__wjsId) invoke('close', [sessionView(session)]).catch(() => { /* best effort */ });
         },
     });
@@ -348,4 +459,4 @@ function getStatus(): Status {
     return { ...status, proxyIps: [...status.proxyIps], tls: status.tls ? { ...status.tls } : null, addresses: status.addresses ? { public: [...status.addresses.public], private: [...status.addresses.private] } : undefined };
 }
 
-module.exports = { start, stop, getStatus, _bindReason: bindReason, _hostName: hostName, _tlsMaterial: tlsMaterial };
+module.exports = { start, stop, getStatus, _bindReason: bindReason, _nodeAddresses: nodeAddresses, _hostName: hostName, _tlsMaterial: tlsMaterial, _byteBudget: byteBudget, _connectionSlots: connectionSlots };

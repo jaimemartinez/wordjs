@@ -78,6 +78,7 @@ const API_ROUTE_GROUPS: Readonly<Record<string, string>> = Object.freeze({
     hooks: '/hooks',
     webhooks: '/webhooks',
     audit: '/audit',
+    databaseIntegrity: '/database-integrity',
     agents: '/agents',
     mcp: '/mcp',
     ai: '/ai',
@@ -158,7 +159,9 @@ router.use('/health/site', multisiteGuards.mainSiteOnly);
 router.use('/hooks', multisiteGuards.mainSiteOnly);
 // On the main site of a network the same network-wide subtrees take a NETWORK administrator, not just an
 // administrator of the main site (the plugin and theme guards above apply the same rule to code changes).
-for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/system/server', '/system/redis', '/system/cluster', '/system/update', '/hooks']) {
+// The process health report (/health/details) and the network's per-site health (/health/site) are
+// network-wide too.
+for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/system/server', '/system/redis', '/system/cluster', '/system/update', '/hooks', '/health/details', '/health/site']) {
     router.use(subtree, multisiteGuards.networkAdminOnMainSite);
 }
 // The network itself: its sites and administrators (main site, network administrators only).
@@ -215,6 +218,8 @@ router.use('/seo', seoRoutes);
 router.use('/hooks', hooksRoutes);
 router.use('/webhooks', require('./webhooks'));
 router.use('/audit', require('./audit'));
+// Admin → Site Health → Duplicate records: the unique rules the database enforces, and resolving what blocks them.
+router.use('/database-integrity', require('./database-integrity'));
 // AI agents: the connections an administrator grants (routes/agents.ts) and the MCP endpoint they use
 // (routes/mcp.ts). See core/agent-capabilities for the request/grant/narrow model.
 router.use('/agents', require('./agents'));

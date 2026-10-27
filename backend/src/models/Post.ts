@@ -4,6 +4,8 @@
  */
 
 const database = require('../config/database');
+// An id no column can hold names no row: findById answers null for it (core/query-params).
+const { isStorableId } = require('../core/query-params');
 const { clampLimit, clampOffset } = require('../core/pagination');
 const { db, dbAsync, getDbType } = database;
 const { doShortcode, doShortcodeAsync, stripShortcodes } = require('../core/shortcodes');
@@ -874,7 +876,8 @@ class Post {
      * Equivalent to get_post()
      */
     static async findById(id: any) {
-        if (!id) return null;
+        // An id no column can hold names no row (core/query-params isStorableId) — never a driver error.
+        if (!id || !isStorableId(id)) return null;
 
         // 1. Try Cache
         const cacheKey = `post:id:${id}`;
@@ -930,6 +933,10 @@ class Post {
             params.push(...clause.params);
         }
 
+        // Deterministic where the unique (slug, type) index could not be built yet (duplicates, see
+        // core/unique-integrity): the published row first, then the oldest — never whichever row the
+        // engine happens to read first. Each candidate is still authorized on its own row by the caller.
+        sql += " ORDER BY CASE WHEN post_status = 'publish' THEN 0 ELSE 1 END, id ASC";
         const row = await dbAsync.get(sql, params);
         if (!row) {
             // Negative cache, short TTL. create() dels this key, so a brand-new post with a

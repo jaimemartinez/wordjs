@@ -69,8 +69,10 @@ async function enroll() {
         .send({ currentPassword: PASSWORD });
     assert.strictEqual(setup.status, 200);
     const secret = setup.body.secret;
+    // The code that completes enrollment is spent, so enroll with the previous step's (still inside the
+    // ±1 drift window) and leave the current one for the test.
     const enable = await request(app).post(`${B}/auth/mfa/enable`).set('Authorization', bearer(jwtFor(uid, 'mfauser')))
-        .send({ currentPassword: PASSWORD, code: totp.totp(secret) });
+        .send({ currentPassword: PASSWORD, code: totp.totp(secret, { time: Math.floor(Date.now() / 1000) - 30 }) });
     assert.strictEqual(enable.status, 200, JSON.stringify(enable.body));
     return { secret, backupCodes: enable.body.backupCodes as string[] };
 }

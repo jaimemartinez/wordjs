@@ -113,6 +113,10 @@ const PROTECTED_OPTION_NAMES = new Set([
     // API-token enforcement on by default (core/mfa). Written by a plugin or carried in by a site import it
     // would flip that default on a site that was upgraded, not installed.
     'mfa_policy_fresh_install',
+    // The audit log's retention, its hash chain's anchor and its external copy (core/audit, audit-chain,
+    // audit-export): a plugin rewriting them could shorten the log, break its verification or redirect
+    // the copy that keeps it honest. Written only through PUT /audit/settings, which re-authenticates.
+    'audit_retention_days', 'audit_chain_anchor', 'audit_export', 'audit_export_cursor',
     // 'author_legacy_slugs' turns on resolving retired, login-derived author slugs on the public site
     // (core/author-aliases) — an administrator's informed choice, never a plugin's.
     'author_legacy_slugs',
@@ -229,14 +233,12 @@ const PROTECTED_TABLES = new Set(['users', 'user_meta', 'usermeta', 'options', '
 // table-name denylist misses: ATTACH/DETACH (mounts arbitrary host files as a DB -> file read/write),
 // PRAGMA (info disclosure / settings), schema catalogs (enumerate/read core schema), and stacked
 // statements ('SELECT 1; DROP TABLE x'). Then require the statement to START with one of the caller's
-// allowed verbs (positive allowlist). Comments are stripped first so they can't act as whitespace to
-// evade. Trusted plugins skip this entirely (see callers).
-// Single-pass SQL lexer: walk the raw string ONCE, recognizing `--`/`/* */` comments and `'…'` string
-// literals IN CONTEXT — so their contents can NEVER be seen as SQL structure (a `/*` inside a literal is
-// literal text; a `'` inside a comment is comment text; earlier sequential regex passes let one splice the
-// other, #2), and emitting `"…"`/`[…]`/`` `…` `` quoted identifiers as ONE opaque WORD token (so a quoted
+// allowed verbs (positive allowlist). Comments are refused outright (see lexSql). Trusted plugins skip this entirely (see callers).
+// Single-pass SQL lexer: walk the raw string ONCE, recognizing `'…'` string literals IN
+// CONTEXT — so their contents can NEVER be seen as SQL structure (a `/*` inside a literal is literal text,
+// and a comment opener OUTSIDE one is refused), and emitting `"…"`/`[…]`/`` `…` `` quoted identifiers as ONE opaque WORD token (so a quoted
 // `")"` alias can't inject a phantom `)` that underflows the walker's scope stack, #1). Returns { toks,
-// cleaned }: toks = [{k:'p'|'w', v}] for the table walker; cleaned = lowercased text with comments + string
+// cleaned }: toks = [{k:'p'|'w', v}] for the table walker; cleaned = lowercased text with string
 // literals blanked to a space (for the keyword denylists + multi-statement/verb checks). Bounded O(n).
 type SqlTok = { k: string; v: string; q?: boolean };
 function lexSql(sql: string): { toks: SqlTok[]; cleaned: string } {
@@ -248,22 +250,16 @@ function lexSql(sql: string): { toks: SqlTok[]; cleaned: string } {
     const isWord = (c: string) => (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') || (c >= '0' && c <= '9') || c === '_' || c === '$' || c === '.';
     while (i < n) {
         const c = s[i];
-        // `--` line comment — but ONLY when the next char is whitespace/control or EOL, matching MySQL/
-        // MariaDB (SQLite/Postgres treat any `--` as a comment; MySQL treats `--0` as arithmetic `- -0`).
-        // Taking the STRICTEST rule here means `--x` is NOT swallowed, so a `WHERE 2=1--0 UNION SELECT
-        // user_pass FROM users` stays fully visible to the table-scoping walker on every driver — closing
-        // the MySQL-only comment-divergence scoping bypass.
-        if (c === '-' && s[i + 1] === '-' && (i + 2 >= n || s[i + 2] === ' ' || s[i + 2] === '\t' || s[i + 2] === '\n' || s[i + 2] === '\r' || s[i + 2] === '\v' || s[i + 2] === '\f')) {
-            // Terminate the comment body at `\n` OR a bare `\r`. Postgres' scanner defines newline as
-            // `[\n\r]`, so a lone carriage return ENDS a `--` comment there and the text after it runs as
-            // live SQL. Stopping only at `\n` (as before) let a plugin write `SELECT 1 -- x\rUNION SELECT
-            // user_pass FROM users`: the guard swallowed the whole tail (no `\n`) and saw only `SELECT 1`,
-            // while Postgres executed the UNION. Stopping at the STRICTEST terminator (`\r` too) keeps the
-            // tail visible to the table-scoping walker on every driver — SQLite/MySQL end `--` only at `\n`,
-            // so stopping earlier there just makes the guard see MORE structure (fail-safe).
-            i += 2; while (i < n && s[i] !== '\n' && s[i] !== '\r') i++; cleaned += ' '; continue;
+        // COMMENTS ARE REFUSED, not interpreted. Every engine reads them differently — MySQL needs
+        // whitespace after `--` and also opens a line comment at `#`, Postgres nests `/* /* */ */` and
+        // ends `--` at a bare `\r`, SQLite does neither — and any text the guard reads as comment (or
+        // as code) while the engine reads it the other way is structure the table walker never judged.
+        // Plugin SQL has no use for comments, so the first `--`, `/*` or `#` outside a literal or a
+        // quoted identifier ends the check. (Inside a literal they are data, read alike by every engine
+        // once backslashes are refused below.)
+        if ((c === '-' && s[i + 1] === '-') || (c === '/' && s[i + 1] === '*') || c === '#') {
+            throw new Error(`🛡️ Plugin DB access denied: SQL comments (--, /* */, #) are not permitted in plugin SQL.`);
         }
-        if (c === '/' && s[i + 1] === '*') { i += 2; while (i < n && !(s[i] === '*' && s[i + 1] === '/')) i++; i += 2; cleaned += ' '; continue; } // /* block */
         if (c === "'") { // string literal ('' escapes a quote) — content is NEVER structure/keywords/tables
             i++;
             while (i < n) { if (s[i] === "'") { if (s[i + 1] === "'") { i += 2; continue; } i++; break; } i++; }
@@ -306,31 +302,81 @@ function collectTableTokens(toks: SqlTok[]): string[] {
     // foreign key into a core table both constrains that core row (its delete now fails) and probes its
     // existence. Neither the walker nor the PROTECTED_TABLES regex saw it, so the documented rule
     // ("out of bounds for any plugin") was not enforced. Treat the token after it as a table.
-    const OPENERS_ONE = new Set(['into', 'update', 'table', 'references']); // single-table target (INSERT INTO / UPDATE / *TABLE / REFERENCES)
+    const OPENERS_ONE = new Set(['into', 'update', 'table', 'references', 'delete']); // target slot (INSERT INTO / UPDATE / *TABLE / REFERENCES / DELETE)
+    // TARGET LISTS. `DROP TABLE a, b`, MySQL's multi-table `UPDATE a, b SET …` and `DELETE a, b FROM …` name
+    // SEVERAL targets after one keyword. A comma right after such a target (after its alias, for UPDATE)
+    // opens the next one, exactly like a FROM list, so every name is captured — not only the first.
+    const LIST_OPENERS = new Set(['table', 'update', 'delete']);
+    // UPDATE / DELETE also appear as EVENTS rather than statements — `ON DELETE CASCADE`, `ON UPDATE …`,
+    // `ON DUPLICATE KEY UPDATE col = …`, a row lock's `FOR UPDATE`, a trigger's `AFTER INSERT OR UPDATE OF col ON t` — where the next
+    // word is an action, a column or `of`/`on`, never a table. After these words the keyword is not an opener.
+    const EVENT_CONTEXT = new Set(['on', 'key', 'after', 'before', 'of', 'or', 'for']);
+    // Modifiers that sit between a target keyword and its table: `UPDATE IGNORE t`, `DELETE LOW_PRIORITY
+    // QUICK FROM t`, Postgres' `UPDATE ONLY t` / `FROM ONLY t`. Skipped, so the table itself is captured.
+    const MODIFIERS = new Set(['if', 'not', 'exists', 'only', 'ignore', 'low_priority', 'quick']);
     const ENDERS = new Set(['where', 'group', 'having', 'order', 'limit', 'offset', 'window', 'returning', 'values', 'set', 'union', 'intersect', 'except', 'select', 'with']);
     const out: string[] = [];
     const stack: { fromClause: boolean; expectTable: boolean }[] = [];
     let fromClause = false, expectTable = false;
+    // The opener whose target list may continue after a comma ('' = none), and whether the UPDATE target's
+    // alias was already seen.
+    let pendingList = '', listKind = '', listAliased = false;
+    // `INHERITS (a, b)`: the next paren is a LIST of parent tables (Postgres).
+    let parenTableList = false;
+    let prevWord = '', prevPunct = '';
+    let lastCaptured = '';
+    const isCreateTable = toks.length > 1 && toks[0].k === 'w' && toks[0].v === 'create'
+        && toks.slice(1, 4).some((x) => x.k === 'w' && !x.q && x.v === 'table');
     for (const tk of toks) {
         if (tk.k === 'p') {
+            prevPunct = tk.v;
             // A paren opened in a table slot / FROM list is itself a table-or-subquery: propagate fromClause
             // in so an intra-paren comma cross-join `FROM (a , b)` re-arms expectTable; restore on `)`.
-            if (tk.v === '(') { const innerFrom: boolean = expectTable || fromClause; stack.push({ fromClause, expectTable: false }); fromClause = innerFrom; continue; }
-            if (tk.v === ')') { const st = stack.pop() || { fromClause: false, expectTable: false }; fromClause = st.fromClause; expectTable = st.expectTable; continue; }
-            if (tk.v === ',') { if (fromClause) expectTable = true; continue; }
+            if (tk.v === '(') {
+                listKind = '';
+                const innerFrom: boolean = expectTable || fromClause || parenTableList;
+                stack.push({ fromClause, expectTable: false });
+                fromClause = innerFrom;
+                if (parenTableList) { expectTable = true; parenTableList = false; }
+                continue;
+            }
+            if (tk.v === ')') { listKind = ''; const st = stack.pop() || { fromClause: false, expectTable: false }; fromClause = st.fromClause; expectTable = st.expectTable; continue; }
+            if (tk.v === ',') { if (fromClause || listKind) expectTable = true; listAliased = false; continue; }
             continue;
         }
         const quoted = tk.q === true; // a quoted identifier is a NAME, never a keyword/opener/ENDER
         const t = tk.v;
+        const before = prevWord;
+        const afterPunct = prevPunct;
+        prevWord = quoted ? '' : t; prevPunct = '';
         if (expectTable) {
-            if (!quoted && (t === 'if' || t === 'not' || t === 'exists')) continue;           // CREATE/DROP TABLE IF [NOT] EXISTS <name>
-            if (!quoted && ENDERS.has(t)) { expectTable = false; fromClause = false; continue; } // `(SELECT…/VALUES…)` = subquery, not a table
+            if (!quoted && MODIFIERS.has(t)) continue;                                         // IF [NOT] EXISTS / ONLY / IGNORE …
+            if (!quoted && OPENERS_FROM.has(t)) { fromClause = true; listKind = ''; continue; } // `DELETE FROM t` — the FROM list starts here
+            if (!quoted && t === 'on') { expectTable = false; listKind = ''; continue; }      // `DELETE … ON` (an event, never a table)
+            if (!quoted && ENDERS.has(t)) { expectTable = false; fromClause = false; listKind = ''; continue; } // `(SELECT…/VALUES…)` = subquery, not a table
             out.push(t);                                                                       // CAPTURE — no exemption; the caller prefix-checks it
+            lastCaptured = t;
             expectTable = false;
+            listKind = pendingList; listAliased = false;
             continue;
         }
-        if (!quoted && OPENERS_FROM.has(t)) { fromClause = true; expectTable = true; }
-        else if (!quoted && OPENERS_ONE.has(t)) { expectTable = true; }
+        if (listKind) {
+            // Only a comma continues a target list. UPDATE's target may carry an alias first (`UPDATE a x, b`);
+            // anything else closes the list and is processed normally below.
+            if (listKind === 'update' && !listAliased && !quoted && t === 'as') continue;
+            if (listKind === 'update' && !listAliased && (quoted || !ENDERS.has(t)) && !OPENERS_FROM.has(t)) { listAliased = true; continue; }
+            listKind = '';
+        }
+        if (!quoted && OPENERS_FROM.has(t)) { fromClause = true; expectTable = true; pendingList = ''; }
+        else if (!quoted && OPENERS_ONE.has(t)) {
+            if ((t === 'update' || t === 'delete') && EVENT_CONTEXT.has(before)) continue;
+            expectTable = true; pendingList = LIST_OPENERS.has(t) ? t : '';
+        }
+        // Names a statement takes from ELSEWHERE: Postgres `PARTITION OF parent`, `INHERITS (a, b)`, and the
+        // template of `CREATE TABLE t (LIKE src …)` / MySQL `CREATE TABLE t LIKE src`.
+        else if (!quoted && t === 'of' && before === 'partition') { expectTable = true; pendingList = ''; }
+        else if (!quoted && t === 'inherits') { parenTableList = true; pendingList = ''; }
+        else if (!quoted && t === 'like' && isCreateTable && (afterPunct === '(' || before === lastCaptured)) { expectTable = true; pendingList = ''; }
         else if (!quoted && t === 'on') { expectTable = false; }                              // keep fromClause: `JOIN y ON a=b , z` — z is still a cross-join
         else if (!quoted && t === 'as') { /* alias marker — ignore */ }
         else if (!quoted && ENDERS.has(t)) { fromClause = false; expectTable = false; }
@@ -339,7 +385,7 @@ function collectTableTokens(toks: SqlTok[]): string[] {
     return out;
 }
 
-function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: string, slug?: string) {
+function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: string, slug?: string): { owned: string[] } {
     const raw = String(sql || '');
     // Bound the RAW input BEFORE ANY processing: legitimate plugin SQL is small, and an unbounded string is
     // a cheap way to force super-linear work in the HOST process (the guard runs host-side for isolated
@@ -348,6 +394,9 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     if (raw.length > 20000) {
         throw new Error(`🛡️ Plugin DB access denied: SQL statement too long.`);
     }
+    // The plugin-owned object names the statement touches (tables, views, rename targets, index/trigger
+    // tables), returned so the caller can give a scoped principal exactly these and nothing else.
+    const owned: string[] = [];
     // MySQL/MariaDB "executable comments" (`/*! … */`, optionally version-gated `/*!50000 … */`) run the
     // wrapped SQL on those engines while the generic `/* */` lexer below blanks it — the same comment-
     // divergence class as `--0`. Checked on the RAW string BEFORE the lexer strips it. A plugin never needs
@@ -488,20 +537,28 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
             const obj = (lower.match(/^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)?\s+)?(?:unique\s+)?([a-z_]+)/) || [])[1] || '(unknown)';
             throw new Error(`🛡️ Plugin DB access denied: DDL on '${obj}' is not permitted — a plugin may only create/alter/drop its own TABLE, INDEX, VIEW or TRIGGER.`);
         }
-        // A rename retargets an owned table to an arbitrary name, so the pre-rename token (which the walker
-        // sees and accepts) says nothing about where it lands: `ALTER TABLE wjp_x_notes RENAME TO users`
-        // shadows a core table. Scope the DESTINATION too.
-        const renameTo = lower.match(/\brename\s+to\s+([^\s(;]+)/);
-        if (renameTo && (!/^[a-z_][a-z0-9_$.]*$/.test(renameTo[1]) || !renameTo[1].startsWith(tablePrefix))) {
-            throw new Error(`🛡️ Plugin DB access denied: rename target '${renameTo[1]}' must use the '${tablePrefix}' prefix.`);
+        const isDdl = /^(?:create|alter|drop)\b/.test(lower);
+        if (isDdl) {
+            // ONE OBJECT PER DROP, and nothing that reaches past it. `DROP TABLE a, b` names several targets
+            // after one keyword and CASCADE removes whatever else depends on the target; a plugin drops its
+            // own objects one statement at a time.
+            if (/^drop\b/.test(lower) && (lower.includes(',') || /\bcascade\b/.test(lower))) {
+                throw new Error(`🛡️ Plugin DB access denied: DROP takes exactly one object and no CASCADE in plugin SQL.`);
+            }
+            // Clauses that hand an object to another principal or place it outside the plugin's tables:
+            // a DEFINER / SQL SECURITY / SECURITY DEFINER identity, OWNER TO, SET SCHEMA, a TABLESPACE or
+            // DATA/INDEX DIRECTORY, a non-default storage engine (MERGE's UNION=(…) names other tables,
+            // FEDERATED's CONNECTION= another server) and a trigger EXECUTE FUNCTION/PROCEDURE (a routine
+            // the plugin did not write). None of them belongs in a plugin's own schema.
+            if (/\bdefiner\b|\bsql\s+security\b|\bsecurity\s+(?:definer|invoker)\b|\bowner\s+to\b|\bset\s+schema\b|\btablespace\b|\bdirectory\b|\bconnection\s*=|\bunion\s*=|\bengine\s*=?\s*(?!innodb\b)[a-z]|\bexecute\s+(?:function|procedure)\b/.test(lower)) {
+                throw new Error(`🛡️ Plugin DB access denied: this DDL clause (definer/security/owner/schema/tablespace/directory/engine/routine) is not permitted in plugin SQL.`);
+            }
         }
-        // Every TABLE the query references (at any depth, in any clause, via any keyword/comma) must be a
-        // table this plugin OWNS. The lexed token-walker catches the comma-join / subquery / UNION / FROM(x)
-        // / quoted-alias evasions. FAIL-CLOSED: any non-prefixed table token is denied.
+        // Every object name the statement creates, changes or depends on, judged by ONE ownership rule.
         ensureAllPrefixesClaimed(); // complete the CLAIMED_PREFIXES set so longest-prefix ownership is load-order-independent
-        for (const tok of collectTableTokens(toks)) {
+        const assertOwned = (tok: string, what: string) => {
             if (!/^[a-z_][a-z0-9_$.]*$/.test(tok) || !tok.startsWith(tablePrefix)) {
-                throw new Error(`🛡️ Plugin DB access denied: table '${tok}' is not owned by this plugin — use the '${tablePrefix}' prefix (wordjs.db.tablePrefix).`);
+                throw new Error(`🛡️ Plugin DB access denied: ${what} '${tok}' is not owned by this plugin — use the '${tablePrefix}' prefix (wordjs.db.tablePrefix).`);
             }
             // AUTHORITATIVE creator check (#12): if this exact table has a RECORDED creator, only that
             // creator may touch it — defeating a prefix-extension squat (attacker slug 'events-ticket'
@@ -518,28 +575,41 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
                     throw new Error(`🛡️ Plugin DB access denied: table '${tok}' belongs to plugin '${s}', not this plugin.`);
                 }
             }
+            if (!owned.includes(tok)) owned.push(tok);
+        };
+        // A rename retargets an owned table to an arbitrary name, so the pre-rename token (which the walker
+        // sees and accepts) says nothing about where it lands: `ALTER TABLE wjp_x_notes RENAME TO users`
+        // shadows a core table. Scope the DESTINATION too — in every spelling (`RENAME TO x`, MySQL's
+        // `RENAME AS x` / `RENAME x`); `RENAME [COLUMN|INDEX|KEY|CONSTRAINT] a TO b` renames a part, not the table.
+        // (Postgres also spells a column rename `RENAME a TO b`, hence the trailing TO test.)
+        const renameTo = lower.match(/\brename\s+(?:(?:to|as)\s+)?([^\s(;,]+)(\s+to\b)?/);
+        if (renameTo && !renameTo[2] && !['column', 'index', 'key', 'constraint'].includes(renameTo[1])) {
+            assertOwned(renameTo[1], 'rename target');
         }
-        // INDEX DDL: CREATE [UNIQUE] INDEX <name> ON <table> (...) / DROP INDEX <name>. The generic
-        // table matcher above misses the `ON <table>` target and the index name, so scope them too.
-        if (/\bindex\b/.test(lower)) {
-            const onTbl = lower.match(/\bon\s+([^\s(;]+)/);
-            if (onTbl && (!/^[a-z_][a-z0-9_$.]*$/.test(onTbl[1]) || !onTbl[1].startsWith(tablePrefix))) {
-                throw new Error(`🛡️ Plugin DB access denied: index target '${onTbl[1]}' is not owned by this plugin.`);
-            }
-            const idxName = lower.match(/\b(?:create(?:\s+unique)?\s+index|drop\s+index)(?:\s+if\s+(?:not\s+)?exists)?\s+([^\s(;]+)/);
-            if (idxName && (!/^[a-z_][a-z0-9_$.]*$/.test(idxName[1]) || !idxName[1].startsWith(tablePrefix))) {
-                throw new Error(`🛡️ Plugin DB access denied: index name '${idxName[1]}' must use the '${tablePrefix}' prefix.`);
-            }
+        // Every TABLE the query references (at any depth, in any clause, via any keyword/comma) must be a
+        // table this plugin OWNS. The lexed token-walker catches the comma-join / subquery / UNION / FROM(x)
+        // / quoted-alias / target-list evasions. FAIL-CLOSED: any non-prefixed table token is denied.
+        for (const tok of collectTableTokens(toks)) assertOwned(tok, 'table');
+        // INDEX and TRIGGER DDL name their TABLE after `ON` (CREATE [UNIQUE] INDEX <name> ON <table>, MySQL
+        // DROP INDEX <name> ON <table>, CREATE TRIGGER <name> … ON <table>, Postgres DROP TRIGGER <name> ON
+        // <table>), a slot the generic walker does not read — and a trigger fires its body as part of every
+        // write to that table. The first `ON` is that table; it must be one this plugin owns.
+        if (/\bindex\b/.test(lower) || (isDdl && /^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)?\s+)?trigger\b/.test(lower))) {
+            const onTbl = lower.match(/\bon\s+([^\s(;,]+)/);
+            if (onTbl) assertOwned(onTbl[1], 'index/trigger target');
         }
-        // VIEW / TRIGGER object names (missed by the table matcher + the INDEX case) must be prefixed too,
-        // else a plugin squats an unprefixed object in the shared namespace or shadows another's.
-        if (/\b(?:view|trigger)\b/.test(lower)) {
-            const obj = lower.match(/\b(?:create(?:\s+temp(?:orary)?)?\s+(?:view|trigger)|drop\s+(?:view|trigger))(?:\s+if\s+(?:not\s+)?exists)?\s+([^\s(;]+)/);
-            if (obj && (!/^[a-z_][a-z0-9_$.]*$/.test(obj[1]) || !obj[1].startsWith(tablePrefix))) {
-                throw new Error(`🛡️ Plugin DB access denied: view/trigger name '${obj[1]}' must use the '${tablePrefix}' prefix.`);
+        // INDEX / VIEW / TRIGGER object names (missed by the table matcher) must be prefixed too, else a
+        // plugin squats an unprefixed object in the shared namespace or shadows another's — whether it is
+        // created, replaced, altered or dropped.
+        const objName = lower.match(/^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)?\s+)?(?:unique\s+)?(index|view|trigger)(?:\s+if\s+(?:not\s+)?exists)?\s+([^\s(;,]+)/);
+        if (objName) {
+            if (!/^[a-z_][a-z0-9_$.]*$/.test(objName[2]) || !objName[2].startsWith(tablePrefix)) {
+                throw new Error(`🛡️ Plugin DB access denied: ${objName[1] === 'index' ? 'index' : 'view/trigger'} name '${objName[2]}' must use the '${tablePrefix}' prefix.`);
             }
+            if (objName[1] === 'view') assertOwned(objName[2], 'view');
         }
     }
+    return { owned };
 }
 
 // Confine a plugin-supplied relative path to its own dir or the uploads dir; realpath-checked.
@@ -550,7 +620,10 @@ function resolvePluginPath(slug: string, relPath: string, mustExist: boolean, al
         try { return fs.realpathSync(candidate); } catch { return candidate; }
     })();
     const ok = (dir: string) => real === dir || real.startsWith(dir + path.sep);
-    if (!ok(base) && !(allowUploads && ok(UPLOADS_DIR))) {
+    // `<plugin dir>/data` is a link to the plugin's own data directory (core/plugin-own-data): its target is
+    // the plugin's own storage, so a path that resolves there is inside the plugin's own space.
+    const ownData = require('./sandbox-paths').ownDataDir(ROOT_DIR, slug);
+    if (!ok(base) && !ok(ownData) && !(allowUploads && ok(UPLOADS_DIR))) {
         throw new Error(`🛡️ Plugin path denied: '${relPath}' is outside the plugin dir${allowUploads ? ' and uploads' : ''}.`);
     }
     if (mustExist && !fs.existsSync(real)) throw new Error(`File not found: ${relPath}`);
@@ -636,6 +709,24 @@ function persistRegistry(key: string, slug: string): void { require('./plugin-co
 function ensureAllPrefixesClaimed() { return require('./plugin-context').runAsHost(() => ensureAllPrefixesClaimedImpl()); }
 function persistPrefix(prefix: string, slug: string): void { persistRegistry(prefix, slug); }
 // Record `table` as created by `slug` (idempotent, in-memory + on disk). First-creator wins.
+/**
+ * Does `table` belong to `slug` — the same two rules the SQL guard applies: a RECORDED creator decides
+ * outright; otherwise the plugin whose claimed prefix is the LONGEST match owns it. Used to hand a plugin's
+ * DB principal only its own tables when one prefix starts another (wjp_event_ ⊂ wjp_event_tickets_).
+ */
+function isTableOwnedBy(table: string, slug: string): boolean {
+    const t = String(table).toLowerCase();
+    const prefix = ('wjp_' + String(slug).replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
+    if (!t.startsWith(prefix)) return false;
+    ensureAllPrefixesClaimed();
+    const creator = TABLE_CREATORS.get(t);
+    if (creator) return creator === slug;
+    for (const p of CLAIMED_PREFIXES.keys()) {
+        if (p.length > prefix.length && t.startsWith(p)) return false;
+    }
+    return true;
+}
+
 function recordTableCreator(table: string, slug: string): void {
     const t = String(table).toLowerCase();
     if (TABLE_CREATORS.has(t)) return;
@@ -650,14 +741,20 @@ function ensureAllPrefixesClaimedImpl() {
     try {
         const fs = require('fs');
         const toPrefix = (slug: string) => ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
-        for (const dir of [PLUGINS_DIR, path.join(ROOT_DIR, 'themes')]) {
+        // A theme's identity is `theme:<name>` (resolvePluginPath, createPluginApi), so its tables live under
+        // wjp_theme_<name>_ — seeding it as wjp_<name>_ claimed a PLUGIN's prefix for the theme instead.
+        for (const [dir, identity] of [[PLUGINS_DIR, (n: string) => n], [path.join(ROOT_DIR, 'themes'), (n: string) => 'theme:' + n]] as const) {
             let names: string[];
             try { names = fs.readdirSync(dir); } catch { continue; }
             for (const name of names) {
                 if (typeof name !== 'string' || name.startsWith('.')) continue;
                 try { if (!fs.statSync(path.join(dir, name)).isDirectory()) continue; } catch { continue; }
-                const pfx = toPrefix(name);
-                if (!CLAIMED_PREFIXES.has(pfx)) CLAIMED_PREFIXES.set(pfx, name);
+                // A plugin directory with a reserved slug never loads (core/plugin-slug-policy), so it must
+                // not claim a prefix either — `plugins/theme-x/` would take theme x's wjp_theme_x_.
+                if (dir === PLUGINS_DIR && require('./plugin-slug-policy').isReservedPluginSlug(name)) continue;
+                const id = identity(name);
+                const pfx = toPrefix(id);
+                if (!CLAIMED_PREFIXES.has(pfx)) CLAIMED_PREFIXES.set(pfx, id);
             }
         }
         loadPersistedPrefixes(); // + orphan prefixes whose dir was removed but whose tables persist
@@ -696,6 +793,12 @@ function createPluginApi(slug: string) {
                 if (isProtectedOption(key, slug)) {
                     throw new Error(`🛡️ Option '${key}' is not writable by plugins.`);
                 }
+                // ALLOWLIST: a plugin writes only options named after it (`<slug>_…`, see
+                // plugin-owned-options), plus the values the core reads from the site's mail provider when
+                // it holds that grant. Every other option is the site's, set through its own admin screens.
+                if (!require('./plugin-owned-options').isPluginWritableOption(slug, key)) {
+                    throw new Error(`🛡️ Option '${key}' is not writable by plugins — a plugin's own options are named '${require('./plugin-owned-options').optionNamespace(slug)}…'.`);
+                }
                 // Record an option this plugin creates, so "delete its data" can remove it (S4-21).
                 await require('./plugin-owned-options').noteOptionWrite(slug, key);
                 const { updateOption } = require('./options');
@@ -725,15 +828,13 @@ function createPluginApi(slug: string) {
             // Mutating query (INSERT/UPDATE/DELETE/CREATE/ALTER) — always scoped to own tables.
             async run(sql: string, params: any[] = []) {
                 verifyPermission('database', 'write');
-                assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace'], tablePrefix, slug);
+                const { owned } = assertSqlAllowed(sql, ['insert', 'update', 'delete', 'create', 'alter', 'drop', 'replace'], tablePrefix, slug);
                 const iso = require('./plugin-db-isolation');
-                // DDL (CREATE/ALTER/DROP) runs as the ADMIN user — a plugin's NOLOGIN role has no CREATE, and
-                // the text-guard above already forced the target under the plugin's own prefix. DML runs under
-                // the plugin's role so the database enforces table-level isolation.
+                // DDL (CREATE/ALTER/DROP) and DML both run under the plugin's own DB principal, so the
+                // database judges them by the plugin's rights, not the admin's (plugin-db-isolation runDdl).
                 let res;
                 if (/^\s*(?:create|alter|drop)\b/i.test(sql)) {
-                    const { dbAsync } = require('../config/database');
-                    res = await dbAsync.run(sql, params);
+                    res = await iso.runDdl(slug, sql, params, owned);
                 } else {
                     res = await iso.runScoped(slug, 'run', sql, params);
                 }
@@ -956,9 +1057,8 @@ function createPluginApi(slug: string) {
             // avoid offering "Create account" on a site whose registration is closed.
             async registrationOpen() {
                 verifyPermission('settings', 'read');
-                const { getOption } = require('./options');
-                const v = await getOption('users_can_register', 0);
-                return !!v && v !== '0' && v !== 'false';
+                const { getOption, toBooleanOption } = require('./options');
+                return toBooleanOption(await getOption('users_can_register', 0), false);
             },
         },
 
@@ -1201,4 +1301,4 @@ function createPluginApi(slug: string) {
 // projectUser / projectUserFor are exported for TESTS only: projectUserFor is one of the two wires carrying
 // an account's grants to a plugin, and asserting the real function is what makes that wire load-bearing
 // (a suite that hand-builds the projection stays green when the field is deleted).
-module.exports = { createPluginApi, isProtectedOption, PROTECTED_OPTION_NAMES, projectUser, projectUserFor, assertSqlAllowed };
+module.exports = { createPluginApi, isProtectedOption, PROTECTED_OPTION_NAMES, projectUser, projectUserFor, assertSqlAllowed, isTableOwnedBy };

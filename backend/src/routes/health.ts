@@ -33,9 +33,10 @@ const { publicErrorText } = require('../middleware/errorHandler');
  *                   type: string
  */
 router.get('/', async (req: Request, res: Response) => {
-    const status = await SystemHealth.checkDatabase();
+    // Public: the cached, deadline-bound verdict the root /health serves too (core/readiness).
+    const db = await require('../core/readiness').databaseHealth();
     res.json({
-        status: status.status === 'OK' ? 'ok' : 'error',
+        status: db === 'ok' ? 'ok' : 'error',
         timestamp: new Date().toISOString()
     });
 });
@@ -393,6 +394,47 @@ function withDegradationFields(status: any): any {
 router.get('/site', authenticate, isAdmin, async (req: Request, res: Response) => {
     res.set('Cache-Control', 'no-store');
     res.json(await require('../core/site-health').runSiteHealth(req));
+});
+
+/**
+ * Site Health's one-click fix for the plugin sandbox (core/site-health pluginSandboxChecks): record a
+ * refused plugin's current files as its own.
+ */
+/**
+ * @swagger
+ * /health/sandbox/plugin-files/accept:
+ *   post:
+ *     summary: Site Health - accept the current files of a plugin refused for changed files
+ *     description: >
+ *       An isolated plugin whose code or manifest changed since WordJS installed it is not started.
+ *       This records its current files as its own, so its next start goes ahead. Only a plugin that is
+ *       listed as refused can be accepted. Administrators.
+ *     tags: [System]
+ *     security:
+ *       - bearerAuth: []
+ *     requestBody:
+ *       required: true
+ *       content:
+ *         application/json:
+ *           schema:
+ *             type: object
+ *             required: [slug]
+ *             properties:
+ *               slug: { type: string }
+ *     responses:
+ *       200:
+ *         description: "{ ok: true }"
+ *       403:
+ *         description: Not an administrator
+ *       404:
+ *         description: No plugin with changed files has that name
+ */
+router.post('/sandbox/plugin-files/accept', authenticate, isAdmin, async (req: Request, res: Response) => {
+    const slug = String((req.body && req.body.slug) || '');
+    const integrity = require('../core/plugin-integrity');
+    if (!integrity.listIntegrityMismatches().includes(slug)) return res.status(404).json({ error: 'No plugin with changed files has that name.' });
+    integrity.acceptPluginIntegrity(require('path').resolve(__dirname, '..', '..'), slug);
+    res.json({ ok: true });
 });
 
 router.get('/details', authenticate, isAdmin, async (req: Request, res: Response) => {

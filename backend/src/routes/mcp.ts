@@ -23,6 +23,7 @@ const { asyncHandler } = require('../middleware/errorHandler');
 const AgentConnection = require('../models/AgentConnection');
 const User = require('../models/User');
 const { narrowUser } = require('../core/agent-capabilities');
+const { bearerToken, headlessMfaRefused } = require('../middleware/auth');
 
 function jsonRpcError(res: Response, httpStatus: number, message: string, code = -32001) {
     if (httpStatus === 401) res.setHeader('WWW-Authenticate', 'Bearer realm="wordjs-mcp"');
@@ -30,8 +31,7 @@ function jsonRpcError(res: Response, httpStatus: number, message: string, code =
 }
 
 async function agentAuth(req: Request, res: Response, next: NextFunction) {
-    const header = String(req.headers.authorization || '');
-    const raw = header.startsWith('Bearer ') ? header.slice(7).trim() : '';
+    const raw = bearerToken(req) || '';
     if (!raw.startsWith(AgentConnection.PREFIX)) {
         return jsonRpcError(res, 401, 'An agent connection token (Bearer wja_…) is required. Create one under Admin → AI agents.');
     }
@@ -39,6 +39,9 @@ async function agentAuth(req: Request, res: Response, next: NextFunction) {
     if (!rec) return jsonRpcError(res, 401, 'Invalid, expired or revoked agent token.');
     const user = await User.findById(rec.userId);
     if (!user) return jsonRpcError(res, 401, 'The user this agent acts for no longer exists.');
+    // The owner's 2FA obligation (when the admin extended it to headless credentials) is checked on the
+    // credential that authenticated this request, not only by the global gate in front of it.
+    if (await headlessMfaRefused(user, req, res)) return;
     // Handed to the handler through res.locals — no new request mark (src/types/globals.d.ts declares those).
     res.locals.agentConnection = rec;
     res.locals.agentUser = user;

@@ -11,6 +11,7 @@ import { avatarInitial } from "@/lib/avatarInitial";
 import { roleDisplayName } from "@/lib/roleOptions";
 import { registerTranslations } from "@/lib/i18n";
 import { apiErrorText } from "@/lib/apiErrorText";
+import { passwordTooLong } from "@/lib/passwordRules";
 
 // This screen's strings that the core catalogue lacks.
 registerTranslations({
@@ -163,6 +164,7 @@ export default function AccountPage() {
     const changePassword = async (e: React.FormEvent) => {
         e.preventDefault();
         if (newPassword.length < 8) { addToast(t('account.pwTooShort'), "error"); return; }
+        if (passwordTooLong(newPassword)) { addToast(t('password.tooLong'), "error"); return; }
         if (newPassword !== confirmPassword) { addToast(t('account.pwMismatch'), "error"); return; }
         setChangingPw(true);
         try {

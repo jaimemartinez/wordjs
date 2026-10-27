@@ -15,6 +15,17 @@ const log = require('./module-logger').moduleLogger('core/themes');
 const THEMES_DIR = path.resolve('./themes');
 
 /**
+ * A theme's code folder is read-only to it and its `data/` is a link to its own data directory
+ * (core/plugin-own-data). Replacing or deleting the folder takes the link off first, and the next launch
+ * fingerprints the new code instead of refusing it as changed (core/plugin-integrity).
+ */
+function themeCodeReplaced(slug: string, dir: string | null): void {
+  const appRoot = path.dirname(THEMES_DIR);
+  if (dir) { try { require('./plugin-own-data').detachOwnDataLink(dir); } catch { /* the folder is gone */ } }
+  try { require('./plugin-integrity').forgetPluginIntegrity(appRoot, `theme:${slug}`); } catch { /* recorded again at launch */ }
+}
+
+/**
  * Optional per-language metadata from theme.json: `"translations": { "es": { "description": "…" } }`.
  * The top-level `description` stays the default (English); the admin shows the entry for its own
  * language when there is one. Only short string descriptions under a plain language code survive — the
@@ -1255,8 +1266,10 @@ async function deleteTheme(slug: string) {
     throw new Error('Invalid theme path');
   }
 
-  // Recursive delete
+  // Recursive delete, then the theme's own data, which lived in its folder before it moved out.
+  themeCodeReplaced(slug, targetDir);
   fs.rmSync(targetDir, { recursive: true, force: true });
+  try { fs.rmSync(require('./sandbox-paths').ownDataDir(path.dirname(THEMES_DIR), `theme:${slug}`), { recursive: true, force: true }); } catch { /* best effort */ }
   invalidateThemeScanCache();
   return { success: true, message: `Theme ${theme.name} deleted successfully` };
 }
@@ -1368,6 +1381,7 @@ function installThemeFromDir(sourceDir: string, targetSlug: string, opts: { them
     // The dir existed, even if only briefly (rollback path) — no scan may answer from before it.
     invalidateThemeScanCache();
   }
+  if (!opts.themesDir || path.resolve(opts.themesDir) === THEMES_DIR) themeCodeReplaced(targetSlug, null);
 
   return { slug: targetSlug, files: files.length };
 }
@@ -1482,6 +1496,7 @@ async function installThemeFromZip(zipPath: any, slug: any): Promise<{ ok: boole
       fs.mkdirSync(path.dirname(dest), { recursive: true });
       fs.writeFileSync(dest, entry.getData());
     }
+    themeCodeReplaced(String(slug), null);
     invalidateThemeScanCache();
     cleanup();
     return { ok: true, status: 200, body: { success: true, message: `Theme "${slug}" installed successfully`, slug } };
@@ -1582,6 +1597,7 @@ async function updateThemeFromZip(zipPath: string, slug: string): Promise<{ ok: 
     // SWAP. Two renames inside one filesystem (os-tmp is THEMES_DIR's sibling); the old version is
     // removed only once the new one is in place, and put back if that second rename fails.
     const asideDir = path.join(stageRoot as string, '.previous');
+    themeCodeReplaced(slug, targetDir);
     fs.renameSync(targetDir, asideDir);
     try {
       fs.renameSync(stagedDir, targetDir);

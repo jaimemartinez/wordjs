@@ -40,7 +40,7 @@ const router = express.Router();
 // the cluster bus are kept per site (core/collab-rooms siteScoped), and each site's operation log is in
 // that site's own database, so the post 5 of one site and the post 5 of another are two rooms.
 
-const { authenticate: authenticateAny, isHeadless, sameOriginRequest, sessionAddressStillAccepted } = require('../middleware/auth');
+const { authenticate: authenticateAny, isHeadless, sameOriginRequest, sessionAddressStillAccepted, bearerToken } = require('../middleware/auth');
 const { asyncHandler, offStack } = require('../middleware/errorHandler');
 const { canEditPostRecord, isRestExposedPostType } = require('../core/post-capabilities');
 // An attachment's entry decides too (core/attachment-visibility) — the same gate every attachment write takes.
@@ -200,11 +200,8 @@ function sseWrite(res: Response, chunk: string): boolean {
  * corta: no hay lista.
  */
 function sessionToken(req: Request): string {
-    const header = String(req.get('Authorization') || '');
-    const delHeader = header.startsWith('Bearer ') && header !== 'Bearer null' && header !== 'Bearer undefined'
-        ? header.slice(7).trim()
-        : '';
-    return delHeader || String((req.cookies && req.cookies.wordjs_token) || '');
+    // El lector único de `middleware/auth.ts` (bearerToken): el mismo que usa `authenticate`.
+    return bearerToken(req) || String((req.cookies && req.cookies.wordjs_token) || '');
 }
 
 /**

@@ -94,9 +94,9 @@ describe('WXR importer (fast-xml-parser v5)', () => {
             assert.strictEqual(p.site.title, 'Fixture Blog');
             assert.strictEqual(p.site.link, 'https://fixture.example');
             assert.strictEqual(p.site.baseUrl, 'https://fixture.example');
-            // description carries entities NOT in CDATA: &amp; and &quot; decode; a numeric ref stays literal
-            // (this is the exact, unchanged fast-xml-parser behaviour under both v4 and v5).
-            assert.strictEqual(p.site.description, 'Q &amp; A &#8212; a &quot;representative&quot; export');
+            // description carries entities NOT in CDATA: the XML five, named HTML entities and numeric
+            // references are decoded, so the text is what the WordPress site showed.
+            assert.strictEqual(p.site.description, 'Q & A — a "representative" export');
 
             assert.strictEqual(p.authors.length, 1);
             assert.strictEqual(p.categories.length, 2);
