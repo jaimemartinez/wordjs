@@ -12,6 +12,7 @@ import { useEffect, useState } from "react";
 import { categoriesApi, type Category, type Post } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import ModernSelect from "@/components/ModernSelect";
+import { Textarea } from "@/components/ui";
 
 export interface SiteBehaviourValues {
     page_for_posts: string;
@@ -144,18 +145,16 @@ export function ReadingExtras({ values, onChange, pages, homepageId }: Props) {
                     onChange={(discourage) => set({ blog_public: discourage ? "0" : "1" })}
                 />
             </div>
-            <div className="space-y-2">
-                <label htmlFor="settings-robots-extra" className="text-sm font-bold text-gray-700">{t("settings.robotsExtra")}</label>
-                <textarea id="settings-robots-extra" rows={5} maxLength={5000} spellCheck={false}
-                    value={values.robots_txt_extra} onChange={(e) => set({ robots_txt_extra: e.target.value })}
-                    placeholder={"User-agent: GPTBot\nDisallow: /"}
-                    disabled={values.blog_public === "0"}
-                    className={`${inputCls} font-mono text-sm disabled:opacity-50`} />
-                <p className="text-xs text-gray-500">
+            <Textarea id="settings-robots-extra" rows={5} maxLength={5000} spellCheck={false}
+                label={t("settings.robotsExtra")}
+                help={<>
                     {values.blog_public === "0" ? t("settings.robotsExtra.discouraged") : t("settings.robotsExtra.help")}{" "}
                     <a href="/robots.txt" target="_blank" rel="noopener noreferrer" className="text-blue-600 hover:underline">/robots.txt</a>
-                </p>
-            </div>
+                </>}
+                value={values.robots_txt_extra} onChange={(e) => set({ robots_txt_extra: e.target.value })}
+                placeholder={"User-agent: GPTBot\nDisallow: /"}
+                disabled={values.blog_public === "0"}
+                className="font-mono disabled:opacity-50" />
         </div>
     );
 }
