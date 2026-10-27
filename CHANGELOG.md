@@ -6,6 +6,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+- **Audit log external copy.** «Send now» answers only once the entries written while a delivery was already
+  running have been sent too. On a multisite network each site keeps its own delivery status and retry timer.
+
 ## [2.11.15] - 2026-10-27
 
 ### Added
