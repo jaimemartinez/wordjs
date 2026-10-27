@@ -15,12 +15,12 @@
  */
 
 import React, { useEffect, useState } from "react";
-import { auditApi, settingsApi, usersApi, AuditEntry } from "@/lib/api";
-import { useToast } from "@/contexts/ToastContext";
+import { auditApi, usersApi, AuditEntry } from "@/lib/api";
 import { useAuth } from "@/contexts/AuthContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { registerTranslations } from "@/lib/i18n";
-import { PageHeader, Card, EmptyState, DataTable, Pagination, Select } from "@/components/ui";
+import { PageHeader, Card, EmptyState, DataTable, Pagination } from "@/components/ui";
+import AuditSettingsPanel from "./AuditSettingsPanel";
 import {
     AuditTone,
     auditActionKey,
@@ -169,10 +169,6 @@ export default function AuditPage() {
     const [loading, setLoading] = useState(true);
     const [error, setError] = useState<string | null>(null);
     const [expandedId, setExpandedId] = useState<number | null>(null);
-    const { addToast } = useToast();
-    // core/audit prunes rows older than `audit_retention_days` once a day (default 365; 0 = for ever).
-    const [retention, setRetention] = useState<string | null>(null);
-    const [savingRetention, setSavingRetention] = useState(false);
     const [actorNames, setActorNames] = useState<Map<number, string>>(new Map());
 
     // El MISMO gate que el backend (middleware/permissions.isAdmin mira el rol, no una capability):
@@ -211,25 +207,7 @@ export default function AuditPage() {
     useEffect(() => {
         if (forbidden) return;
         loadActors();
-        settingsApi.getAll()
-            .then((all) => setRetention(String(all?.audit_retention_days ?? "365")))
-            .catch(() => setRetention("365"));
     }, [forbidden]);
-
-    const saveRetention = async (value: string) => {
-        const previous = retention;
-        setRetention(value);
-        setSavingRetention(true);
-        try {
-            await settingsApi.update({ audit_retention_days: value });
-            addToast(t("audit.retention.saved"), "success");
-        } catch {
-            setRetention(previous);
-            addToast(t("audit.retention.failed"), "error");
-        } finally {
-            setSavingRetention(false);
-        }
-    };
 
     useEffect(() => {
         if (forbidden) return;
@@ -264,23 +242,8 @@ export default function AuditPage() {
                 {t("audit.appendOnly")}
             </p>
 
-            {retention !== null && (
-                <div className="mb-6 max-w-xs">
-                    <Select
-                        label={t("audit.retention.label")}
-                        value={retention}
-                        onChange={saveRetention}
-                        disabled={savingRetention}
-                        options={[
-                            { value: "90", label: t("audit.retention.d90") },
-                            { value: "180", label: t("audit.retention.d180") },
-                            { value: "365", label: t("audit.retention.d365") },
-                            { value: "730", label: t("audit.retention.d730") },
-                            { value: "0", label: t("audit.retention.forever") },
-                        ]}
-                    />
-                </div>
-            )}
+            {/* Integrity (hash chain), retention and the external copy: AuditSettingsPanel (routes/audit.ts). */}
+            <AuditSettingsPanel />
 
             <Card variant="default" padding="none">
                 {loading ? (

@@ -1295,8 +1295,9 @@ function primaryEmailMalformed(email: any): boolean {
 
 async function primaryEmailTakenByAnother(email: any, ownerId: number): Promise<boolean> {
     if (email === undefined || email === null || String(email).trim() === '') return false;
-    const existing = await User.findByEmail(String(email).trim().toLowerCase());
-    return !!(existing && existing.id !== ownerId);
+    // identifierInUse, not findByEmail: on a database that still holds duplicate emails findByEmail
+    // answers "nobody", which would read here as "free".
+    return await User.identifierInUse(String(email).trim().toLowerCase(), ownerId);
 }
 
 function unusableEmail(res: Response) {

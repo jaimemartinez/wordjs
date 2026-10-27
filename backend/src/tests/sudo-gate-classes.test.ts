@@ -98,7 +98,7 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword', 'doorDeleteMe'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorEmailTemplateSave', 'doorEmailTemplateReset', 'doorNetworkEnable', 'doorServerSettings', 'doorRedisSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate', 'doorRedisTest', 'doorMediaTest', 'doorUserCreateAdmin', 'doorUserMfaReset'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorEmailTemplateSave', 'doorEmailTemplateReset', 'doorNetworkEnable', 'doorServerSettings', 'doorRedisSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate', 'doorRedisTest', 'doorMediaTest', 'doorUserCreateAdmin', 'doorUserMfaReset', 'doorAuditSettings', 'doorDuplicates'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
 const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkAddress', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
@@ -859,6 +859,23 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             send: (p: string, pw: string) => request(app).post(`${B}/email-templates/account.password_reset/reset`).set('Authorization', asUser(p))
                 .send({ lang: 'xx', currentPassword: pw }),
             alsoExpect: (r: any) => r.status === 400 && r.body.code === 'rest_invalid_param',
+        },
+        // Admin → Audit (routes/audit.ts): a SHORTER retention re-authenticates; the window is put back after.
+        {
+            site: 'audit.ts PUT /settings', name: 'PUT /audit/settings (a shorter retention)', persona: 'doorAuditSettings',
+            prepare: async () => { await require('../core/options').updateOption('audit_retention_days', '365'); },
+            cleanup: async () => { await require('../core/options').updateOption('audit_retention_days', '365'); },
+            send: (p: string, pw: string) => request(app).put(`${B}/audit/settings`).set('Authorization', asUser(p))
+                .send({ retentionDays: 90, currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 200 && r.body.retentionDays === 90,
+        },
+        // Admin → Duplicate records (routes/database-integrity.ts): the password is checked BEFORE the group,
+        // so a value nobody duplicates is refused on the merits (404) and nothing is renamed.
+        {
+            site: 'database-integrity.ts POST /resolve', name: 'POST /database-integrity/resolve', persona: 'doorDuplicates',
+            send: (p: string, pw: string) => request(app).post(`${B}/database-integrity/resolve`).set('Authorization', asUser(p))
+                .send({ rule: 'users.login', key: 'nobody-has-this-login', keepId: 1, currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 404 && r.body.code === 'rest_duplicate_gone',
         },
         // The site-address writes (routes/site-address.ts): the password is checked BEFORE the body, so a
         // body without `rev` exercises the door and is then refused on the merits — 400 naming `rev` —
