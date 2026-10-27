@@ -300,14 +300,6 @@ function getLinuxZeroConfNote(): string { return zeroConfNote; }
 let zeroConfShimFailure: string | null = null;
 function getLinuxZeroConfShimFailure(): string | null { return zeroConfShimFailure; }
 /**
- * Whether the kernel bounds a network-granted plugin's TCP destination ports here: 'kernel' when the
- * probe saw a connect to a port outside the list refused (Landlock ABI >= 4), 'unavailable' when this
- * kernel has no TCP rules (the egress guard alone decides), 'unknown' before the probe ran.
- */
-let zeroConfEgressPorts: 'kernel' | 'unavailable' | 'unknown' = 'unknown';
-function getLinuxEgressPortEnforcement(): 'kernel' | 'unavailable' | 'unknown' { return zeroConfEgressPorts; }
-
-/**
  * The TCP ports every network-granted plugin may connect to: DNS over TCP and the web. A plugin's manifest
  * adds the ports it declares on its `network` permission (`ports`), and an approved private destination adds
  * its own port. Shared with the macOS profile so both kernels enforce the same list.
@@ -356,7 +348,7 @@ function probeStdio(): any[] {
 
 const PROBE_SRC = [
     'var fs=require("fs");var net=require("net");var cp=require("child_process");var os=require("os");',
-    'var out={wrote:false,readSystem:false,exactRead:false,siblingCode:"NONE",readCode:"NONE",outCode:"NONE",signalCode:"NONE",processCode:"NONE",execCode:"NONE",capsCode:"NONE",netCode:"SKIP",unixCode:"SKIP",portCode:"SKIP",prioCode:"NONE",selfPrioCode:"NONE",truncCode:"NONE",chmodCode:"NONE",fdCode:"NONE",copyCode:"NONE"};',
+    'var out={wrote:false,readSystem:false,exactRead:false,siblingCode:"NONE",readCode:"NONE",outCode:"NONE",signalCode:"NONE",processCode:"NONE",execCode:"NONE",capsCode:"NONE",netCode:"SKIP",unixCode:"SKIP",portCode:"SKIP",prioCode:"NONE",selfPrioCode:"NONE",truncCode:"NONE",chmodCode:"NONE",fdCode:"NONE",copyCode:"NONE",tunnelCode:"SKIP"};',
     'var inside=process.argv[1];var outside=process.argv[2];var denyNet=process.argv[3]==="1";var unixPath=process.argv[4];var exactFile=process.argv[5];var siblingFile=process.argv[6];var portTarget=Number(process.argv[7]||0);var victim=Number(process.argv[8]||0);var truncFile=process.argv[9]||"";',
     'function sysCode(e){return (e&&e.info&&e.info.code)||(e&&e.code)||"THROW";}',
     'try{os.setPriority(victim,19);out.prioCode="OPEN";}catch(e){out.prioCode=sysCode(e);}',
@@ -380,9 +372,11 @@ const PROBE_SRC = [
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
     '{',
-    'var pending=portTarget?3:2;var done={};var settle=function(k,c,s){if(done[k])return;done[k]=true;out[k]=c;try{if(s)s.destroy();}catch(e){}if(--pending===0)finish();};',
+    'var pending=portTarget?4:3;var done={};var settle=function(k,c,s){if(done[k])return;done[k]=true;out[k]=c;try{if(s)s.destroy();}catch(e){}if(--pending===0)finish();};',
     'try{var s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle("netCode",(e&&e.code)||"THROW",s);});s.on("connect",function(){settle("netCode","CONNECTED",s);});setTimeout(function(){settle("netCode","TIMEOUT",s);},4000);}catch(e){settle("netCode",(e&&e.code)||"THROW",null);}',
     'if(portTarget){try{var pt=net.connect(portTarget,"127.0.0.1");pt.on("error",function(e){settle("portCode",(e&&e.code)||"THROW",pt);});pt.on("connect",function(){settle("portCode","CONNECTED",pt);});setTimeout(function(){settle("portCode","TIMEOUT",pt);},4000);}catch(e){settle("portCode",(e&&e.code)||"THROW",null);}}',
+    'var __wjtDone=function(p,q){settle("tunnelCode","public="+p+";metadata="+q,null);};',
+    require('./egress-tunnel').probeTunnelSnippet('__wjtDone'),
     'try{var u=net.connect(unixPath);u.on("error",function(e){settle("unixCode",(e&&e.code)||"THROW",u);});u.on("connect",function(){settle("unixCode","CONNECTED",u);});setTimeout(function(){settle("unixCode","TIMEOUT",u);},4000);}catch(e){settle("unixCode",(e&&e.code)||"THROW",null);}',
     '}',
 ].join('');
@@ -400,7 +394,7 @@ const PROBE_SRC = [
  */
 const REFUSAL_CODES = new Set(['EPERM', 'EACCES']);
 
-type ProbeMsg = { wrote?: boolean; readSystem?: boolean; exactRead?: boolean; siblingCode?: string; readCode?: string; outCode?: string; signalCode?: string; processCode?: string; execCode?: string; capsCode?: string; bndCode?: string; euid?: number; netCode?: string; unixCode?: string; portCode?: string; prioCode?: string; selfPrioCode?: string; truncCode?: string; chmodCode?: string; fdCode?: string; copyCode?: string };
+type ProbeMsg = { wrote?: boolean; readSystem?: boolean; exactRead?: boolean; siblingCode?: string; readCode?: string; outCode?: string; signalCode?: string; processCode?: string; execCode?: string; capsCode?: string; bndCode?: string; euid?: number; netCode?: string; unixCode?: string; portCode?: string; prioCode?: string; selfPrioCode?: string; truncCode?: string; chmodCode?: string; fdCode?: string; copyCode?: string; tunnelCode?: string };
 /** Extra probe inputs: a loopback port outside the egress list, a sacrificial process, and a read-only file. */
 type ProbeExtra = { port: number; victimPid: number; truncFile: string };
 type ProbeRun = { msg: ProbeMsg | null; code: number | null; stderr: string };
@@ -467,7 +461,9 @@ function runProbeChild(pre: string[], inside: string, outside: string, denyNet: 
             });
         } catch { clearTimeout(overall); finish(null); return; }
         try { proc.stderr.on('data', (d: any) => { if (stderr.length < 4096) stderr += String(d); }); } catch { /* */ }
-        proc.on('message', (m: any) => { if (m && typeof m === 'object') msg = m as ProbeMsg; });
+        // The child's tunnel frames are served by the real host side of the egress tunnel.
+        try { require('./egress-tunnel').attachProbeTunnel(proc); } catch { /* the tunnel check then fails */ }
+        proc.on('message', (m: any) => { if (m && typeof m === 'object' && m.kind !== 'net') msg = m as ProbeMsg; });
         proc.on('error', () => { clearTimeout(overall); finish(null); });   // ENOENT / not executable
         // 'exit' can fire while the stderr pipe still holds the shim's last words - and a `SHIM-FAIL:`
         // line that arrives after the verdict is a verdict without its reason. Wait for stderr to drain,
@@ -684,55 +680,27 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 && m.copyCode === 'OK');
             const confinedSurface = surfaceOk(confined.msg);
 
-            // Certify the network-GRANTED shape too. Landlock and the dangerous-syscall filter must stay
-            // active; only the IP-socket rule changes. This prevents granting network from accidentally
-            // removing the whole OS sandbox.
-            const allowPre = [PERL_BIN, ...shimArgs({
-                zone: [zone as string], denyNetwork: false,
-                readRoot: [zone as string, coreRoot as string, exactFile, ...(nodePrefix.split(pathl.sep).filter(Boolean).length >= 2 ? [nodePrefix] : [])],
-                execRoot: [process.execPath, PERL_BIN], nodeArgs: [],
-                tcpPorts: DEFAULT_EGRESS_TCP_PORTS,
-            })];
-            const allowed = await runProbeChild(allowPre, inside, outside, false, unixPath, exactFile, siblingFile, 25000, extra);
-            // The kernel's TCP port rules exist from Landlock ABI 4. With them a connect to a port outside the
-            // list must be refused; without them the shim says so (landlock-net=unavailable) and the port is
-            // the egress guard's to refuse - reported, never certified as kernel-enforced.
-            const allowedShim = String(allowed.stderr || '').split(/\r?\n/).find((l) => l.startsWith('SHIM: ')) || '';
-            const portsByKernel = / landlock-net=ports:\d+/.test(allowedShim);
-            const portsUnavailable = / landlock-net=unavailable/.test(allowedShim);
-            const allowedPortOk = !!(allowed.msg && (portsByKernel
-                ? REFUSAL_CODES.has(String(allowed.msg.portCode))
-                : (portsUnavailable && allowed.msg.portCode === 'CONNECTED')));
-            const allowedOk = !!(allowed.msg && allowed.msg.wrote === true && allowed.msg.readSystem === true
-                && allowed.msg.exactRead === true && REFUSAL_CODES.has(String(allowed.msg.siblingCode))
-                && REFUSAL_CODES.has(String(allowed.msg.readCode))
-                && REFUSAL_CODES.has(String(allowed.msg.outCode))
-                && REFUSAL_CODES.has(String(allowed.msg.signalCode))
-                && REFUSAL_CODES.has(String(allowed.msg.processCode))
-                && REFUSAL_CODES.has(String(allowed.msg.execCode))
-                && capabilitiesShed(allowed.msg, allowed.stderr)
-                && REFUSAL_CODES.has(String(allowed.msg.unixCode))
-                && allowed.msg.netCode === 'CONNECTED'
-                && surfaceOk(allowed.msg) && allowedPortOk);
+            // A network-granted plugin has the SAME kernel shape: no socket of its own. Its network is the
+            // host's egress tunnel, certified here from the confined child: a public host opens through it
+            // and the cloud metadata address is refused.
+            const tunnelOk = !!(confined.msg && require('./egress-tunnel').probeTunnelOk(confined.msg.tunnelCode));
             if (ipcOk && positiveWrite && positiveRead && exactRead && siblingRefused && readRefused && outRefused && signalRefused
-                && processRefused && execRefused && capsDropped && netRefused && unixRefused && confinedSurface && allowedOk) {
+                && processRefused && execRefused && capsDropped && netRefused && unixRefused && confinedSurface && tunnelOk) {
                 zeroConfState = 'active';
                 zeroConfShimFailure = null;
-                zeroConfEgressPorts = portsByKernel ? 'kernel' : 'unavailable';
-                if (!portsByKernel) log.warn('[Sandbox] This Linux kernel has no Landlock TCP rules (ABI < 4): the destination ports of network-granted plugins are bounded by the in-process egress guard only. A kernel >= 6.7 enforces them natively.');
-                zeroConfNote = 'Landlock + seccomp-bpf certified with no host configuration for both network policies: reads/writes are scoped, process creation and dangerous syscalls are refused, all sockets are denied without a grant, and only IP client sockets are admitted with it';
-                log.info('[Sandbox] Linux kernel confinement ACTIVE (Landlock scopes reads/writes and cross-process access; seccomp-bpf refuses process creation and dangerous syscalls, denies all new sockets without a grant, and admits only AF_INET/AF_INET6 clients with it while preserving IPC).');
+                zeroConfNote = 'Landlock + seccomp-bpf certified with no host configuration: reads/writes are scoped, process creation and dangerous syscalls are refused, and no plugin opens a socket of its own; a network-granted plugin reaches the network through the host egress tunnel';
+                log.info('[Sandbox] Linux kernel confinement ACTIVE (Landlock scopes reads/writes and cross-process access; seccomp-bpf refuses process creation and dangerous syscalls and every new IP socket while preserving IPC; network-granted plugins go through the host egress tunnel).');
                 return 'active';
             }
             zeroConfState = 'degraded';
             // When the shim itself refused (exit 79 before exec), its own line IS the diagnosis - e.g.
             // `SHIM-FAIL: setgroups(clear): Operation not permitted` - and it belongs in the one sentence
             // GET /health/details shows, not only in a log line nobody is tailing.
-            const shimRefusal = confinedFailure || classifyShimLaunchFailure(allowed.code, allowed.stderr);
+            const shimRefusal = confinedFailure;
             zeroConfShimFailure = shimRefusal ? shimRefusal.line : null;
             zeroConfNote = zeroConfShimFailure
                 ? `the Landlock/seccomp shim refused to start the probe child, so nothing could be certified: ${zeroConfShimFailure}`
-                : 'the Landlock/seccomp shim is available but its probe did NOT certify both network-policy launch shapes';
+                : 'the Landlock/seccomp shim is available but its probe did NOT certify the confinement and the egress tunnel';
             log.warn('[Sandbox] Linux zero-config probe did NOT certify confinement on this host - isolated plugins keep the Node permission model and JS guards. '
                 + `ipc=${ipcOk ? 'ok' : 'FAILED'} zoneWrite=${positiveWrite ? 'ok' : 'FAILED'} systemRead=${positiveRead ? 'ok' : 'FAILED'} `
                 + `exactFileRead=${exactRead ? 'ok' : 'FAILED'} siblingFile=${siblingRefused ? 'refused' : logSafe((confined.msg && confined.msg.siblingCode) || 'unknown')} `
@@ -745,8 +713,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
                 + `rawIpConnect=${netRefused ? 'refused' : logSafe((confined.msg && confined.msg.netCode) || 'unknown')} `
                 + `unixConnect=${unixRefused ? 'refused' : logSafe((confined.msg && confined.msg.unixCode) || 'unknown')} `
                 + `syscallSurface=${confinedSurface ? 'refused' : logSafe(`prio:${(confined.msg && confined.msg.prioCode) || '?'}/self:${(confined.msg && confined.msg.selfPrioCode) || '?'}/trunc:${(confined.msg && confined.msg.truncCode) || '?'}/chmod:${(confined.msg && confined.msg.chmodCode) || '?'}/fd:${(confined.msg && confined.msg.fdCode) || '?'}/copy:${(confined.msg && confined.msg.copyCode) || '?'}`)} `
-                + `egressPorts=${allowedPortOk ? (portsByKernel ? 'kernel' : 'unavailable') : logSafe((allowed.msg && allowed.msg.portCode) || 'unknown')} `
-                + `networkGrantedShape=${allowedOk ? 'ok' : 'FAILED'} `
+                + `egressTunnel=${tunnelOk ? 'ok' : logSafe((confined.msg && confined.msg.tunnelCode) || 'unknown')} `
                 + `shimExit=${logSafe(confined.code)} shimSays=${logSafe(confined.stderr.trim().slice(0, 200))}`);
             return 'degraded';
         } catch (e: any) {
@@ -775,7 +742,6 @@ module.exports = {
     getLinuxZeroConfState,
     getLinuxZeroConfNote,
     getLinuxZeroConfShimFailure,
-    getLinuxEgressPortEnforcement,
     DEFAULT_EGRESS_TCP_PORTS,
     // The probe's capability verdict, exported so its rule is pinned by a unit test on every host.
     capabilitiesShed,

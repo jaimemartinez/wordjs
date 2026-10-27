@@ -152,8 +152,8 @@ describe('SBPL profile skeleton', () => {
         assert.doesNotMatch(source, /prepareSeatbeltRuntime|armSeatbeltBootstrap|WORDJS_SEATBELT_BOOTSTRAP/);
         assert.match(isolateSource, /nodePath: process\.execPath/,
             'production must use the installed runtime directly under Seatbelt');
-        assert.strictEqual((source.match(/readOnlyDirs: \[\]/g) || []).length, 2,
-            'both probe policy shapes must avoid unnecessary application-code read grants');
+        assert.strictEqual((source.match(/readOnlyDirs: \[\]/g) || []).length, 1,
+            'the probe profile (one shape: no network for any plugin) must avoid unnecessary application-code read grants');
         assert.match(isolateSource, /auditProfile\(profile\)[\s\S]*profileProblems\.length > 0[\s\S]*throw new Error/,
             'production must fail closed when the independent profile audit reports a violation');
     });

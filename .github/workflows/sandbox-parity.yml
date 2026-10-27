@@ -187,10 +187,11 @@ jobs:
       # THE CONFINEMENT OF A REAL PLUGIN, ON EVERY PLATFORM. A real isolate on each kernel: its code folder
       # is read-only and its data/ folder (moved out of the code, behind a link - a junction on Windows,
       # a symlink elsewhere) is writable and kept intact; the IPC frame nonce reaches it over the channel,
-      # never on the command line.
-      - name: Certify a real plugin's code and data confinement (all platforms)
+      # never on the command line; and its network goes only through the host egress tunnel (http, fetch,
+      # https, STARTTLS and a bare net.Socket work; metadata, private addresses and UDP are refused).
+      - name: Certify a real plugin's code, data and network confinement (all platforms)
         working-directory: backend
-        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-own-code-readonly.test.ts src/tests/sandbox-ipc-nonce-channel.test.ts
+        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-own-code-readonly.test.ts src/tests/sandbox-ipc-nonce-channel.test.ts src/tests/egress-tunnel.test.ts
 
       # WHICH LAYER WOULD KILL IT — kept AFTER the fix, deliberately.
       #
@@ -244,11 +245,10 @@ jobs:
           retention-days: 14
           if-no-files-found: ignore
 
-  # WINDOWS, ON THE REAL ACLs AND THE REAL FIREWALL, beside the parity job. The runner is an administrator,
-  # so these run here and nowhere else: a contained child must be refused a secret its install tree exposes
-  # to ALL APPLICATION PACKAGES once the probe protected it (and read it before - the control); with its
-  # firewall rule in place, internetClient alone must not reach the cloud metadata service while an
-  # approved destination does; owner rights, retirement and the AppContainer launch itself on real ACLs.
+  # WINDOWS, ON THE REAL ACLs, beside the parity job: a contained child must be refused a secret its install
+  # tree exposes to ALL APPLICATION PACKAGES once the probe protected it (and read it before - the control);
+  # owner rights, retirement and the AppContainer launch itself on real ACLs. (The network needs nothing on
+  # Windows: no plugin has a network capability, and the probe above certifies the host egress tunnel.)
   # Every contained launch is a cold PowerShell relay (~25 s on this runner), so the suites are spread over
   # three runners, which share nothing: on one host, two processes editing the same ACL could lose an ACE.
   windows-live:
@@ -266,8 +266,8 @@ jobs:
           - shard: "contained launches"
             files: src/tests/sandbox-windows-appcontainer.test.ts
             pattern: "ensureAppContainerProfile is idempotent|a minimal contained Node|the contained child is refused|internetClient changes only egress|killing the relay|extended Job Object caps apply"
-          - shard: "secrets, private networks, retirement"
-            files: src/tests/sandbox-windows-aap-secrets.test.ts src/tests/sandbox-windows-network-isolation.test.ts src/tests/sandbox-windows-retirement.test.ts
+          - shard: "secrets and retirement"
+            files: src/tests/sandbox-windows-aap-secrets.test.ts src/tests/sandbox-windows-retirement.test.ts
             pattern: ""
     steps:
       - uses: actions/checkout@v7

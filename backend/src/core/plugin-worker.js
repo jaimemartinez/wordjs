@@ -176,6 +176,8 @@ Object.defineProperty(global, '__WORDJS_PLUGIN_ALLOWED_HOSTS__', { value: Object
 // reloads. Immutable so a plugin can't clear it.
 Object.defineProperty(global, '__WORDJS_PLUGIN_EGRESS_DENY_ALL__', { value: !!cfg.egressDenyAll, writable: false, configurable: false, enumerable: false });
 const netAllowed = !!global.__WORDJS_PLUGIN_NETWORK__;
+// The egress tunnel client (network-granted plugins only); the host's `net` frames are handed to it.
+let netTunnel = null;
 if (!netAllowed) {
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
         try {
@@ -199,12 +201,17 @@ if (!netAllowed) {
             if (global.__WORDJS_PLUGIN_EGRESS_DENY_ALL__) eg.setDenyAllEgress();
             else eg.setAllowedHosts(global.__WORDJS_PLUGIN_ALLOWED_HOSTS__);
         } catch { /* best-effort */ }
+        // This child has NO direct network at the kernel layer: every connection goes through the host's
+        // egress tunnel (core/egress-tunnel), which decides and opens the real destination. The tunnel
+        // client answers dns.lookup through the host and runs tls.connect over a tunnelled socket.
+        const tunnel = require(path.join(coreDir, 'egress-tunnel-client'));
+        tunnel.installChildTunnel(send);
+        netTunnel = tunnel;
         // PRIMARY enforcement: patch net.Socket.prototype.connect so EVERY outbound TCP connection in
-        // this child is validated AT THE REAL CONNECT against the resolved IP — covers raw net/tls,
-        // http/https (incl. custom agent/createConnection), the net.Stream alias, prototype-chain
-        // bypasses, AND the connect that undici (global fetch / WebSocket / EventSource) performs. This
-        // closes redirect-to-private and DNS-rebinding at the socket layer (the actual IP is checked).
-        eg.installChildNetGuard();
+        // this child is checked at the connect and then carried by the tunnel — covers raw net/tls,
+        // http/https (incl. custom agent/createConnection), a bare net.Socket, the net.Stream alias,
+        // prototype-chain bypasses, AND the connect that undici (global fetch / WebSocket) performs.
+        eg.installChildNetGuard(tunnel.connectViaTunnel);
         // Same chokepoint for UDP: patch dgram.Socket.prototype.send/.connect in place. Covers EVERY way
         // a plugin obtains a dgram socket — createSocket, `new dgram.Socket()`, AND `await import('dgram')`
         // (the ESM loader bypasses the CJS require proxy, but all instances share this one patched
@@ -639,6 +646,10 @@ onMessage(async (msg) => {
         if (!p) return;
         pending.delete(msg.id);
         msg.ok ? p.resolve(msg.value) : p.reject(new Error(msg.error));
+    } else if (msg.kind === 'net') {
+        // The host side of a tunnelled connection or name lookup. The plugin's socket callbacks run from
+        // here, so they run as the plugin.
+        if (netTunnel) runWithContext(slug, () => netTunnel.handleHostFrame(msg));
     } else if (msg.kind === 'invoke') {
         // Host is firing a hook/filter callback that lives in this isolate.
         const cb = callbacks.get(msg.cbId);

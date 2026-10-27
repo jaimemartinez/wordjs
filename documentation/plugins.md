@@ -741,12 +741,17 @@ Outbound access opens **only** when an admin grants your plugin
 the **`network`** capability (declare `scope: "network"` in your manifest; the grant carries an
 exfiltration warning). This is the only network path — there is no trusted tier that bypasses it.
 
-**TCP ports.** With `network`, the kernel sandbox lets your plugin connect only to DNS (53) and the web (80, 443)
-over TCP — on Linux with Landlock (kernel 6.7 or later) and on macOS with Seatbelt, which also keeps loopback out
-of reach. Name any other port your plugin needs on the same permission, and the administrator grants it with it:
+**How the network reaches your plugin.** Your plugin's process has no network of its own on any platform: the
+kernel sandbox refuses its sockets. With `network`, every connection it opens goes through WordJS, which decides
+the destination and opens it, and your code does not notice: `net.connect`, `tls.connect` (STARTTLS included),
+`http`/`https`, `fetch`, WebSocket and a `new net.Socket().connect()` work as usual, and `dns.lookup` is answered
+by WordJS. UDP (`dgram`) is not available to plugins. Throughput is lower than a direct socket — fine for APIs
+and mail, not meant for bulk transfers.
+
+**TCP ports.** With `network`, your plugin may connect to DNS (53) and the web (80, 443). Name any other port
+your plugin needs on the same permission, and the administrator grants it with it:
 `{ "scope": "network", "ports": [25, 587], "reason": "…" }` (at most 16 ports, 1–65535). A private destination an
-administrator approves (`host:port`) adds its own port. On Windows, a Windows Firewall rule on each plugin's sandbox refuses the
-private networks except the hosts approved for it (Site Health adds the rules; Windows asks for an administrator).
+administrator approves (`host:port`) adds its own port. A plugin holds at most 64 connections at once.
 
 Even **with** `network` granted, egress is confined to **public destinations only**. secure-require hands
 you the *egress-guarded* socket module (not the raw one) and the worker wraps the global `fetch` /

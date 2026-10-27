@@ -1,53 +1,24 @@
 /**
- * A network-granted plugin is bounded by the KERNEL, not only by the in-process egress guard.
+ * No plugin has a network of its own, on any platform; a network-granted one reaches it through the host.
  *
- * With the network permission, every platform used to open outbound sockets wholesale at the kernel
- * level: seccomp admitted any IP client, Landlock's TCP rules were off, Seatbelt allowed all outbound,
- * and Windows' internetClient counted many private ranges (a VPN, a routed LAN, 169.254) as the Internet.
- * Now:
- *   · Linux: Landlock (ABI >= 4) refuses every TCP connect outside the plugin's ports and every TCP bind;
- *   · macOS: Seatbelt allows only those TCP ports and never loopback;
- *   · Windows: the private network ranges are made private for every AppContainer by a one-time machine
- *     policy (Site Health applies it), and only a plugin with an approved private destination gets
- *     privateNetworkClientServer.
- * The kernels themselves are certified by each platform's probe in the Sandbox parity workflow (a
- * connect to a loopback port outside the list must be refused there); this suite pins the policy every
- * platform is handed.
+ * The kernel layer gives every isolated plugin the same shape, granted or not: Landlock + seccomp refuse
+ * IP sockets on Linux, Seatbelt denies the network on macOS, and the AppContainer has no network
+ * capability on Windows (no Windows setting, prompt or administrator step is involved). A network-granted
+ * plugin's connections go through the host egress tunnel (core/egress-tunnel), which applies its policy:
+ * the ports below, its allowlist, and public destinations only unless an administrator approved an exact
+ * host:port. Each platform's probe certifies, in its confined child, that a direct connect is refused and
+ * that the tunnel opens a public host and refuses the cloud metadata address (Sandbox parity workflow);
+ * egress-tunnel.test.ts runs the plugin side in a real child.
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';
 import path from 'path';
 
-const linux = require('../core/sandbox-linux');
-const mac = require('../core/sandbox-macos');
-const win = require('../core/sandbox-windows');
 const isolate = require('../core/plugin-isolate');
-
-test('the Linux shim receives the ports, and only for a network-granted plugin', () => {
-    const granted = linux.shimArgs({ zone: ['/srv/z'], denyNetwork: false, tcpPorts: [443, 25, 443, 0, 70000], nodeArgs: ['node'] });
-    assert.deepStrictEqual(granted.filter((a: string) => a.startsWith('--tcp-port=')), ['--tcp-port=25', '--tcp-port=443'], 'sorted, de-duplicated, invalid ones dropped');
-    const denied = linux.shimArgs({ zone: ['/srv/z'], denyNetwork: true, tcpPorts: [443], nodeArgs: ['node'] });
-    assert.ok(!denied.some((a: string) => a.startsWith('--tcp-port=')), 'a denied plugin has no socket at all; ports would mean nothing');
-    assert.ok(granted.indexOf('--tcp-port=25') < granted.indexOf('/srv/z'), 'options precede the zones, as the shim grammar requires');
-});
-
-test('the shim turns the ports into CONNECT-only Landlock rules and handles TCP for granted plugins too', () => {
-    const shim = fs.readFileSync(linux.SHIM_PATH, 'utf8');
-    assert.match(shim, /--\(read-root\|exec-root\|tcp-port\)=/);
-    assert.match(shim, /my \$handle_net = \(\$abi >= 4 && \(\$denyNet eq '1' \|\| @tcp_ports\)\) \? 1 : 0;/);
-    assert.match(shim, /syscall\(\$NR_ll_add, \$rfd, 2, pack\("QQ", \$NET_CONNECT_TCP, \$port\), 0\)/);
-    assert.match(shim, /landlock-net=" \. \(\$handle_net \? \(\$denyNet eq '1' \? 'deny' : 'ports:'/, 'the SHIM: line says whether ports are kernel-enforced');
-});
-
-test('the Linux probe certifies the port rule: a granted child is refused a loopback port outside the list', () => {
-    const src = String(linux.__probeSrc);
-    assert.match(src, /net\.connect\(portTarget,"127\.0\.0\.1"\)/);
-    const mod = fs.readFileSync(path.join(__dirname, '..', 'core', 'sandbox-linux.ts'), 'utf8');
-    assert.match(mod, /tcpPorts: DEFAULT_EGRESS_TCP_PORTS/);
-    assert.match(mod, /portsByKernel\s*\? REFUSAL_CODES\.has\(String\(allowed\.msg\.portCode\)\)/);
-    assert.deepStrictEqual(linux.DEFAULT_EGRESS_TCP_PORTS, [53, 80, 443]);
-});
+const tunnel = require('../core/egress-tunnel');
+const CORE = path.join(__dirname, '..', 'core');
+const read = (rel: string) => fs.readFileSync(path.join(CORE, rel), 'utf8');
 
 test('a plugin\'s ports are DNS + the web, what its manifest declares, and its approved private destinations', () => {
     const perms = require('../core/plugin-permissions');
@@ -73,114 +44,52 @@ test('mail-server declares the SMTP ports it relays and delivers on', () => {
     assert.deepStrictEqual(net.ports, [25, 465, 587, 2525]);
 });
 
-test('macOS: only the plugin\'s TCP ports, UDP clients, mDNSResponder - and never loopback', () => {
-    const p = mac.buildSeatbeltProfile({ writableDirs: ['/srv/wordjs/backend/data/plugin-own/x'], denyNetwork: false, egressTcpPorts: [443, 25], appRoot: '/srv/wordjs/backend', nodePath: '/usr/local/bin/node' });
-    assert.ok(p.includes('(allow network-outbound (remote tcp "*:25"))') && p.includes('(allow network-outbound (remote tcp "*:443"))'));
-    assert.ok(!p.includes('(remote tcp "*:80")'), 'a port the plugin was not given is absent');
-    assert.ok(!/\(allow network-outbound\)/.test(p), 'never an unfiltered outbound grant');
-    assert.ok(p.indexOf('(deny network-outbound (remote ip "localhost:*"))') > p.lastIndexOf('(allow network-outbound'), 'loopback is denied after (so over) every allow');
-    assert.deepStrictEqual(mac.auditProfile(p), [], 'the profile still passes its own invariants');
-    const denied = mac.buildSeatbeltProfile({ writableDirs: ['/srv/z'], denyNetwork: true, egressTcpPorts: [443], appRoot: '/srv/wordjs/backend', nodePath: '/usr/local/bin/node' });
-    assert.ok(!/remote tcp/.test(denied), 'a denied plugin gets no port at all');
+test('every platform launches a plugin with no network of its own, granted or not', () => {
+    for (const netGranted of [false, true]) {
+        const d = isolate.__linuxFloorDecision({ platform: 'linux', zeroConf: 'active', netGranted });
+        assert.strictEqual(d.denyNetwork, true, `Linux, network ${netGranted ? 'granted' : 'denied'}`);
+    }
+    const iso = read('plugin-isolate.ts');
+    assert.match(iso, /readOnlyFiles: tsNodeProjectFiles,\s+denyNetwork: true,/, 'macOS: one Seatbelt profile, network denied');
+    assert.match(iso, /allowNetwork: false,\s+allowPrivateNetwork: false,/, 'Windows: no network capability');
+    assert.match(iso, /netGranted: false, netFlags: netPermFlags/, 'no --allow-net for the Node permission model');
+    assert.doesNotMatch(iso, /tcpPorts: netGranted/, 'no kernel port list: the ports are the tunnel\'s to judge');
 });
 
-test('an approved loopback destination is honoured for any plugin: its port on Linux, and on macOS loopback for that port only', () => {
-    const perms = require('../core/plugin-permissions');
-    const realPrivate = perms.getPrivateDestinations;
-    try {
-        perms.getPrivateDestinations = () => ['127.0.0.1:2525', '[::1]:6000', '10.0.0.5:5432', '127.0.0.2:8025'];
-        assert.deepStrictEqual(isolate.__egressLoopbackTcpPortsFor('sample-relay'), [2525, 6000, 8025], 'loopback destinations only, never a LAN one');
-        assert.ok([2525, 6000, 5432, 8025].every((n) => isolate.__egressTcpPortsFor('sample-relay').includes(n)), 'every approved port reaches the Linux port rules');
-        perms.getPrivateDestinations = () => [];
-        assert.deepStrictEqual(isolate.__egressLoopbackTcpPortsFor('sample-relay'), []);
-    } finally { perms.getPrivateDestinations = realPrivate; }
-
-    const p = mac.buildSeatbeltProfile({ writableDirs: ['/srv/wordjs/backend/data/plugin-own/x'], denyNetwork: false, egressTcpPorts: [443, 2525], loopbackTcpPorts: [2525], appRoot: '/srv/wordjs/backend', nodePath: '/usr/local/bin/node' });
-    const deny = p.indexOf('(deny network-outbound (remote ip "localhost:*"))');
-    const allowLoop = p.indexOf('(allow network-outbound (remote tcp "localhost:2525"))');
-    assert.ok(deny > 0 && allowLoop > deny, 'the approved loopback port is allowed again AFTER the loopback refusal');
-    assert.ok(!/remote tcp "localhost:(?!2525")/.test(p), 'no other loopback port');
-    assert.deepStrictEqual(mac.auditProfile(p), []);
-    const none = mac.buildSeatbeltProfile({ writableDirs: ['/srv/z'], denyNetwork: false, egressTcpPorts: [443], appRoot: '/srv/wordjs/backend', nodePath: '/usr/local/bin/node' });
-    assert.ok(!/remote tcp "localhost:/.test(none), 'without an approval loopback stays refused');
-    const isoSrc = fs.readFileSync(path.join(__dirname, '..', 'core', 'plugin-isolate.ts'), 'utf8');
-    assert.match(isoSrc, /loopbackTcpPorts: netGranted \? egressLoopbackTcpPortsFor\(slug\) : \[\]/);
+test('the host tunnel serves the plugin with its live policy, and the worker installs the tunnel only with the grant', () => {
+    const iso = read('plugin-isolate.ts');
+    assert.match(iso, /network: isNetworkGrantedFor\(slug\),/);
+    assert.match(iso, /loaded: egressPolicyLoaded\(\),/);
+    assert.match(iso, /ports: egressTcpPortsFor\(slug\),/);
+    assert.match(iso, /msg\.kind === 'net'\) \{[\s\S]{0,200}egressTunnel\.handle\(msg\);/);
+    const worker = read('plugin-worker.js');
+    assert.match(worker, /if \(!netAllowed\) \{[\s\S]*?\} else \{[\s\S]*?tunnel\.installChildTunnel\(send\);/, 'the tunnel client is installed only on the network-granted branch');
+    assert.match(worker, /eg\.installChildNetGuard\(tunnel\.connectViaTunnel\);/);
+    assert.match(worker, /msg\.kind === 'net'\) \{[\s\S]{0,200}runWithContext\(slug, \(\) => netTunnel\.handleHostFrame\(msg\)\)/, 'tunnel events run as the plugin');
 });
 
-test('macOS probe: the granted shape must be refused a loopback port', () => {
-    const mod = fs.readFileSync(path.join(__dirname, '..', 'core', 'sandbox-macos.ts'), 'utf8');
-    assert.match(mod, /allowed\.netCode === 'CONNECTED' && refused\(allowed\.portCode\)/);
-    assert.match(String(mac.__probeSrc), /net\.connect\(loopPort,"127\.0\.0\.1"\)/);
-});
-
-test('Windows: a firewall rule per plugin package refuses the private ranges, except the approved hosts', () => {
-    assert.deepStrictEqual(win.PRIVATE_NETWORK_RANGES, ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10', 'fc00::/7', 'fe80::/10']);
-    assert.deepStrictEqual(win.blockedPrivateRanges([]), win.PRIVATE_NETWORK_RANGES, 'nothing approved: every range is refused');
-    // An approved host is cut out of its range, and only that host.
-    const cut = win.blockedPrivateRanges(['192.168.1.20', '10.0.0.0']);
-    assert.ok(cut.includes('10.0.0.1-10.255.255.255') && !cut.includes('10.0.0.0/8'));
-    assert.ok(cut.includes('192.168.0.0-192.168.1.19') && cut.includes('192.168.1.21-192.168.255.255'));
-    assert.ok(cut.includes('172.16.0.0/12') && cut.includes('169.254.0.0/16'), 'other ranges stay whole');
-    assert.ok(!win.blockedPrivateRanges(['fd00::5']).includes('fc00::/7') && win.blockedPrivateRanges(['fd00::5']).includes('fe80::/10'));
-    const rule = win.privateRangeRuleFor('S-1-15-2-1-2-3', ['192.168.1.20']);
-    assert.match(rule.fp, /^[0-9a-f]{16}$/);
-    assert.notStrictEqual(rule.fp, win.privateRangeRuleFor('S-1-15-2-1-2-3', []).fp, 'a changed approval changes the rule');
-    const script = win.firewallRulesScript([rule], true);
-    assert.match(script, /New-NetFirewallRule -Name \$r\.name .* -Direction Outbound -Action Block -Profile Any -Package \$r\.sid -RemoteAddress @\(\$r\.remote\)/);
-    assert.match(script, /Remove-NetFirewallRule -Name \$r\.name/, 'each rule is replaced whole');
-    assert.match(script, /Where-Object \{ \$names -notcontains \$_\.Name \} \| Remove-NetFirewallRule/, 'retired plugins lose their rule');
-    assert.doesNotMatch(win.firewallRulesScript([rule], false), /notcontains/, 'a launch never prunes other rules');
-    assert.doesNotMatch(script, /S-1-15-2-1-2-3/, 'the data travels base64-encoded, never spliced into the script');
-    assert.ok([...script].every((c) => c === '\t' || c === '\n' || c === '\r' || (c >= ' ' && c <= '~')), 'ASCII, like every generated PowerShell');
-    const relay = win.__buildRelayScript();
-    assert.ok(relay.includes('S-1-15-3-3') && relay.includes('WJS_AC_PRIVATE_NETWORK'));
-    const iso = fs.readFileSync(path.join(__dirname, '..', 'core', 'plugin-isolate.ts'), 'utf8');
-    assert.match(iso, /allowPrivateNetwork: netGranted && egressTcpPortsHasPrivate\(slug\)/);
-    assert.match(iso, /approvedPrivateHosts: netGranted \? approvedPrivateHostsFor\(slug\) : \[\]/);
-    assert.match(iso, /if \(io\.allowNetwork\) win\.ensurePrivateRangeRule\(appRoot, sid, io\.approvedPrivateHosts \|\| \[\]\);/);
-    const perms = require('../core/plugin-permissions');
-    const realPrivate = perms.getPrivateDestinations;
-    try {
-        perms.getPrivateDestinations = () => ['192.168.1.20:2525', '[FD00::1]:8443', '127.0.0.1:2525'];
-        assert.deepStrictEqual(isolate.__approvedPrivateHostsFor('sample-relay'), ['192.168.1.20', 'fd00::1', '127.0.0.1']);
-    } finally { perms.getPrivateDestinations = realPrivate; }
-    if (process.platform !== 'win32') {
-        assert.deepStrictEqual(win.readNetworkIsolationPolicy(), { platform: false, configured: false, missing: [], firewallOff: false });
-    } else {
-        const st = win.readNetworkIsolationPolicy();
-        assert.strictEqual(st.platform, true);
-        assert.strictEqual(st.configured, st.missing.length === 0 && !st.firewallOff);
+test('each platform\'s probe certifies the tunnel from its confined child', () => {
+    const snippet = tunnel.probeTunnelSnippet('cb');
+    assert.match(snippet, /host:'1\.1\.1\.1',port:443/);
+    assert.match(snippet, /host:'169\.254\.169\.254',port:80/);
+    assert.doesNotMatch(snippet, /op:'destroy'/, 'no frame from the child after its verdict');
+    assert.strictEqual(tunnel.probeTunnelOk('public=opened;metadata=EACCES'), true);
+    for (const bad of ['public=EACCES;metadata=EACCES', 'public=opened;metadata=opened', 'public=opened;metadata=TIMEOUT', 'TIMEOUT', undefined]) {
+        assert.strictEqual(tunnel.probeTunnelOk(bad), false, String(bad));
+    }
+    for (const file of ['sandbox-linux.ts', 'sandbox-macos.ts', 'sandbox-windows.ts']) {
+        const src = read(file);
+        assert.match(src, /probeTunnelOk\(/, `${file} certifies the tunnel`);
+        assert.match(src, /attachProbeTunnel\(/, `${file} serves the probe's tunnel with the real host code`);
     }
 });
 
-test('Site Health shows the Windows setting with a panel action, and the panel calls it', () => {
-    const realPlatform = Object.getOwnPropertyDescriptor(process, 'platform')!;
-    const realRead = win.readNetworkIsolationPolicy;
-    const realExposure = win.getSecretExposure;
-    try {
-        Object.defineProperty(process, 'platform', { value: 'win32' });
-        win.readNetworkIsolationPolicy = () => ({ platform: true, configured: false, missing: ['S-1-15-2-9'], firewallOff: false });
-        win.getSecretExposure = () => ({ checked: true, protectedPaths: [], exposed: [] });
-        const checks = require('../core/site-health').pluginSandboxChecks();
-        const c = checks.find((x: any) => x.id === 'security.pluginNetwork');
-        assert.ok(c, 'the check is there');
-        assert.strictEqual(c.status, 'warn');
-        assert.deepStrictEqual(c.action && c.action.endpoint, '/health/sandbox/windows-network');
-        // With the firewall off the rules cannot apply: said plainly, and no button that would not help.
-        win.readNetworkIsolationPolicy = () => ({ platform: true, configured: false, missing: [], firewallOff: true });
-        const off = require('../core/site-health').pluginSandboxChecks().find((x: any) => x.id === 'security.pluginNetwork');
-        assert.strictEqual(off.status, 'warn');
-        assert.ok(!off.action, 'no action when the firewall is off');
-        win.readNetworkIsolationPolicy = () => ({ platform: true, configured: true, missing: [], firewallOff: false });
-        assert.strictEqual(require('../core/site-health').pluginSandboxChecks().find((x: any) => x.id === 'security.pluginNetwork').status, 'ok');
-    } finally {
-        Object.defineProperty(process, 'platform', realPlatform);
-        win.readNetworkIsolationPolicy = realRead;
-        win.getSecretExposure = realExposure;
+test('no Windows network setting, panel action or command remains', () => {
+    const win = require('../core/sandbox-windows');
+    for (const gone of ['readNetworkIsolationPolicy', 'applyNetworkIsolationPolicy', 'ensurePrivateRangeRule', 'firewallRulesScript']) {
+        assert.strictEqual(win[gone], undefined, gone);
     }
-    const route = fs.readFileSync(path.join(__dirname, '..', 'routes', 'health.ts'), 'utf8');
-    assert.match(route, /router\.post\('\/sandbox\/windows-network', authenticate, isAdmin/);
-    const page = fs.readFileSync(path.resolve(__dirname, '..', '..', '..', 'frontend', 'src', 'app', 'admin', 'site-health', 'page.tsx'), 'utf8');
-    assert.match(page, /apiPost\(c\.action\.endpoint, c\.action\.body \|\| \{\}\)/);
-    for (const lang of ['es', 'en', 'pt']) assert.ok(page.includes('siteHealth.check.security.pluginNetwork.missing'), lang);
+    assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', 'routes', 'health.ts'), 'utf8'), /windows-network/);
+    assert.doesNotMatch(read('site-health.ts'), /security\.pluginNetwork|security\.pluginPorts/);
+    assert.doesNotMatch(fs.readFileSync(path.join(__dirname, '..', '..', 'scripts', 'plugin-sandbox.js'), 'utf8'), /windows-network/);
 });

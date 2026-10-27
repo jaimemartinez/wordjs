@@ -1481,11 +1481,13 @@ const LINUX_FLOOR_LAYERS: readonly LinuxFloorLayer[] = ['landlock', 'none'] as c
 function linuxFloorDecision(o: { platform: string; hardened?: boolean; zeroConf: ConfinementState; netGranted: boolean }): { layer: LinuxFloorLayer; denyNetwork: boolean; reason: string } {
     if (o.platform !== 'linux') return { layer: 'none', denyNetwork: false, reason: 'Landlock and seccomp-bpf are Linux kernel features' };
     if (o.zeroConf !== 'active') return { layer: 'none', denyNetwork: false, reason: `the Landlock/seccomp probe did not certify this host (state '${o.zeroConf}')` };
+    // No plugin opens a socket of its own: a network-granted one reaches the network through the host's
+    // egress tunnel (core/egress-tunnel), so the IP-socket denial applies to every plugin.
     return {
         layer: 'landlock',
-        denyNetwork: !o.netGranted,
+        denyNetwork: true,
         reason: o.netGranted
-            ? 'Landlock and the dangerous-syscall filter stay active; the network grant removes only the IP-socket denial'
+            ? 'Landlock, the dangerous-syscall filter and the IP-socket denial were certified on this host; the network grant is served by the host egress tunnel'
             : 'Landlock, the dangerous-syscall filter and the IP-socket denial were certified on this host',
     };
 }
@@ -1747,7 +1749,6 @@ function probePlatformConfinement(): Promise<ConfinementState> {
  */
 async function launchAppContainerChild(slug: string, siteId: number, appRoot: string, io: {
     args: string[]; env: Record<string, string>; stdio: any; allowNetwork: boolean; allowPrivateNetwork: boolean;
-    approvedPrivateHosts?: string[];
     zones: { traverse: string[]; readExec: string[]; write: string[] };
 }): Promise<{ child: any; containedPid: number | null }> {
     const win = require('./sandbox-windows');
@@ -1769,9 +1770,6 @@ async function launchAppContainerChild(slug: string, siteId: number, appRoot: st
     await grant(zones.readExec, 'rx');
     await grant(zones.write, 'full');
     const runtimeExe = await win.ensureAppContainerRuntime(sid);
-    // The private ranges are refused by a firewall rule on this package SID (sandbox-windows), except the
-    // hosts an administrator approved for the plugin.
-    if (io.allowNetwork) win.ensurePrivateRangeRule(appRoot, sid, io.approvedPrivateHosts || []);
     const r = await win.launchInAppContainer({ sid, exe: runtimeExe, args: io.args, cwd: appRoot, env: io.env, stdio: io.stdio, allowNetwork: io.allowNetwork, allowPrivateNetwork: io.allowPrivateNetwork });
     if (!r || !r.child) throw new Error('the AppContainer relay produced no child process');
     return { child: r.child, containedPid: r.containedPid ?? null };
@@ -1858,36 +1856,6 @@ function egressTcpPortsFor(slug: string): number[] {
         }
     } catch { /* no approved destinations */ }
     return Array.from(ports).sort((a, b) => a - b);
-}
-/**
- * The TCP ports of the loopback destinations an administrator approved for this plugin (a relay or a
- * tunnel on the host itself). macOS refuses loopback to every plugin unless one of these names it.
- */
-function egressLoopbackTcpPortsFor(slug: string): number[] {
-    const ports = new Set<number>();
-    try {
-        for (const dest of require('./plugin-permissions').getPrivateDestinations(slug) || []) {
-            const m = /^(?:\[(::1)\]|(127\.\d{1,3}\.\d{1,3}\.\d{1,3})):(\d{1,5})$/.exec(String(dest));
-            const port = m ? Number(m[3]) : 0;
-            if (port >= 1 && port <= 65535) ports.add(port);
-        }
-    } catch { /* no approved destinations */ }
-    return Array.from(ports).sort((a, b) => a - b);
-}
-/** The hosts (IP literals, IPv6 without brackets) of the private destinations approved for this plugin. */
-function approvedPrivateHostsFor(slug: string): string[] {
-    const out = new Set<string>();
-    try {
-        for (const dest of require('./plugin-permissions').getPrivateDestinations(slug) || []) {
-            const m = /^(?:\[([0-9a-fA-F:.]+)\]|([0-9.]+)):\d{1,5}$/.exec(String(dest));
-            if (m) out.add((m[1] || m[2]).toLowerCase());
-        }
-    } catch { /* no approved destinations */ }
-    return Array.from(out);
-}
-/** Did an administrator approve at least one private destination for this plugin? */
-function egressTcpPortsHasPrivate(slug: string): boolean {
-    try { const l = require('./plugin-permissions').getPrivateDestinations(slug); return Array.isArray(l) && l.length > 0; } catch { return false; }
 }
 // Whether the per-plugin egress policy loaded cleanly at boot. When FALSE (DB/options load failed, or the
 // permissions module can't be required at all), the spawn path below fails egress CLOSED for a
@@ -2257,7 +2225,8 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
         // Node's permission model checks the path AS WRITTEN (it does not resolve links), so the `data` link
         // is named as well; every kernel layer checks its target, which is the own data directory above.
         const nodeWritable = nativePaths.ownWritable ? [...sandboxWritable, nativePaths.ownDataLink] : sandboxWritable;
-        execArgv.push(...permissionModelArgv({ permFlag, readable: sandboxReadable, writable: nodeWritable, netGranted, netFlags: netPermFlags }));
+        // No --allow-net: the child opens no socket (the host egress tunnel carries a granted plugin's traffic).
+        execArgv.push(...permissionModelArgv({ permFlag, readable: sandboxReadable, writable: nodeWritable, netGranted: false, netFlags: netPermFlags }));
     }
     const childStdio: any = IPC_STDIO;
     // -- LINUX ZERO-CONFIGURATION CONFINEMENT (Landlock + seccomp-bpf) -----------------------------
@@ -2317,8 +2286,6 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 // anyway — harmless where redundant, load-bearing where it is not.
                 readRoot: roots,
                 execRoot: [process.execPath],
-                // A network-granted plugin connects only to these TCP ports (Landlock ABI >= 4).
-                tcpPorts: netGranted ? egressTcpPortsFor(slug) : [],
                 nodeArgs: [],
             })];
         } catch (e: any) {
@@ -2355,14 +2322,13 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     if (platformLaunch.use && platformLaunch.mechanism === 'seatbelt') {
         try {
             const mac = require('./sandbox-macos');
-            // The profile always confines filesystem/process operations; the grant changes only network.
+            // One profile for every plugin: no network of its own (a network-granted plugin's connections
+            // go through the host egress tunnel).
             const profile = mac.buildSeatbeltProfile({
                 writableDirs: sandboxWritable,
                 readOnlyDirs: sandboxReadable,
                 readOnlyFiles: tsNodeProjectFiles,
-                denyNetwork: !netGranted,
-                egressTcpPorts: netGranted ? egressTcpPortsFor(slug) : [],
-                loopbackTcpPorts: netGranted ? egressLoopbackTcpPortsFor(slug) : [],
+                denyNetwork: true,
                 appRoot: APP_ROOT,
                 nodePath: process.execPath,
             });
@@ -2406,10 +2372,10 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 // spawn branches their cwd reached this one too, and tsc refused it.
                 env: workerEnv,
                 stdio: childStdio,
-                allowNetwork: netGranted,
-                // privateNetworkClientServer only where an administrator approved a private destination.
-                allowPrivateNetwork: netGranted && egressTcpPortsHasPrivate(slug),
-                approvedPrivateHosts: netGranted ? approvedPrivateHostsFor(slug) : [],
+                // No network capability for any plugin: a network-granted one reaches the network through the
+                // host egress tunnel, so no Windows setting is involved.
+                allowNetwork: false,
+                allowPrivateNetwork: false,
                 zones: { traverse: nativePaths.traverse, readExec: sandboxReadable, write: sandboxWritable },
             });
         } catch (e: any) {
@@ -2599,6 +2565,24 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
             on: child.on.bind(child),
             _child: child,
         };
+        // This child's network egress: it has no direct network at the kernel layer, so a network-granted
+        // plugin's connections and name lookups are decided and opened here (core/egress-tunnel). The
+        // policy is read when each connection opens, so an approval or a withdrawal applies to the next one.
+        const egressTunnel = require('./egress-tunnel').createEgressTunnelHost({
+            slug,
+            send: (m: any) => worker.postMessage(m),
+            policy: () => {
+                const perms = require('./plugin-permissions');
+                return {
+                    network: isNetworkGrantedFor(slug),
+                    loaded: egressPolicyLoaded(),
+                    allowedHosts: (() => { try { return perms.getEgressAllowlist(slug) || []; } catch { return []; } })(),
+                    privateDestinations: (() => { try { return perms.getPrivateDestinations(slug) || []; } catch { return []; } })(),
+                    ports: egressTcpPortsFor(slug),
+                };
+            },
+        });
+        child.on('exit', () => egressTunnel.closeAll());
         let settled = false; // load Promise settled (ready / init-error / early exit / ready timeout)
         let readyTimer: any = null; // startup deadline — see READY_TIMEOUT_MS; cleared by 'ready' and failLoad
         // Reactive per-child RSS poll — the FALLBACK resident cap when the preventive cgroup cap isn't
@@ -3079,6 +3063,9 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 // child stays alive with everything it registered before the throw still applying to
                 // host content — failLoad is what makes the rejection mean "nothing of it is left".
                 failLoad(new Error(msg.error));
+            } else if (msg.kind === 'net') {
+                // A tunnelled connection or name lookup (core/egress-tunnel judges and opens it).
+                egressTunnel.handle(msg);
             } else if (msg.kind === 'call') {
                 // The isolate invoked a wordjs.* method — run it here, in the plugin's context.
                 if (inflightCalls >= MAX_INFLIGHT_CALLS) {
@@ -3892,8 +3879,6 @@ module.exports = {
     __nativeSandboxRequired: nativeSandboxRequired,
     __sourceWorkerExempt: sourceWorkerExempt,
     __egressTcpPortsFor: egressTcpPortsFor,
-    __egressLoopbackTcpPortsFor: egressLoopbackTcpPortsFor,
-    __approvedPrivateHostsFor: approvedPrivateHostsFor,
     __rlimitArgs: rlimitArgs,
     __prlimitCandidates: PRLIMIT_CANDIDATES,
     __appContainerLaunchZones: appContainerLaunchZones,

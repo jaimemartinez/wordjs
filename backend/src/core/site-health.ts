@@ -283,27 +283,17 @@ async function checkBackground(): Promise<HealthCheck[]> {
 }
 
 /**
- * The plugin sandbox's host-level settings, each with the panel action that applies it:
- *   · Windows: the network-isolation ranges that make private networks unreachable for plugins without an
- *     approved private destination (one administrator prompt, machine-wide), and the secret paths every
- *     AppContainer could read because of the install folder's ACL;
- *   · every platform: plugins refused because their files changed since WordJS installed them;
- *   · Linux: whether the kernel bounds a network-granted plugin's ports (Landlock ABI 4, kernel 6.7).
+ * What the plugin sandbox needs an administrator to know or decide:
+ *   · Windows: secret paths every AppContainer could read because of the install folder's ACL, when WordJS
+ *     could not change it itself;
+ *   · every platform: plugins refused because their files changed since WordJS installed them.
+ * Network needs nothing here: no plugin has a network of its own, and the host egress tunnel applies each
+ * plugin's policy on every platform.
  */
 function pluginSandboxChecks(): HealthCheck[] {
     const out: HealthCheck[] = [];
     if (process.platform === 'win32') {
         const win = require('./sandbox-windows');
-        const net = win.readNetworkIsolationPolicy();
-        out.push(net.configured
-            ? check('security.pluginNetwork', 'security', 'ok', 'ok', 'Plugins and private networks', 'Plugins cannot reach private networks (local, VPN, cloud metadata) unless you approved a destination for them.')
-            : net.firewallOff
-                ? check('security.pluginNetwork', 'security', 'warn', 'firewallOff', 'Plugins and private networks',
-                    'Windows Defender Firewall is off for a network profile, so the rules that keep plugins out of private networks do not apply. Turn it on in Windows Security.')
-                : withAction(check('security.pluginNetwork', 'security', 'warn', 'missing', 'Plugins and private networks',
-                    `Windows treats some private networks (a VPN, a routed LAN, cloud metadata at 169.254.169.254) as the Internet. ${net.missing.length} plugin(s) with network access do not have the firewall rule that keeps them out yet. Apply the rules; Windows asks for an administrator on this server.`,
-                    { count: net.missing.length }),
-                { endpoint: '/health/sandbox/windows-network', label: 'Apply (administrator)', labelKey: 'siteHealth.action.applyWindowsNetwork' }));
         const exposure = win.getSecretExposure();
         if (exposure && exposure.checked && exposure.exposed.length) {
             out.push(check('security.pluginSecrets', 'security', 'fail', 'exposed', 'Plugin access to secrets',
@@ -315,14 +305,6 @@ function pluginSandboxChecks(): HealthCheck[] {
         out.push(withAction(check('background.pluginFiles', 'background', 'warn', 'changed', 'Plugin files',
             `The files of the plugin ${slug} changed since WordJS installed it, so it was not started. Update or reinstall it from Plugins; if you changed them yourself, accept them.`, { slug }),
         { endpoint: '/health/sandbox/plugin-files/accept', label: 'Accept these files', labelKey: 'siteHealth.action.acceptPluginFiles', body: { slug } }));
-    }
-    if (process.platform === 'linux') {
-        try {
-            if (require('./sandbox-linux').getLinuxEgressPortEnforcement() === 'unavailable') {
-                out.push(check('security.pluginPorts', 'security', 'info', 'unavailable', 'Plugin network ports',
-                    'This Linux kernel cannot limit which ports a plugin with network access connects to (that needs kernel 6.7 or later), so only WordJS itself limits them.'));
-            }
-        } catch { /* not probed yet */ }
     }
     return out;
 }

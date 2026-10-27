@@ -6,7 +6,6 @@
  * reached or a checkout that is being removed:
  *
  *   status          what Site Health reports for the sandbox on this host
- *   windows-network add the private-network firewall rule of each plugin with network access (asks for an administrator)
  *   retire-all      remove every Windows AppContainer profile this install created, and their ACEs.
  *                   Run it BEFORE deleting an install or a git worktree: a profile is a per-user
  *                   registration and its ACEs live on folders the install may share through a junction.
@@ -30,7 +29,6 @@ const USAGE = [
     'Usage: npm run sandbox -- <command>',
     '',
     '  status            the sandbox settings Site Health reports for this host',
-    '  windows-network   add the private-network firewall rules for plugins (administrator prompt)',
     '  retire-all        remove every AppContainer profile of this install (before deleting it or a worktree)',
 ].join('\n');
 
@@ -39,16 +37,14 @@ async function main(argv) {
     const win = mod('core/sandbox-windows');
     if (!cmd || cmd === 'help' || cmd === '-h' || cmd === '--help') { console.log(USAGE); return 0; }
     if (cmd === 'status') {
-        const net = win.readNetworkIsolationPolicy();
-        console.log(JSON.stringify({ platform: process.platform, windowsPrivateNetworkRules: net }, null, 2));
+        let changedPlugins = [];
+        try { changedPlugins = mod('core/plugin-integrity').listIntegrityMismatches(); } catch { /* none recorded */ }
+        console.log(JSON.stringify({
+            platform: process.platform,
+            changedPlugins,
+            ...(process.platform === 'win32' ? { windowsSecretExposure: win.getSecretExposure() } : {}),
+        }, null, 2));
         return 0;
-    }
-    if (cmd === 'windows-network') {
-        if (process.platform !== 'win32') { console.error('Only Windows needs this.'); return 1; }
-        const r = await win.applyNetworkIsolationPolicy();
-        if (r.ok) { console.log('Every plugin with network access has its private-network firewall rule.'); return 0; }
-        console.error(`Not applied (${r.reason}). Run this once in an administrator PowerShell:\n${r.command}`);
-        return 1;
     }
     if (cmd === 'retire-all') {
         if (process.platform !== 'win32') { console.log('Nothing to do: only Windows keeps sandbox profiles.'); return 0; }

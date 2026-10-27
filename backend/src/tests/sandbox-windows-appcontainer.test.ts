@@ -263,10 +263,11 @@ describe('sandbox-windows: generated script hygiene (all platforms)', () => {
         }
     });
 
-    test('the probe covers both network policies while retaining read and child-process denials', () => {
+    test('the probe certifies the one network shape (no capability) and the egress tunnel, with read and child-process denials', () => {
         const source = fs.readFileSync(path.resolve(__dirname, '../core/sandbox-windows.ts'), 'utf8');
         assert.match(source, /allowNetwork:\s*false/);
-        assert.match(source, /allowNetwork:\s*true/);
+        assert.doesNotMatch(source, /contained\(\{ allowNetwork: true \}\)/, 'no network-granted shape: no plugin has a network capability');
+        assert.match(source, /probeTunnelOk\(verdict\.tunnel\)/);
         assert.match(source, /verifyProcessLimit:\s*true/);
         assert.match(sw.__probeChildSource, /WJS_PROCESS_DENIAL/);
         assert.doesNotMatch(sw.__probeChildSource, /child_process/, 'the relay proves the Job limit before resuming the child; uv_spawn can block after the kernel refusal');
@@ -500,7 +501,8 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
         const verdict: any = await new Promise((resolve) => {
             let got: any = null, done = false;
             const fin = () => { if (done) return; done = true; try { launched.child.kill(); } catch { /* */ } resolve(got); };
-            launched.child.on('message', (m: any) => { got = m; fin(); });
+            require('../core/egress-tunnel').attachProbeTunnel(launched.child);
+            launched.child.on('message', (m: any) => { if (m && m.kind === 'net') return; got = m; fin(); });
             launched.child.on('exit', () => setTimeout(fin, 100));
             const t = setTimeout(fin, 40000); if ((t as any).unref) (t as any).unref();
         });
@@ -548,7 +550,8 @@ describe('sandbox-windows: live AppContainer on this host', { skip: !LIVE ? 'set
         const verdict: any = await new Promise((resolve) => {
             let got: any = null, done = false;
             const finish = () => { if (done) return; done = true; try { launched.child.kill(); } catch { /* */ } resolve(got); };
-            launched.child.on('message', (m: any) => { got = m; finish(); });
+            require('../core/egress-tunnel').attachProbeTunnel(launched.child);
+            launched.child.on('message', (m: any) => { if (m && m.kind === 'net') return; got = m; finish(); });
             launched.child.on('exit', () => setTimeout(finish, 100));
             const t = setTimeout(finish, 40000); if ((t as any).unref) (t as any).unref();
         });

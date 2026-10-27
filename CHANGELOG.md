@@ -8,17 +8,21 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ### Security
 - **Plugin sandbox: tighter confinement of isolated plugins on Linux, macOS and Windows.**
-  - **Read-only code.** A plugin's code folder is read-only at every sandbox layer. Its `data/` folder moves to
+  - **Read-only code.** A plugin's (and a theme's) code folder is read-only at every sandbox layer. Its `data/` folder moves to
     `data/plugin-own/` on its first start (a rename, nothing is copied or lost) and stays reachable at the old path
     through a link (a junction on Windows), so plugins that keep state in `data/` work unchanged. The code and the
     manifest are fingerprinted and checked before every start; an administrator who changed them on purpose accepts
     them in **Site Health**.
-  - **Network-granted plugins.** The kernel now limits which TCP ports they connect to: Landlock on Linux (kernel 6.7
-    or later; Site Health says when the kernel cannot) and Seatbelt on macOS, which also keeps loopback out of reach.
-    DNS and the web are always allowed; a plugin names more on its `network` permission (`"ports": [25, 587]`), and an
-    approved private destination adds its own. On Windows, each plugin with network access gets a Windows Firewall
-    rule on its sandbox that refuses the private networks except the hosts approved for it; **Site Health** adds
-    the rules (Windows asks for an administrator) and says when the firewall is off.
+  - **Network goes through WordJS, on every platform.** No plugin has a network of its own at the kernel layer any
+    more (Landlock and seccomp on Linux, Seatbelt on macOS, an AppContainer without network capabilities on
+    Windows), with the network permission or without it. A plugin that holds it reaches the network through WordJS,
+    which decides the exact destination, resolves the name once and opens the connection: the plugin's allowed
+    hosts, public addresses only unless an administrator approved a private `host:port`, and the TCP ports it may
+    use. DNS and the web are always allowed; a plugin names more on its `network` permission
+    (`"ports": [25, 587]`), and an approved private destination adds its own. Connections, name lookups, idle time
+    and bytes are bounded per plugin and for the whole server. Plugin code does not change: `net`, `tls`, `http`,
+    `https`, `fetch`, WebSocket, STARTTLS and `dns.lookup` work as before. UDP is not available to plugins. Nothing
+    is configured on any platform.
   - **Linux.** The seccomp filter refuses more calls (on other processes' limits, priority and scheduling; mount
     and quota interfaces; file mode, owner and extended-attribute changes by path; signal-owner commands),
     and below Landlock ABI 3 it also refuses truncating files the plugin may only read. The launcher closes every
@@ -36,8 +40,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - **Production entry.** `npm start` (`backend/server.js`) and `node monolith.js prod` refuse to start without
     `backend/dist/` instead of running the TypeScript sources; the source-mode Windows exemption needs a development
     or test run.
-  - `npm run sandbox -- status | windows-network | retire-all` is the command-line path for the same settings
-    (`retire-all` removes this install's Windows sandbox profiles before an install or a worktree is deleted).
+  - `npm run sandbox -- status | retire-all` shows what Site Health reports for the sandbox, and removes this
+    install's Windows sandbox profiles before an install or a worktree is deleted.
 - **mail-server 3.3.7:** declares the SMTP ports it uses (25, 465, 587 and 2525), and a relay on another port is
   explained in the console.
 

@@ -2,9 +2,9 @@
  * Site Health's plugin-sandbox checks speak every admin language, and their one-click fixes are wired.
  *
  * The backend (core/site-health pluginSandboxChecks) sends checks with an `action` the panel runs for the
- * administrator: on Windows, applying the private network ranges for apps (Windows then asks for an
- * administrator on the server); everywhere, accepting a plugin's changed files. The panel shows the action
- * as a button, POSTs it, and runs the checks again.
+ * administrator: accepting a plugin's changed files. The panel shows the action as a button, POSTs it, and
+ * runs the checks again. No network setting is offered: a plugin's network goes through the host on every
+ * platform, with nothing to configure.
  */
 import fs from "node:fs";
 import path from "node:path";
@@ -14,16 +14,10 @@ import "@/app/admin/site-health/page";
 
 const LANGS: Language[] = ["es", "en", "pt"];
 const KEYS = [
-    "siteHealth.check.security.pluginNetwork.title",
-    "siteHealth.check.security.pluginNetwork.ok",
-    "siteHealth.check.security.pluginNetwork.missing",
     "siteHealth.check.security.pluginSecrets.title",
     "siteHealth.check.security.pluginSecrets.exposed",
     "siteHealth.check.background.pluginFiles.title",
     "siteHealth.check.background.pluginFiles.changed",
-    "siteHealth.check.security.pluginPorts.title",
-    "siteHealth.check.security.pluginPorts.unavailable",
-    "siteHealth.action.applyWindowsNetwork",
     "siteHealth.action.acceptPluginFiles",
 ];
 
@@ -32,7 +26,7 @@ describe("Site Health — plugin sandbox checks", () => {
         for (const lang of LANGS) {
             for (const key of KEYS) expect(translations[lang][key], `${lang}: ${key}`).toBeTruthy();
         }
-        expect(translations.es["siteHealth.action.applyWindowsNetwork"]).not.toBe(translations.en["siteHealth.action.applyWindowsNetwork"]);
+        expect(translations.es["siteHealth.action.acceptPluginFiles"]).not.toBe(translations.en["siteHealth.action.acceptPluginFiles"]);
     });
 
     it("keeps the placeholders the backend fills", () => {

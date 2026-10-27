@@ -101,7 +101,7 @@ test('the probe proves each row on the kernel: another pid\'s priority, truncati
     assert.match(mod, /stdio: probeStdio\(\)/);
     assert.match(mod, /m\.fdCode === 'EBADF'/);
     assert.match(mod, /&& m\.copyCode === 'OK'\)/);
-    assert.match(mod, /&& confinedSurface && allowedOk\)/, 'the confined leg must pass the syscall-surface checks to certify');
+    assert.match(mod, /&& confinedSurface && tunnelOk\)/, 'the confined leg must pass the syscall-surface checks to certify');
     assert.doesNotThrow(() => new Function(src));
 });
 

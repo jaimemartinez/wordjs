@@ -818,13 +818,16 @@ function getSeatbeltState() { return seatbeltState; }
  */
 const PROBE_SRC = [
     'var fs=require("fs");var net=require("net");var os=require("os");var cp=require("child_process");',
-    'var out={stage:"RESULT",wrote:false,readCode:"NONE",homeCode:"NONE",descendantReadCode:"NONE",netCode:"SKIP",portCode:"SKIP",shCode:"NONE",statCode:"NONE"};',
+    'var out={stage:"RESULT",wrote:false,readCode:"NONE",homeCode:"NONE",descendantReadCode:"NONE",netCode:"SKIP",portCode:"SKIP",shCode:"NONE",statCode:"NONE",tunnelCode:"SKIP"};',
     'var target=process.argv[1];var denyNet=process.argv[2]==="1";var forbidden=process.argv[3];var loopPort=Number(process.argv[4]||0);var hidden=process.argv[5]||"";',
     'function reportFinal(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
     'function attemptSpawn(){out.stage="SPAWN";out.descendantReadCode="ATTEMPTED";try{process.once("message",function(m){if(!m||m.wordjsProbeSpawn!==true){process.exit(6);return;}var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.descendantReadCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{var childSrc="var fs=require(\\"fs\\");try{fs.readFileSync(process.env.WORDJS_SEATBELT_PROBE_FORBIDDEN);process.exit(10);}catch(e){process.exit(e&&e.code===\\"EPERM\\"?20:e&&e.code===\\"EACCES\\"?21:22);}";child=cp.spawn(process.env.WORDJS_SEATBELT_PROBE_NODE,["-e",childSrc],{stdio:"ignore"});child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("close",function(code,signal){done(code===10?"OPEN":code===20?"EPERM":code===21?"EACCES":(signal||"FAIL"));});}catch(e){done((e&&e.code)||"THROW");}});process.send(out);}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
-    'function tryPort(){if(!loopPort){attemptSpawn();return;}var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.portCode=c;try{if(s){s.destroy();}}catch(e){}attemptSpawn();};try{s=net.connect(loopPort,"127.0.0.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
+    // The egress tunnel, as a network-granted plugin uses it (core/egress-tunnel).
+    'var __wjtDone=function(p,q){out.tunnelCode="public="+p+";metadata="+q;attemptSpawn();};',
+    'function tryTunnel(){' + require('./egress-tunnel').probeTunnelSnippet('__wjtDone') + 'setTimeout(function(){if(out.tunnelCode==="SKIP"){out.tunnelCode="TIMEOUT";attemptSpawn();}},8000);}',
+    'function tryPort(){if(!loopPort){tryTunnel();return;}var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.portCode=c;try{if(s){s.destroy();}}catch(e){}tryTunnel();};try{s=net.connect(loopPort,"127.0.0.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
     'function tryNetwork(){var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}tryPort();};try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
     'function startProbe(){try{fs.writeFileSync(target,"wjs");out.wrote=fs.readFileSync(target,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}try{fs.readFileSync(forbidden);out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}try{fs.statSync(hidden);out.statCode="OPEN";}catch(e){out.statCode=(e&&e.code)||"THROW";}trySh();}',
     'function trySh(){var done=false;var settle=function(c){if(done){return;}done=true;out.shCode=c;tryNetwork();};try{var sh=cp.spawn("/bin/sh",["-c","exit 0"],{stdio:"ignore"});sh.on("error",function(e){settle((e&&e.code)||"THROW");});sh.on("close",function(code){settle(code===0?"OPEN":"FAIL");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
@@ -854,7 +857,7 @@ function logSafe(v: any): string {
     return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
 }
 
-type ProbeMsg = { stage?: string; wrote?: boolean; readCode?: string; homeCode?: string; descendantReadCode?: string; netCode?: string; portCode?: string; shCode?: string; statCode?: string };
+type ProbeMsg = { stage?: string; wrote?: boolean; readCode?: string; homeCode?: string; descendantReadCode?: string; netCode?: string; portCode?: string; tunnelCode?: string; shCode?: string; statCode?: string };
 
 /**
  * Run PROBE_SRC once. `pre` is the wrapper argv (`[sandbox-exec, -p, <profile>]`) or [] for the UNCONFINED
@@ -896,8 +899,10 @@ function runProbeChild(pre: string[], target: string, forbidden: string, denyNet
                 stderr = (stderr + String(chunk)).slice(-1024);
             });
         }
+        // The child's tunnel frames are served by the real host side of the egress tunnel.
+        try { require('./egress-tunnel').attachProbeTunnel(proc); } catch { /* the tunnel check then fails */ }
         proc.on('message', (m: any) => {
-            if (!m || typeof m !== 'object') return;
+            if (!m || typeof m !== 'object' || m.kind === 'net') return;
             msg = m as ProbeMsg;
             if (msg.stage === 'BOOT') {
                 try { proc.send({ wordjsProbeBoot: true }); } catch { /* close will fail the probe */ }
@@ -976,7 +981,6 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         }
         const appRoot = pathm.resolve(__dirname, '..', '..');
         const target = pathm.join(dir, 'control.txt');
-        const allowedTarget = pathm.join(dir, 'control-network.txt');
         const controlTarget = pathm.join(dir, 'control-unconfined.txt');
         const forbidden = pathm.join(forbiddenDir, 'canary.txt');
         try { fsm.writeFileSync(forbidden, 'outside-zone-canary', { mode: 0o600 }); } catch {
@@ -988,7 +992,6 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         // The probe is inline JavaScript, so it needs no application-code read grant. It deliberately uses
         // the installed runtime directly, exactly like production and the reference Seatbelt profiles.
         const profile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: [], denyNetwork: true, appRoot, nodePath: process.execPath, logDenials: true });
-        const allowedProfile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: [], denyNetwork: false, appRoot, nodePath: process.execPath, logDenials: true });
 
         // A profile that fails its own text invariants is never launched. This costs microseconds and it
         // is the only check in this file that runs on the SHIPPED profile on the SHIPPED host.
@@ -996,9 +999,7 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
 
         let confined: ProbeMsg | null = null;
         let control: ProbeMsg | null = null;
-        let allowed: ProbeMsg | null = null;
-        // A loopback listener: the control reaches it, the network-granted shape must be refused by the
-        // kernel (loopback is never a destination, and its port is not in the egress list either).
+        // A loopback listener: the control reaches it, the confined child must be refused by the kernel.
         let loop: any = null;
         let loopPort: number;
         try {
@@ -1009,8 +1010,6 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         if (selfAudit.length === 0) {
             confined = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(profile, [])], target, forbidden, true, loopPort);
             control = await runProbeChild([], controlTarget, forbidden, true, loopPort);
-            // The network-granted shape must retain every non-network denial and actually permit egress.
-            allowed = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(allowedProfile, [])], allowedTarget, forbidden, false, loopPort);
         }
         try { if (loop) loop.close(); } catch { /* */ }
         // Always removed, on every exit path — a probe that leaks one temp dir per failed boot is exactly
@@ -1039,13 +1038,14 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         const netRefused = !!(confined && refused(confined.netCode));
         // Only the Node image may be executed, and a path outside every grant cannot even be stat()ed.
         const execAndStatRefused = (m: ProbeMsg | null) => !!(m && refused(m.shCode) && refused(m.statCode));
-        const allowedShape = !!allowed && allowed.wrote === true
-            && refused(allowed.readCode) && refused(allowed.homeCode) && refused(allowed.descendantReadCode)
-            && allowed.netCode === 'CONNECTED' && refused(allowed.portCode) && execAndStatRefused(allowed);
+        // A network-granted plugin has the SAME profile (no network of its own) and reaches the network
+        // through the host egress tunnel: a public host opens through it, the metadata address is refused.
+        const tunnelOk = !!(confined && require('./egress-tunnel').probeTunnelOk(confined.tunnelCode));
+        const loopRefused = !!(confined && (refused(confined.portCode) || !loopPort));
         if (selfAudit.length === 0 && ipcOk && controlRan && controlClean && controlOk
-            && readRefused && homeRefused && descendantConfined && netRefused && execAndStatRefused(confined) && allowedShape) {
+            && readRefused && homeRefused && descendantConfined && netRefused && loopRefused && execAndStatRefused(confined) && tunnelOk) {
             seatbeltState = 'active';
-            log.info('[Sandbox] macOS Seatbelt confinement ACTIVE for both network policies: deny-by-default reads, scoped writes, trusted Node descendants inherit confinement; only outbound network changes with the grant.');
+            log.info('[Sandbox] macOS Seatbelt confinement ACTIVE: deny-by-default reads, scoped writes, no network of its own for any plugin, trusted Node descendants inherit confinement; network-granted plugins go through the host egress tunnel.');
             return 'active';
         }
         seatbeltState = 'degraded';
@@ -1058,7 +1058,8 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
             + `descendantRead=${descendantConfined ? 'refused' : logSafe((confined && confined.descendantReadCode) || 'unknown')} `
             + `rawIpConnect=${netRefused ? 'refused' : logSafe((confined && confined.netCode) || 'unknown')} `
             + `shellExec=${logSafe((confined && confined.shCode) || 'unknown')} outsideStat=${logSafe((confined && confined.statCode) || 'unknown')} `
-            + `networkGrantedShape=${allowedShape ? 'ok' : 'FAILED'} loopbackPort=${logSafe((allowed && allowed.portCode) || 'unknown')}`);
+            + `loopbackPort=${loopRefused ? 'refused' : logSafe((confined && confined.portCode) || 'unknown')} `
+            + `egressTunnel=${tunnelOk ? 'ok' : logSafe((confined && confined.tunnelCode) || 'unknown')}`);
         return 'degraded';
     })();
     return seatbeltProbe;
