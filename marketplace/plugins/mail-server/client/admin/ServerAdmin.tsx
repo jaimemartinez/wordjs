@@ -491,12 +491,12 @@ function SendRateCard({ t, toast, pacing, onSaved }: any) {
     );
 }
 
-function Queue({ t, locale, toast, confirm }: any) {
+function Queue({ t, locale, toast, confirm, onChanged }: any) {
     const [items, setItems] = useState<any[] | null>(null);
     const [pacing, setPacing] = useState<any>(null);
     const [busy, setBusy] = useState<number | null>(null);
     const load = async () => {
-        try { const d = await api('/plugin/mail-server/admin/queue') as any; setItems(d.items || []); setPacing(d.pacing || null); }
+        try { const d = await api('/plugin/mail-server/admin/queue') as any; setItems(d.items || []); setPacing(d.pacing || null); if (onChanged) onChanged(); }
         catch (e: any) { toast('error', errorText(e, t)); }
     };
     useEffect(() => { load(); const id = setInterval(load, 20000); return () => clearInterval(id); }, []);
@@ -1089,7 +1089,8 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
     const [generatingDkim, setGeneratingDkim] = useState(false);
     const toast = toasts.push;
 
-    const loadOverview = async () => { try { setOverview(await api('/plugin/mail-server/admin/overview')); } catch (e: any) { toast('error', errorText(e, t)); } };
+    // `quiet`: a background refresh says nothing when it fails (the figures just stay as they were).
+    const loadOverview = async (quiet = false) => { try { setOverview(await api('/plugin/mail-server/admin/overview')); } catch (e: any) { if (!quiet) toast('error', errorText(e, t)); } };
     const loadSettings = async () => {
         try { const s = await api('/plugin/mail-server/settings') as any; setSettings(s); setSaved(s); }
         catch (e: any) { toast('error', errorText(e, t)); }
@@ -1100,6 +1101,13 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
         finally { setDnsLoading(false); }
     };
     useEffect(() => { loadOverview(); loadSettings(); loadDns(); }, []);
+    // The overview figures and the queue counter on the tab follow the server while the page is open:
+    // every 20 s when the page is visible, and on every tab switch.
+    useEffect(() => {
+        const id = setInterval(() => { if (document.visibilityState === 'visible') loadOverview(true); }, 20000);
+        return () => clearInterval(id);
+    }, []);
+    useEffect(() => { loadOverview(true); }, [tab]);
 
     const set = (patch: any) => setSettings((s: any) => ({ ...s, ...patch }));
     const dirty = useMemo(() => settings && saved && SETTINGS_KEYS_EDITABLE.some(k => String(settings[k] ?? '') !== String(saved[k] ?? '')), [settings, saved]);
@@ -1161,10 +1169,10 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
             </header>
             <main className="min-h-0 flex-1 overflow-y-auto">
                 <div className="mx-auto max-w-7xl px-3 py-4 sm:px-6 sm:py-6">
-                    {tab === 'overview' && <Overview t={t} locale={locale} data={overview} settings={settings} go={setTab} reload={loadOverview} />}
+                    {tab === 'overview' && <Overview t={t} locale={locale} data={overview} settings={settings} go={setTab} reload={() => loadOverview()} />}
                     {tab === 'mailboxes' && <Mailboxes t={t} locale={locale} toast={toast} />}
                     {tab === 'aliases' && <Aliases t={t} toast={toast} confirm={confirm} />}
-                    {tab === 'queue' && <Queue t={t} locale={locale} toast={toast} confirm={confirm} />}
+                    {tab === 'queue' && <Queue t={t} locale={locale} toast={toast} confirm={confirm} onChanged={() => loadOverview(true)} />}
                     {tab === 'systemSent' && <SystemSent t={t} locale={locale} toast={toast} confirm={confirm} goQueue={() => setTab('queue')} />}
                     {needsSettings && !settings && <div className="py-20 text-center"><Spinner className="text-2xl" /></div>}
                     {tab === 'policies' && settings && <Policies t={t} settings={settings} set={set} />}

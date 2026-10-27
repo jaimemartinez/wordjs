@@ -6,6 +6,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+- **mail-server 3.3.6: the server overview counts mail on PostgreSQL and MySQL, and keeps itself current.**
+  - **«Received» and «Sent · last 14 days» and the traffic chart read 0 on PostgreSQL and MySQL.** Those databases
+    return dates as date values, not text, so every message was left out. They now count.
+  - **The overview figures and the queue counter on the tab** update every 20 seconds while the page is open, on
+    every tab change, and after «Retry now» or «Stop». Before, they only changed after a reload.
+  - **The queue's sending order on PostgreSQL and MySQL** is by due time again, not by message number.
+
 ## [2.11.14] - 2026-10-26
 
 ### Added

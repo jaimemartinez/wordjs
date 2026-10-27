@@ -372,3 +372,25 @@ test('per-user prefs round-trip (signature + vacation)', async () => {
     assert.equal(again.signature, 'Nueva');
     assert.deepEqual(await Email.getPrefs(999), {}, 'unknown user has empty prefs');
 });
+
+// The server overview's traffic series on PostgreSQL / MySQL: their drivers hand datetimes back as Date
+// objects, not the 'YYYY-MM-DD HH:MM:SS' text SQLite returns. Parsed as text they were NaN and every
+// message fell out of the series, so «Received / Sent · last 14 days» read 0 on those engines.
+test('the overview counts recent mail whether the driver returns datetime text or Date objects', async () => {
+    const createAdminStore = require(path.resolve(__dirname, '../../../marketplace/plugins/mail-server/lib/mail-admin-store.js'));
+    const now = Date.now();
+    const rows = [
+        { date_received: new Date(now - 3600000), is_sent: 1, is_draft: 0, is_spam: 0, delivery_status: 'sent' },
+        { date_received: new Date(now - 7200000), is_sent: 0, is_draft: 0, is_spam: 0, delivery_status: null },
+        { date_received: new Date(now - 86400000 * 2).toISOString().slice(0, 19).replace('T', ' '), is_sent: 0, is_draft: 0, is_spam: 1, delivery_status: null },
+    ];
+    const db: any = {
+        async get(sql: string) { return /COUNT\(\*\) AS files/.test(sql) ? { bytes: 0, files: 0 } : { messages: 3 }; },
+        async all() { return rows; },
+    };
+    const o = await createAdminStore(db).overview(14);
+    const sum = (k: string) => o.series.reduce((a: number, d: any) => a + d[k], 0);
+    assert.deepStrictEqual({ sent: sum('sent'), received: sum('received'), spam: sum('spam') }, { sent: 1, received: 1, spam: 1 });
+    assert.ok(Number.isNaN(createAdminStore.sqlTimeOf('')), 'no value is not a time');
+    assert.strictEqual(createAdminStore.sqlTimeOf('2026-10-26 12:00:00'), Date.parse('2026-10-26T12:00:00Z'), 'SQLite text is UTC');
+});
