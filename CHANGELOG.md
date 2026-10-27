@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.15] - 2026-10-27
+
 ### Added
 - **Audit log integrity.** Every audit entry is sealed into a hash chain. Admin → Audit and Site Health check it and
   name the first entry that was changed or removed outside WordJS (`GET /api/v1/audit/verify`). Retention keeps the
