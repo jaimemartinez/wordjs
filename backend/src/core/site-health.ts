@@ -295,9 +295,13 @@ function pluginSandboxChecks(): HealthCheck[] {
         const net = win.readNetworkIsolationPolicy();
         out.push(net.configured
             ? check('security.pluginNetwork', 'security', 'ok', 'ok', 'Plugins and private networks', 'Plugins cannot reach private networks (local, VPN, cloud metadata) unless you approved a destination for them.')
-            : withAction(check('security.pluginNetwork', 'security', 'warn', 'missing', 'Plugins and private networks',
-                'Windows treats some private networks (a VPN, a routed LAN, cloud metadata at 169.254.169.254) as the Internet, so a plugin with network access could reach them past the system sandbox. Apply the private network ranges once; Windows asks for an administrator on this server.'),
-            { endpoint: '/health/sandbox/windows-network', label: 'Apply (administrator)', labelKey: 'siteHealth.action.applyWindowsNetwork' }));
+            : net.firewallOff
+                ? check('security.pluginNetwork', 'security', 'warn', 'firewallOff', 'Plugins and private networks',
+                    'Windows Defender Firewall is off for a network profile, so the rules that keep plugins out of private networks do not apply. Turn it on in Windows Security.')
+                : withAction(check('security.pluginNetwork', 'security', 'warn', 'missing', 'Plugins and private networks',
+                    `Windows treats some private networks (a VPN, a routed LAN, cloud metadata at 169.254.169.254) as the Internet. ${net.missing.length} plugin(s) with network access do not have the firewall rule that keeps them out yet. Apply the rules; Windows asks for an administrator on this server.`,
+                    { count: net.missing.length }),
+                { endpoint: '/health/sandbox/windows-network', label: 'Apply (administrator)', labelKey: 'siteHealth.action.applyWindowsNetwork' }));
         const exposure = win.getSecretExposure();
         if (exposure && exposure.checked && exposure.exposed.length) {
             out.push(check('security.pluginSecrets', 'security', 'fail', 'exposed', 'Plugin access to secrets',

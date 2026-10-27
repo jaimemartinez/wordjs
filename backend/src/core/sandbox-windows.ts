@@ -1445,73 +1445,209 @@ async function protectSecretsFromAllAppContainers(appRoot: string, protect: bool
     return (secretExposure = { checked: true, protectedPaths, exposed });
 }
 
-// ── Private destinations: the Windows network-isolation ranges ─────────────────────────────────────
+// ── Private destinations: a firewall rule per plugin package SID ──────────────────────────────────
 //
 // A container with only `internetClient` is kept from the PRIVATE network, but Windows decides what is
 // private from the local subnets of interfaces on a Private/Domain network. A routed LAN, a VPN, the
 // 100.64/10 shared range or 169.254 (cloud metadata) on a Public-profile host count as "Internet", and
-// the plugin reaches them past every kernel check, with only the egress guard in the way. The machine
-// policy "Private network ranges for apps" (HKLM\SOFTWARE\Policies\Microsoft\Windows\NetworkIsolation,
-// DomainSubnets) makes these ranges private for every AppContainer. It is machine-wide and needs an
-// administrator ONCE; Site Health shows whether it is set and applies it from the panel (a UAC prompt on
-// the server). A plugin an administrator approved a private destination for gets
-// privateNetworkClientServer, and the egress guard narrows that to the approved host:port.
+// the plugin reaches them past every kernel check, with only the egress guard in the way. MEASURED on a
+// Windows Server host: the machine policy "Private network ranges for apps" (and its "authoritative"
+// companion) does not change that verdict, while an outbound BLOCK rule scoped to the plugin's package
+// SID (New-NetFirewallRule -Package) refuses the ranges at once. So each network-granted plugin gets one
+// such rule: every private range except the hosts an administrator approved for that plugin (those reach
+// it through privateNetworkClientServer, and the egress guard narrows them to the approved host:port).
+// Creating a rule needs an administrator: a launch that runs elevated creates its own; otherwise Site
+// Health lists what is missing and applies it with one prompt. The rules WordJS wants are recorded in
+// data/sandbox/appcontainer-network-rules.json so the panel and the command line see the same set.
 const PRIVATE_NETWORK_RANGES = ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10', 'fc00::/7', 'fe80::/10'];
-const NETWORK_ISOLATION_KEY = 'HKLM\\SOFTWARE\\Policies\\Microsoft\\Windows\\NetworkIsolation';
-type NetworkIsolationState = { platform: boolean; configured: boolean; missing: string[] };
-let networkIsolationState: NetworkIsolationState = { platform: process.platform === 'win32', configured: false, missing: PRIVATE_NETWORK_RANGES.slice() };
-/** Read the policy (no elevation needed to READ it). */
-function readNetworkIsolationPolicy(): NetworkIsolationState {
-    if (process.platform !== 'win32') return (networkIsolationState = { platform: false, configured: false, missing: [] });
-    let value: string;
-    try {
-        const q = spawnSync('reg.exe', ['query', NETWORK_ISOLATION_KEY, '/v', 'DomainSubnets'], { windowsHide: true, encoding: 'utf8', timeout: 10000 });
-        const m = /DomainSubnets\s+REG_SZ\s+(.*)$/m.exec(String(q.stdout || ''));
-        value = m ? m[1].trim() : '';
-    } catch { value = ''; }
-    const have = new Set(value.split(/[,;\s]+/).map((v) => v.trim().toLowerCase()).filter(Boolean));
-    const missing = PRIVATE_NETWORK_RANGES.filter((r) => !have.has(r.toLowerCase()));
-    return (networkIsolationState = { platform: true, configured: missing.length === 0, missing });
+const FIREWALL_RULE_GROUP = 'WordJS plugin sandbox';
+const FIREWALL_RULE_PREFIX = 'wjs-private-';
+type PrivateRangeRule = { sid: string; remote: string[]; fp: string };
+type NetworkIsolationState = { platform: boolean; configured: boolean; missing: string[]; firewallOff: boolean };
+
+function ipv4ToInt(ip: string): number | null {
+    const m = /^(\d{1,3})\.(\d{1,3})\.(\d{1,3})\.(\d{1,3})$/.exec(ip);
+    if (!m) return null;
+    const parts = m.slice(1).map(Number);
+    if (parts.some((n) => n > 255)) return null;
+    return ((parts[0] << 24) >>> 0) + (parts[1] << 16) + (parts[2] << 8) + parts[3];
 }
-/** The script that sets the policy (merging any ranges already there). Run elevated. */
-function networkIsolationScript(): string {
-    const ranges = PRIVATE_NETWORK_RANGES.join(',');
-    const script = [
-        "$ErrorActionPreference='Stop'",
-        "$key = 'HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\NetworkIsolation'",
-        "if (-not (Test-Path $key)) { $null = New-Item -Path $key -Force }",
-        "$old = (Get-ItemProperty -Path $key -Name DomainSubnets -ErrorAction SilentlyContinue).DomainSubnets",
-        `$want = '${ranges}' -split ','`,
-        "$all = @(); if ($old) { $all += ($old -split '[,; ]+' | Where-Object { $_ }) }",
-        "foreach ($r in $want) { if ($all -notcontains $r) { $all += $r } }",
-        "Set-ItemProperty -Path $key -Name DomainSubnets -Value ($all -join ',') -Type String",
-        "$null = & gpupdate.exe /target:computer /force",
-        "Write-Output 'NETISO-OK'",
-    ].join("\n");
-    assertAscii(script, 'network isolation script');
-    return script;
+function intToIpv4(n: number): string {
+    return [n >>> 24, (n >>> 16) & 255, (n >>> 8) & 255, n & 255].join('.');
 }
 /**
- * Apply the policy from the panel: an elevated PowerShell (UAC on the server's desktop). Without an
- * interactive administrator there is no prompt to answer, and the result says so with the command to run.
+ * The private ranges a plugin is refused, as firewall remote addresses: every range in
+ * PRIVATE_NETWORK_RANGES with the approved IPv4 hosts cut out (as `a-b` spans). An approved IPv6 host
+ * leaves its whole range open; the egress guard still narrows it to the approved host:port.
  */
-async function applyNetworkIsolationPolicy(): Promise<{ ok: boolean; reason?: string; command: string }> {
-    const encoded = Buffer.from(networkIsolationScript(), 'utf16le').toString('base64');
+function blockedPrivateRanges(approvedHosts: string[]): string[] {
+    const v4 = approvedHosts.map(ipv4ToInt).filter((n): n is number => n !== null).sort((a, b) => a - b);
+    const v6 = approvedHosts.filter((h) => h.includes(':')).map((h) => h.toLowerCase());
+    const out: string[] = [];
+    for (const range of PRIVATE_NETWORK_RANGES) {
+        const [base, bitsRaw] = range.split('/');
+        const bits = Number(bitsRaw);
+        if (base.includes(':')) {
+            const prefix = range === 'fc00::/7' ? /^f[cd]/ : /^fe[89ab]/;
+            if (!v6.some((h) => prefix.test(h))) out.push(range);
+            continue;
+        }
+        const start = ipv4ToInt(base) as number;
+        const end = start + 2 ** (32 - bits) - 1;
+        const inside = v4.filter((n) => n >= start && n <= end);
+        if (!inside.length) { out.push(range); continue; }
+        let from = start;
+        for (const n of inside) {
+            if (n > from) out.push(`${intToIpv4(from)}-${intToIpv4(n - 1)}`);
+            from = n + 1;
+        }
+        if (from <= end) out.push(`${intToIpv4(from)}-${intToIpv4(end)}`);
+    }
+    return out;
+}
+function privateRangeRuleFor(sid: string, approvedHosts: string[]): PrivateRangeRule {
+    const remote = blockedPrivateRanges(approvedHosts);
+    const fp = crypto.createHash('sha256').update(`${sid}\n${remote.join(',')}`, 'utf8').digest('hex').slice(0, 16);
+    return { sid, remote, fp };
+}
+function networkRulesFile(appRoot: string): string {
+    return path.join(path.resolve(appRoot), 'data', 'sandbox', 'appcontainer-network-rules.json');
+}
+function readWantedRules(appRoot: string): Record<string, PrivateRangeRule> {
+    try { const j = JSON.parse(fs.readFileSync(networkRulesFile(appRoot), 'utf8')); return j && typeof j === 'object' ? j : {}; } catch { return {}; }
+}
+function writeWantedRules(appRoot: string, rules: Record<string, PrivateRangeRule>): void {
+    try {
+        fs.mkdirSync(path.dirname(networkRulesFile(appRoot)), { recursive: true, mode: 0o700 });
+        fs.writeFileSync(networkRulesFile(appRoot), JSON.stringify(rules, null, 2), { mode: 0o600 });
+    } catch (e: any) { log.warn({ err: e }, `[Sandbox] could not record the private-range rules: ${logSafe(e && e.message)}`); }
+}
+/**
+ * The script that puts the given rules in place (each rule replaced whole) and, with `prune`, removes the
+ * group's rules WordJS no longer wants. Its input is base64 JSON inside the script, so the text stays
+ * ASCII and the elevated copy needs no inherited environment. Run elevated.
+ */
+function firewallRulesScript(rules: PrivateRangeRule[], prune: boolean): string {
+    const data = Buffer.from(JSON.stringify(rules.map((r) => ({ name: FIREWALL_RULE_PREFIX + r.sid, sid: r.sid, remote: r.remote, fp: r.fp }))), 'utf8').toString('base64');
+    const script = [
+        "$ErrorActionPreference='Continue'",
+        `$want = @([Text.Encoding]::UTF8.GetString([Convert]::FromBase64String('${data}')) | ConvertFrom-Json)`,
+        `$group = '${FIREWALL_RULE_GROUP}'`,
+        "foreach ($r in $want) {",
+        "  if (-not $r.name) { continue }",
+        "  Remove-NetFirewallRule -Name $r.name -ErrorAction SilentlyContinue",
+        "  try {",
+        "    $null = New-NetFirewallRule -Name $r.name -DisplayName 'WordJS plugin: private networks' -Group $group -Description $r.fp -Direction Outbound -Action Block -Profile Any -Package $r.sid -RemoteAddress @($r.remote) -ErrorAction Stop",
+        "    Write-Output ('FWRULE-OK ' + $r.sid)",
+        "  } catch { Write-Output ('FWRULE-FAIL ' + $r.sid + ' ' + $_.Exception.Message) }",
+        "}",
+        ...(prune ? [
+            "$names = @($want | ForEach-Object { $_.name })",
+            "Get-NetFirewallRule -Group $group -ErrorAction SilentlyContinue | Where-Object { $names -notcontains $_.Name } | Remove-NetFirewallRule -ErrorAction SilentlyContinue",
+        ] : []),
+        "Write-Output 'FW-DONE'",
+    ].join("\n");
+    assertAscii(script, 'firewall rules script');
+    return script;
+}
+function runFirewallScriptSync(script: string): string {
+    const r = spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', Buffer.from(script, 'utf16le').toString('base64')],
+        { windowsHide: true, encoding: 'utf8', timeout: 60000 });
+    return String((r && r.stdout) || '');
+}
+/** What the firewall holds now: our rules (name -> fingerprint) and whether every profile is on. */
+function readFirewallState(): { rules: Map<string, string>; firewallOff: boolean } | null {
+    const out = runFirewallScriptSync([
+        "$ErrorActionPreference='SilentlyContinue'",
+        `Get-NetFirewallRule -Group '${FIREWALL_RULE_GROUP}' | ForEach-Object { Write-Output ('RULE ' + $_.Name + ' ' + $_.Description + ' ' + $_.Enabled) }`,
+        "Get-NetFirewallProfile | ForEach-Object { Write-Output ('PROFILE ' + $_.Name + ' ' + $_.Enabled) }",
+        "Write-Output 'FWSTATE-DONE'",
+    ].join("\n"));
+    if (!/FWSTATE-DONE/.test(out)) return null;
+    const rules = new Map<string, string>();
+    let firewallOff = false;
+    for (const line of out.split(/\r?\n/)) {
+        const r = /^RULE (\S+) (\S*) (\S+)$/.exec(line.trim());
+        if (r && r[3] === 'True') rules.set(r[1], r[2]);
+        const p = /^PROFILE (\S+) (\S+)$/.exec(line.trim());
+        if (p && p[2] !== 'True') firewallOff = true;
+    }
+    return { rules, firewallOff };
+}
+let networkIsolationState: NetworkIsolationState = { platform: process.platform === 'win32', configured: false, missing: [], firewallOff: false };
+/** Every recorded plugin rule present with its current ranges, and the firewall on (no elevation needed). */
+function readNetworkIsolationPolicy(appRoot: string = path.resolve(__dirname, '..', '..')): NetworkIsolationState {
+    if (process.platform !== 'win32') return (networkIsolationState = { platform: false, configured: false, missing: [], firewallOff: false });
+    const wanted = Object.values(readWantedRules(appRoot));
+    const fw = readFirewallState();
+    if (!fw) return (networkIsolationState = { platform: true, configured: false, missing: wanted.map((r) => r.sid), firewallOff: false });
+    const missing = wanted.filter((r) => fw.rules.get(FIREWALL_RULE_PREFIX + r.sid) !== r.fp).map((r) => r.sid);
+    return (networkIsolationState = { platform: true, configured: missing.length === 0 && !fw.firewallOff, missing, firewallOff: fw.firewallOff });
+}
+/** The script for every recorded rule, removing the group's stale ones. Run elevated. */
+function networkIsolationScript(appRoot: string = path.resolve(__dirname, '..', '..')): string {
+    return firewallRulesScript(Object.values(readWantedRules(appRoot)), true);
+}
+let elevatedCache: boolean | null = null;
+let fwStateCache: { rules: Map<string, string>; firewallOff: boolean } | null = null;
+function isElevated(): boolean {
+    if (elevatedCache !== null) return elevatedCache;
+    const out = runFirewallScriptSync("([Security.Principal.WindowsPrincipal][Security.Principal.WindowsIdentity]::GetCurrent()).IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)");
+    return (elevatedCache = /True/.test(out));
+}
+/**
+ * At a network-granted plugin's launch: record the rule its package SID needs and, when this process is an
+ * administrator and the firewall lacks it, put it in place. Never throws: without the rule the plugin
+ * still runs behind the egress guard, and Site Health says the rule is missing.
+ */
+function ensurePrivateRangeRule(appRoot: string, sid: string, approvedHosts: string[]): boolean {
+    if (process.platform !== 'win32' || !sid) return false;
+    const rule = privateRangeRuleFor(sid, approvedHosts);
+    const wanted = readWantedRules(appRoot);
+    if (!wanted[sid] || wanted[sid].fp !== rule.fp) { wanted[sid] = rule; writeWantedRules(appRoot, wanted); }
+    // One firewall read per process (a PowerShell start), refreshed after every change made here.
+    if (!fwStateCache) fwStateCache = readFirewallState();
+    if (fwStateCache && fwStateCache.rules.get(FIREWALL_RULE_PREFIX + sid) === rule.fp) return true;
+    if (!isElevated()) return false;
+    const ok = /FWRULE-OK /.test(runFirewallScriptSync(firewallRulesScript([rule], false)));
+    fwStateCache = null;
+    if (!ok) log.warn('[Sandbox] could not add the private-network firewall rule for a plugin; Site Health shows it as missing.');
+    return ok;
+}
+/** Forget a retired package SID's rule (removed from the firewall at the next apply). */
+function forgetPrivateRangeRule(appRoot: string, sid: string): void {
+    const wanted = readWantedRules(appRoot);
+    if (wanted[sid]) { delete wanted[sid]; writeWantedRules(appRoot, wanted); }
+}
+/**
+ * Apply every recorded rule from the panel: directly when this process is an administrator, otherwise an
+ * elevated PowerShell (UAC on the server's desktop). Without an interactive administrator there is no
+ * prompt to answer, and the result says so with the command to run.
+ */
+async function applyNetworkIsolationPolicy(appRoot: string = path.resolve(__dirname, '..', '..')): Promise<{ ok: boolean; reason?: string; command: string }> {
+    const encoded = Buffer.from(networkIsolationScript(appRoot), 'utf16le').toString('base64');
     const command = `powershell.exe -NoProfile -ExecutionPolicy Bypass -EncodedCommand ${encoded}`;
     if (process.platform !== 'win32') return { ok: false, reason: 'not a Windows server', command };
-    if (readNetworkIsolationPolicy().configured) return { ok: true, command };
-    const launcher = [
-        "$ErrorActionPreference='Stop'",
-        "try {",
-        "$p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$env:WJS_NETISO_B64)",
-        "Write-Output ('ELEVATED-EXIT ' + $p.ExitCode)",
-        "} catch { Write-Output ('ELEVATED-FAIL ' + $_.Exception.Message) }",
-    ].join("\n");
-    const r = await runPowerShellWithEnv(launcher, { WJS_NETISO_B64: encoded }, 180000);
-    const state = readNetworkIsolationPolicy();
+    fwStateCache = null;
+    if (isElevated()) {
+        runFirewallScriptSync(networkIsolationScript(appRoot));
+    } else {
+        const launcher = [
+            "$ErrorActionPreference='Stop'",
+            "try {",
+            "$p = Start-Process -FilePath powershell.exe -Verb RunAs -Wait -PassThru -WindowStyle Hidden -ArgumentList @('-NoProfile','-ExecutionPolicy','Bypass','-EncodedCommand',$env:WJS_NETISO_B64)",
+            "Write-Output ('ELEVATED-EXIT ' + $p.ExitCode)",
+            "} catch { Write-Output ('ELEVATED-FAIL ' + $_.Exception.Message) }",
+        ].join("\n");
+        const r = await runPowerShellWithEnv(launcher, { WJS_NETISO_B64: encoded }, 180000);
+        const fail = /ELEVATED-FAIL (.*)/.exec(r.out);
+        const state = readNetworkIsolationPolicy(appRoot);
+        if (state.configured) return { ok: true, command };
+        return { ok: false, reason: fail ? logSafe(fail[1]).slice(0, 200) : (state.firewallOff ? 'Windows Defender Firewall is off for at least one network profile' : 'the administrator prompt was not accepted'), command };
+    }
+    const state = readNetworkIsolationPolicy(appRoot);
     if (state.configured) return { ok: true, command };
-    const fail = /ELEVATED-FAIL (.*)/.exec(r.out);
-    return { ok: false, reason: fail ? logSafe(fail[1]).slice(0, 200) : 'the administrator prompt was not accepted', command };
+    return { ok: false, reason: state.firewallOff ? 'Windows Defender Firewall is off for at least one network profile' : 'the firewall did not accept every rule', command };
 }
 
 /** Wait for a contained probe child's verdict over IPC (null on exit/error/timeout), then kill its relay. */
@@ -1575,7 +1711,6 @@ function probeAppContainer(): Promise<'active' | 'degraded' | 'unsupported' | 'd
             try { if (outside) fs.rmSync(outside, { recursive: true, force: true }); } catch { /* */ }
             try { if (secretCanary) fs.rmSync(secretCanary, { force: true }); } catch { /* */ }
         };
-        readNetworkIsolationPolicy();
         // The secret paths are re-ACLed beside the profiles; the contained shapes run only after both.
         const [sid, siblingSid] = await Promise.all([
             ensureAppContainerProfile(probeProfileA),
@@ -1808,6 +1943,8 @@ async function retireAppContainerPlugin(appRoot: string, slug: string, siteId: n
 
 /** Revoke one SID from EVERY candidate zone that exists - not only where a marker proves a grant. */
 async function retireSid(appRoot: string, slug: string, siteId: number, sid: string): Promise<boolean> {
+    // Its private-network firewall rule is no longer wanted (removed from the firewall at the next apply).
+    forgetPrivateRangeRule(appRoot, sid);
     const candidates = [...workerZoneCandidates(appRoot, slug, siteId), { dir: path.dirname(getAppContainerRuntimePath()), mode: 'rx' as const }];
     const unique = (dirs: string[]) => Array.from(new Map(dirs.map((d) => [path.resolve(d).toLowerCase(), path.resolve(d)] as const)).values());
     // A zone an earlier release granted recursively carries explicit ACEs on its sub-folders: only a deep
@@ -1909,6 +2046,11 @@ module.exports = {
     applyNetworkIsolationPolicy,
     networkIsolationScript,
     PRIVATE_NETWORK_RANGES,
+    ensurePrivateRangeRule,
+    forgetPrivateRangeRule,
+    blockedPrivateRanges,
+    firewallRulesScript,
+    privateRangeRuleFor,
     getSecretExposure: () => secretExposure,
     getNetworkIsolationState: () => networkIsolationState,
     ensureAppContainerProfile,

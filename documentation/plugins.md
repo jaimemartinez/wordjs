@@ -745,9 +745,8 @@ exfiltration warning). This is the only network path — there is no trusted tie
 over TCP — on Linux with Landlock (kernel 6.7 or later) and on macOS with Seatbelt, which also keeps loopback out
 of reach. Name any other port your plugin needs on the same permission, and the administrator grants it with it:
 `{ "scope": "network", "ports": [25, 587], "reason": "…" }` (at most 16 ports, 1–65535). A private destination an
-administrator approves (`host:port`) adds its own port. On Windows, private networks are reachable only by a plugin
-with an approved private destination once the server has the private network ranges for apps (Site Health applies
-them).
+administrator approves (`host:port`) adds its own port. On Windows, a Windows Firewall rule on each plugin's sandbox refuses the
+private networks except the hosts approved for it (Site Health adds the rules; Windows asks for an administrator).
 
 Even **with** `network` granted, egress is confined to **public destinations only**. secure-require hands
 you the *egress-guarded* socket module (not the raw one) and the worker wraps the global `fetch` /

@@ -398,27 +398,28 @@ router.get('/site', authenticate, isAdmin, async (req: Request, res: Response) =
 
 /**
  * Site Health one-click fixes for the plugin sandbox (core/site-health pluginSandboxChecks).
- *   · windows-network: set the Windows private network ranges for apps. Windows asks for an administrator
- *     on this server (UAC); without one there is nothing to answer, and the reply carries the command.
+ *   · windows-network: put in place the firewall rule each network-granted plugin needs to be kept out of
+ *     private networks. Windows asks for an administrator on this server (UAC); without one there is
+ *     nothing to answer, and the reply carries the command.
  *   · plugin-files/accept: record a refused plugin's current files as its own.
  */
 /**
  * @swagger
  * /health/sandbox/windows-network:
  *   post:
- *     summary: Site Health - apply the Windows private network ranges for apps (plugin sandbox)
+ *     summary: Site Health - apply the Windows private-network firewall rules for plugins (plugin sandbox)
  *     description: >
- *       Windows only. Sets the machine policy that makes the private ranges (RFC 1918, link-local,
- *       shared address space, unique-local IPv6) private for every AppContainer, so a network-granted
- *       plugin cannot reach them unless an administrator approved a private destination for it. Windows
- *       asks for an administrator on the server; when nobody can answer, the reply names the command to
- *       run once in an administrator PowerShell. Administrators.
+ *       Windows only. Adds, for each network-granted plugin's AppContainer, an outbound Windows Firewall
+ *       rule that refuses the private ranges (RFC 1918, link-local, shared address space, unique-local and
+ *       link-local IPv6) except the hosts an administrator approved for that plugin, and removes the rules
+ *       of retired plugins. Windows asks for an administrator on the server; when nobody can answer, the
+ *       reply names the command to run once in an administrator PowerShell. Administrators.
  *     tags: [System]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: "{ ok: true } - the ranges are set"
+ *         description: "{ ok: true } - every plugin's rule is in place"
  *       403:
  *         description: Not an administrator
  *       409:
@@ -427,7 +428,7 @@ router.get('/site', authenticate, isAdmin, async (req: Request, res: Response) =
 router.post('/sandbox/windows-network', authenticate, isAdmin, async (req: Request, res: Response) => {
     const r = await require('../core/sandbox-windows').applyNetworkIsolationPolicy();
     if (r.ok) return res.json({ ok: true });
-    res.status(409).json({ ok: false, error: `The private network ranges were not applied: ${r.reason}. Run this once in an administrator PowerShell on the server: ${r.command}` });
+    res.status(409).json({ ok: false, error: `The private-network firewall rules for plugins were not applied: ${r.reason}. Run this once in an administrator PowerShell on the server: ${r.command}` });
 });
 
 /**

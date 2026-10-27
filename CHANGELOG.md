@@ -16,9 +16,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - **Network-granted plugins.** The kernel now limits which TCP ports they connect to: Landlock on Linux (kernel 6.7
     or later; Site Health says when the kernel cannot) and Seatbelt on macOS, which also keeps loopback out of reach.
     DNS and the web are always allowed; a plugin names more on its `network` permission (`"ports": [25, 587]`), and an
-    approved private destination adds its own. On Windows, **Site Health** applies the private network ranges for apps
-    once (Windows asks for an administrator), and only a plugin with an approved private destination gets
-    private-network access.
+    approved private destination adds its own. On Windows, each plugin with network access gets a Windows Firewall
+    rule on its sandbox that refuses the private networks except the hosts approved for it; **Site Health** adds
+    the rules (Windows asks for an administrator) and says when the firewall is off.
   - **Linux.** The seccomp filter refuses more calls (on other processes' limits, priority and scheduling; mount
     and quota interfaces; file mode, owner, timestamp and extended-attribute changes by path; signal-owner commands),
     and below Landlock ABI 3 it also refuses truncating files the plugin may only read. The launcher closes every

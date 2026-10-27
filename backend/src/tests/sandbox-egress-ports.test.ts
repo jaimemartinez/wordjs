@@ -113,24 +113,43 @@ test('macOS probe: the granted shape must be refused a loopback port', () => {
     assert.match(String(mac.__probeSrc), /net\.connect\(loopPort,"127\.0\.0\.1"\)/);
 });
 
-test('Windows: the private ranges policy, and privateNetworkClientServer only with an approved destination', () => {
+test('Windows: a firewall rule per plugin package refuses the private ranges, except the approved hosts', () => {
     assert.deepStrictEqual(win.PRIVATE_NETWORK_RANGES, ['10.0.0.0/8', '172.16.0.0/12', '192.168.0.0/16', '169.254.0.0/16', '100.64.0.0/10', 'fc00::/7', 'fe80::/10']);
-    const script = win.networkIsolationScript();
-    assert.match(script, /HKLM:\\SOFTWARE\\Policies\\Microsoft\\Windows\\NetworkIsolation/);
-    assert.match(script, /Set-ItemProperty -Path \$key -Name DomainSubnets/);
-    assert.match(script, /if \(\$all -notcontains \$r\)/, 'ranges an administrator set already are kept');
-    for (const r of win.PRIVATE_NETWORK_RANGES) assert.ok(script.includes(r));
+    assert.deepStrictEqual(win.blockedPrivateRanges([]), win.PRIVATE_NETWORK_RANGES, 'nothing approved: every range is refused');
+    // An approved host is cut out of its range, and only that host.
+    const cut = win.blockedPrivateRanges(['192.168.1.20', '10.0.0.0']);
+    assert.ok(cut.includes('10.0.0.1-10.255.255.255') && !cut.includes('10.0.0.0/8'));
+    assert.ok(cut.includes('192.168.0.0-192.168.1.19') && cut.includes('192.168.1.21-192.168.255.255'));
+    assert.ok(cut.includes('172.16.0.0/12') && cut.includes('169.254.0.0/16'), 'other ranges stay whole');
+    assert.ok(!win.blockedPrivateRanges(['fd00::5']).includes('fc00::/7') && win.blockedPrivateRanges(['fd00::5']).includes('fe80::/10'));
+    const rule = win.privateRangeRuleFor('S-1-15-2-1-2-3', ['192.168.1.20']);
+    assert.match(rule.fp, /^[0-9a-f]{16}$/);
+    assert.notStrictEqual(rule.fp, win.privateRangeRuleFor('S-1-15-2-1-2-3', []).fp, 'a changed approval changes the rule');
+    const script = win.firewallRulesScript([rule], true);
+    assert.match(script, /New-NetFirewallRule -Name \$r\.name .* -Direction Outbound -Action Block -Profile Any -Package \$r\.sid -RemoteAddress @\(\$r\.remote\)/);
+    assert.match(script, /Remove-NetFirewallRule -Name \$r\.name/, 'each rule is replaced whole');
+    assert.match(script, /Where-Object \{ \$names -notcontains \$_\.Name \} \| Remove-NetFirewallRule/, 'retired plugins lose their rule');
+    assert.doesNotMatch(win.firewallRulesScript([rule], false), /notcontains/, 'a launch never prunes other rules');
+    assert.doesNotMatch(script, /S-1-15-2-1-2-3/, 'the data travels base64-encoded, never spliced into the script');
     assert.ok([...script].every((c) => c === '\t' || c === '\n' || c === '\r' || (c >= ' ' && c <= '~')), 'ASCII, like every generated PowerShell');
     const relay = win.__buildRelayScript();
     assert.ok(relay.includes('S-1-15-3-3') && relay.includes('WJS_AC_PRIVATE_NETWORK'));
     const iso = fs.readFileSync(path.join(__dirname, '..', 'core', 'plugin-isolate.ts'), 'utf8');
     assert.match(iso, /allowPrivateNetwork: netGranted && egressTcpPortsHasPrivate\(slug\)/);
+    assert.match(iso, /approvedPrivateHosts: netGranted \? approvedPrivateHostsFor\(slug\) : \[\]/);
+    assert.match(iso, /if \(io\.allowNetwork\) win\.ensurePrivateRangeRule\(appRoot, sid, io\.approvedPrivateHosts \|\| \[\]\);/);
+    const perms = require('../core/plugin-permissions');
+    const realPrivate = perms.getPrivateDestinations;
+    try {
+        perms.getPrivateDestinations = () => ['192.168.1.20:2525', '[FD00::1]:8443', '127.0.0.1:2525'];
+        assert.deepStrictEqual(isolate.__approvedPrivateHostsFor('sample-relay'), ['192.168.1.20', 'fd00::1', '127.0.0.1']);
+    } finally { perms.getPrivateDestinations = realPrivate; }
     if (process.platform !== 'win32') {
-        assert.deepStrictEqual(win.readNetworkIsolationPolicy(), { platform: false, configured: false, missing: [] });
+        assert.deepStrictEqual(win.readNetworkIsolationPolicy(), { platform: false, configured: false, missing: [], firewallOff: false });
     } else {
         const st = win.readNetworkIsolationPolicy();
         assert.strictEqual(st.platform, true);
-        assert.strictEqual(st.configured, st.missing.length === 0);
+        assert.strictEqual(st.configured, st.missing.length === 0 && !st.firewallOff);
     }
 });
 
@@ -140,13 +159,20 @@ test('Site Health shows the Windows setting with a panel action, and the panel c
     const realExposure = win.getSecretExposure;
     try {
         Object.defineProperty(process, 'platform', { value: 'win32' });
-        win.readNetworkIsolationPolicy = () => ({ platform: true, configured: false, missing: ['10.0.0.0/8'] });
+        win.readNetworkIsolationPolicy = () => ({ platform: true, configured: false, missing: ['S-1-15-2-9'], firewallOff: false });
         win.getSecretExposure = () => ({ checked: true, protectedPaths: [], exposed: [] });
         const checks = require('../core/site-health').pluginSandboxChecks();
         const c = checks.find((x: any) => x.id === 'security.pluginNetwork');
         assert.ok(c, 'the check is there');
         assert.strictEqual(c.status, 'warn');
         assert.deepStrictEqual(c.action && c.action.endpoint, '/health/sandbox/windows-network');
+        // With the firewall off the rules cannot apply: said plainly, and no button that would not help.
+        win.readNetworkIsolationPolicy = () => ({ platform: true, configured: false, missing: [], firewallOff: true });
+        const off = require('../core/site-health').pluginSandboxChecks().find((x: any) => x.id === 'security.pluginNetwork');
+        assert.strictEqual(off.status, 'warn');
+        assert.ok(!off.action, 'no action when the firewall is off');
+        win.readNetworkIsolationPolicy = () => ({ platform: true, configured: true, missing: [], firewallOff: false });
+        assert.strictEqual(require('../core/site-health').pluginSandboxChecks().find((x: any) => x.id === 'security.pluginNetwork').status, 'ok');
     } finally {
         Object.defineProperty(process, 'platform', realPlatform);
         win.readNetworkIsolationPolicy = realRead;

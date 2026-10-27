@@ -21,7 +21,9 @@ jobs:
   parity:
     name: "${{ matrix.label }}"
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 15
+    # The Windows leg runs the live AppContainer suites (each contained launch is a cold PowerShell relay,
+    # ~20 s on this runner); its certification step is bounded on its own below.
+    timeout-minutes: 25
     strategy:
       fail-fast: false
       matrix:
@@ -197,14 +199,9 @@ jobs:
       # APPLICATION PACKAGES once the probe protected it (and read it before - the control); with the
       # private network ranges for apps set, internetClient alone must not reach the cloud metadata service
       # while privateNetworkClientServer does; owner rights and the AppContainer launch itself on real ACLs.
-      - name: Diagnose private-destination classification for AppContainers (informational)
-        if: runner.os == 'Windows'
-        continue-on-error: true
-        working-directory: backend
-        run: node -r ts-node/register scripts/diagnose-windows-netiso.js
-
       - name: Certify the Windows host settings (AppContainer, ACLs, private networks)
         if: runner.os == 'Windows'
+        timeout-minutes: 15
         working-directory: backend
         env:
           WORDJS_TEST_APPCONTAINER: '1'
