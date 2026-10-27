@@ -109,7 +109,7 @@ async function siteLabel(): Promise<string> {
 }
 
 function toEvent(row: any) {
-    let detail: any = {};
+    let detail: any;
     try { detail = row.detail ? JSON.parse(String(row.detail)) : {}; } catch { detail = {}; }
     // recordAudit already strips secret-looking keys; a row written into the table some other way gets the
     // same treatment here, so nothing secret leaves the site. For recordAudit's rows this is a no-op.
@@ -160,7 +160,7 @@ async function sendSyslog(c: ExportConfig, events: any[]): Promise<void> {
     await new Promise<void>((resolve, reject) => {
         const opts: any = { host: c.host.replace(/^\[|\]$/g, ''), port: c.port, lookup: lookupFor(c) };
         let settled = false;
-        const done = (err?: any) => { if (settled) return; settled = true; clearTimeout(timer); sock.destroy(); err ? reject(err) : resolve(); };
+        const done = (err?: any) => { if (settled) return; settled = true; clearTimeout(timer); sock.destroy(); if (err) reject(err); else resolve(); };
         const payload = lines.map((l) => { const b = Buffer.from(l, 'utf8'); return `${b.length} ${l}`; }).join('');
         const onConnect = () => sock.end(payload, 'utf8', () => done());
         const sock = c.transport === 'tls'
