@@ -20,7 +20,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     rule on its sandbox that refuses the private networks except the hosts approved for it; **Site Health** adds
     the rules (Windows asks for an administrator) and says when the firewall is off.
   - **Linux.** The seccomp filter refuses more calls (on other processes' limits, priority and scheduling; mount
-    and quota interfaces; file mode, owner, timestamp and extended-attribute changes by path; signal-owner commands),
+    and quota interfaces; file mode, owner and extended-attribute changes by path; signal-owner commands),
     and below Landlock ABI 3 it also refuses truncating files the plugin may only read. The launcher closes every
     inherited descriptor but stdio and the IPC channel and starts the plugin in `/`. The probe certifies each of these.
   - **macOS.** A plugin may execute only the Node binary, and file metadata is reachable only along the paths to
