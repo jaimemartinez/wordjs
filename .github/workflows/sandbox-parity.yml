@@ -21,9 +21,7 @@ jobs:
   parity:
     name: "${{ matrix.label }}"
     runs-on: ${{ matrix.os }}
-    # The Windows leg runs the live AppContainer suites (each contained launch is a cold PowerShell relay,
-    # ~20 s on this runner); its certification step is bounded on its own below.
-    timeout-minutes: 25
+    timeout-minutes: 15
     strategy:
       fail-fast: false
       matrix:
@@ -194,19 +192,6 @@ jobs:
         working-directory: backend
         run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-own-code-readonly.test.ts src/tests/sandbox-ipc-nonce-channel.test.ts
 
-      # WINDOWS, ON THE REAL ACLs AND THE REAL FIREWALL. The runner is an administrator, so these run here
-      # and nowhere else: a contained child must be refused a secret its install tree exposes to ALL
-      # APPLICATION PACKAGES once the probe protected it (and read it before - the control); with the
-      # private network ranges for apps set, internetClient alone must not reach the cloud metadata service
-      # while privateNetworkClientServer does; owner rights and the AppContainer launch itself on real ACLs.
-      - name: Certify the Windows host settings (AppContainer, ACLs, private networks)
-        if: runner.os == 'Windows'
-        timeout-minutes: 15
-        working-directory: backend
-        env:
-          WORDJS_TEST_APPCONTAINER: '1'
-        run: node --test --test-force-exit --test-concurrency=1 -r ts-node/register src/tests/sandbox-windows-aap-secrets.test.ts src/tests/sandbox-windows-network-isolation.test.ts src/tests/sandbox-windows-retirement.test.ts src/tests/sandbox-windows-appcontainer.test.ts
-
       # WHICH LAYER WOULD KILL IT — kept AFTER the fix, deliberately.
       #
       # This is what found the cause, and it stays because the next regression in this area will present
@@ -258,3 +243,52 @@ jobs:
             sandbox-parity-root-cut-bounding-report.json
           retention-days: 14
           if-no-files-found: ignore
+
+  # WINDOWS, ON THE REAL ACLs AND THE REAL FIREWALL, beside the parity job. The runner is an administrator,
+  # so these run here and nowhere else: a contained child must be refused a secret its install tree exposes
+  # to ALL APPLICATION PACKAGES once the probe protected it (and read it before - the control); with its
+  # firewall rule in place, internetClient alone must not reach the cloud metadata service while an
+  # approved destination does; owner rights, retirement and the AppContainer launch itself on real ACLs.
+  # Every contained launch is a cold PowerShell relay (~25 s on this runner), so the suites are spread over
+  # three runners, which share nothing: on one host, two processes editing the same ACL could lose an ACE.
+  windows-live:
+    name: "Windows live AppContainer (${{ matrix.shard }})"
+    runs-on: windows-latest
+    timeout-minutes: 12
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: "ACLs and grants"
+            files: src/tests/sandbox-windows-appcontainer.test.ts
+            pattern: "ensureAppContainerProfile is idempotent|grant is idempotent|a root-only revoke|a zone reached through a junction|a missing directory is skipped"
+          # The launch tests use the package SID the profile test creates, so that test runs here too.
+          - shard: "contained launches"
+            files: src/tests/sandbox-windows-appcontainer.test.ts
+            pattern: "ensureAppContainerProfile is idempotent|a minimal contained Node|the contained child is refused|internetClient changes only egress|killing the relay|extended Job Object caps apply"
+          - shard: "secrets, private networks, retirement"
+            files: src/tests/sandbox-windows-aap-secrets.test.ts src/tests/sandbox-windows-network-isolation.test.ts src/tests/sandbox-windows-retirement.test.ts
+            pattern: ""
+    steps:
+      - uses: actions/checkout@v7
+      - uses: actions/setup-node@v7
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: backend/package-lock.json
+      - name: Install
+        working-directory: backend
+        run: npm ci
+      - name: Certify on this host (${{ matrix.shard }})
+        working-directory: backend
+        shell: bash
+        env:
+          WORDJS_TEST_APPCONTAINER: '1'
+          FILES: ${{ matrix.files }}
+          PATTERN: ${{ matrix.pattern }}
+        run: |
+          if [ -n "$PATTERN" ]; then
+            node --test --test-force-exit --test-concurrency=1 --test-name-pattern="$PATTERN" -r ts-node/register $FILES
+          else
+            node --test --test-force-exit --test-concurrency=1 -r ts-node/register $FILES
+          fi
