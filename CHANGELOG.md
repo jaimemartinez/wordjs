@@ -47,6 +47,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **mail-server 3.3.7:** declares the SMTP ports it uses (25, 465, 587 and 2525), and a relay on another port is
   explained in the console.
 
+### Fixed
+- **robots.txt no longer blocks `/_next/`, and it can be edited.** That folder holds the CSS and JS every public
+  page is rendered with; crawlers that may not fetch them render the page unstyled. **Settings → Reading** has a new
+  «Your own robots.txt rules» field: the lines are added after the built-in rules (one rule per line — `User-agent`,
+  `Allow`, `Disallow`, `Sitemap`, `Crawl-delay`, `Host`, `Clean-param` — or a `# comment`; anything else is refused
+  on save). While search engines are discouraged the whole site stays blocked and these rules are not served.
+
 ## [2.11.16] - 2026-10-27
 
 ### Fixed

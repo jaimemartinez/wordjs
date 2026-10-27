@@ -50,6 +50,11 @@ points to Account email.
 - **Discourage search engines from indexing this site** («Pedir a los buscadores que no indexen el sitio»): the
   site's `robots.txt` then disallows everything and every page says `noindex`. Search engines usually honour it,
   but they do not have to.
+- **Your own robots.txt rules** («Reglas propias de robots.txt»): lines added after the built-in ones (which keep
+  `/api/` and `/admin/` out and point at the sitemap). One rule per line — `User-agent`, `Allow`, `Disallow`,
+  `Sitemap`, `Crawl-delay`, `Host`, `Clean-param` — or a `# comment`; anything else is refused on save, because a
+  misspelt rule is silently ignored by crawlers. For example, `User-agent: GPTBot` then `Disallow: /` keeps one bot
+  out of the whole site. While search engines are discouraged these rules are not served.
 - **Membership**: anyone can register. When on, **New User Default Role** sets their role (only roles that cannot
   run the site are offered), and **Verify email on sign-up** makes new users confirm their address first.
 - **Enable Comments Globally**: off, nobody can comment anywhere.
