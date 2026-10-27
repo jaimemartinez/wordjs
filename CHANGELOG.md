@@ -6,6 +6,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+- **Plugin storage keys** (the folder names of a plugin's private storage) are computed in time proportional to the
+  slug's length whatever the slug, and are unchanged for every existing plugin and theme.
+
 ## [2.11.17] - 2026-10-27
 
 ### Security
