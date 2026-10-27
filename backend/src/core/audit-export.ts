@@ -111,6 +111,9 @@ async function siteLabel(): Promise<string> {
 function toEvent(row: any) {
     let detail: any = {};
     try { detail = row.detail ? JSON.parse(String(row.detail)) : {}; } catch { detail = {}; }
+    // recordAudit already strips secret-looking keys; a row written into the table some other way gets the
+    // same treatment here, so nothing secret leaves the site. For recordAudit's rows this is a no-op.
+    detail = require('./audit').sanitizeDetail(detail);
     return {
         seq: Number(row.chain_seq), id: Number(row.id), createdAt: require('./audit-chain').canonicalTs(row.created_at),
         actorId: row.actor_id === null || row.actor_id === undefined ? null : Number(row.actor_id),

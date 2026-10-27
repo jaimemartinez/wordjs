@@ -265,6 +265,16 @@ describe('Audit log hash chain', () => {
             assert.strictEqual(w2.rowHash, stored.row_hash, 'the receiver holds the hash');
             assert.strictEqual(w2.seq, Number(stored.chain_seq));
 
+            // A row written straight into the table, not through recordAudit: the copy still carries no secret.
+            await db().run("INSERT INTO audit_log (actor_id, action, target_type, target_id, detail, created_at) VALUES (NULL, 'user.role_change', 'user', 'raw', ?, ?)",
+                [JSON.stringify({ role: 'editor', password: 'hunter2-raw', apiToken: 'tok-raw' }), require('../core/analytics-retention').dbTimestamp(Date.now())]);
+            await record('user.role_change', 'after-raw');
+            await post('/audit/export/flush');
+            const raw = got.find((e) => e.targetId === 'raw');
+            assert.ok(raw, 'the raw row is exported');
+            assert.strictEqual(raw.detail.role, 'editor');
+            assert.ok(!JSON.stringify(got).includes('hunter2-raw') && !JSON.stringify(got).includes('tok-raw'), 'secrets never leave the site');
+
             up = false;
             await record('user.role_change', 'while-down');
             await post('/audit/export/flush');
