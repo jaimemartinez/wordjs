@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.14] - 2026-10-26
+
 ### Added
 - **mail-server 3.3.5: the relay as a backup, and direct delivery that backs off.** On a server whose provider
   limits outgoing port 25 (Hostinger allows 5 a minute), a failed delivery to Gmail tried every mail server over
