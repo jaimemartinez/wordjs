@@ -72,6 +72,20 @@ function normalizeDestinations(v) {
     return out;
 }
 
+/**
+ * Milliseconds of a datetime read back from the database. SQLite hands back the stored text
+ * ('YYYY-MM-DD HH:MM:SS', UTC); PostgreSQL and MySQL hand back a Date — whose String() form
+ * ("Mon Oct 26 2026 …") parsed as text is NaN, which once dropped every row from the overview's
+ * traffic series on those engines. NaN when there is no usable value.
+ */
+function sqlTimeOf(v) {
+    if (v instanceof Date) return v.getTime();
+    if (typeof v === 'number') return v;
+    const s = String(v == null ? '' : v).trim();
+    if (!s) return NaN;
+    return Date.parse(/^\d{4}-\d{2}-\d{2} \d{2}:\d{2}(:\d{2})?$/.test(s) ? s.replace(' ', 'T') + 'Z' : s);
+}
+
 // A SQL datetime literal both SQLite (string compare) and Postgres/MySQL (cast) accept.
 function sqlDate(d) {
     return d.toISOString().slice(0, 19).replace('T', ' ');
@@ -291,7 +305,7 @@ module.exports = function createAdminStore(db) {
                 series.push({ date: key, received: 0, sent: 0, spam: 0, failed: 0 });
             }
             for (const r of recentRows) {
-                const t = Date.parse(String(r.date_received).replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(r.date_received)) ? '' : 'Z'));
+                const t = sqlTimeOf(r.date_received);
                 if (!Number.isFinite(t)) continue;
                 const key = new Date(t).toISOString().slice(0, 10);
                 const i = index[key];
@@ -540,6 +554,7 @@ module.exports = function createAdminStore(db) {
 };
 
 module.exports.normalizeLocalPart = normalizeLocalPart;
+module.exports.sqlTimeOf = sqlTimeOf;
 module.exports.normalizeDestinations = normalizeDestinations;
 module.exports.normalizeRetentionDays = normalizeRetentionDays;
 module.exports.SYSTEM_SENT_RETENTION_CHOICES = SYSTEM_SENT_RETENTION_CHOICES;

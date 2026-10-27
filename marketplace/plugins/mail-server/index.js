@@ -77,7 +77,7 @@ function stripHtml(s) {
 
 exports.metadata = {
     name: 'Mail Server',
-    version: '3.3.6',
+    version: '3.3.7',
     description: 'Full webmail suite (spam folder, labels, undo send, vacation replies) on the WordJS MTA.',
     author: 'WordJS'
 };
@@ -4057,7 +4057,7 @@ exports.init = async function (bridge) {
         // used up the pass stops; what is left stays due and is first in line next time.
         try {
             const [scheduled, retries] = await Promise.all([Email.getPendingScheduled(), Email.getPendingRetries()]);
-            const dueAt = (v) => { const t = Date.parse(String(v || '').replace(' ', 'T') + (/[zZ]|[+-]\d\d:?\d\d$/.test(String(v || '')) ? '' : 'Z')); return Number.isFinite(t) ? t : 0; };
+            const dueAt = (v) => { const t = createAdminStore.sqlTimeOf(v); return Number.isFinite(t) ? t : 0; };
             const due = [
                 ...scheduled.map((email) => ({ kind: 'scheduled', email, at: dueAt(email.scheduled_at) })),
                 ...retries.map((email) => ({ kind: 'retry', email, at: dueAt(email.next_attempt_at) })),
