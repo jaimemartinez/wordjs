@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.17] - 2026-10-27
+
 ### Security
 - **Plugin sandbox: tighter confinement of isolated plugins on Linux, macOS and Windows.**
   - **Read-only code.** A plugin's (and a theme's) code folder is read-only at every sandbox layer. Its `data/` folder moves to
