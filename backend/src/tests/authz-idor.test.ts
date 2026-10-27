@@ -42,16 +42,9 @@ const app = express();
 app.use(express.json());
 app.use(cookieParser());
 app.use('/api/v1', require('../routes'));
-// analytics + internal are mounted directly on the main app (index.ts), not in routes/index.ts — mirror
-// that here so their authz is actually exercised (otherwise these routes 404 and pass by absence).
+// analytics is mounted directly on the main app (index.ts), not in routes/index.ts — mirror that here so
+// its authz is actually exercised (otherwise these routes 404 and pass by absence).
 app.use('/api/v1/analytics', require('../routes/analytics'));
-app.use('/api/internal', require('../routes/internal'));
-// Pin a KNOWN gateway secret we NEVER send. A match would saveConfig() + process.exit(0) and kill the
-// runner. The handler uses `config.gatewaySecret || <on-disk secret>`, so a truthy value here makes the
-// real on-disk secret irrelevant — only this known value could ever match, and the tests only send
-// no-header / a deliberately-wrong secret. (Setting '' does NOT work — it falls through to on-disk.)
-const GATEWAY_SECRET = 'authz-test-gateway-secret-' + process.pid;
-config.gatewaySecret = GATEWAY_SECRET;
 
 // Persona ids, filled during seeding.
 const U: Record<string, number> = {};
@@ -137,9 +130,11 @@ before(async () => {
     await require('../core/post-types').initPostTypes();
 
     // Register a custom role that can EDIT comments but not MODERATE them (no default role grants
-    // edit_comments) — the only way to prove the moderation boundary on PUT /comments/:id.
+    // edit_comments) — the only way to prove the moderation boundary on PUT /comments/:id. It also works
+    // on the entries the comments sit on (edit_others / edit_published posts): a comment is edited through
+    // the edit gate of its entry (core/comment-scope), as WordPress maps edit_comment onto edit_post.
     await roles.loadRoles();
-    await roles.setRole('comment_editor', { name: 'Comment Editor', capabilities: ['read', 'access_admin_panel', 'edit_comments'] });
+    await roles.setRole('comment_editor', { name: 'Comment Editor', capabilities: ['read', 'access_admin_panel', 'edit_comments', 'edit_posts', 'edit_others_posts', 'edit_published_posts'] });
     // A NON-admin persona that holds promote_users + edit_users — the ONLY persona for whom the self-role
     // guard is the sole barrier to self-promotion (a subscriber is also blocked by lacking promote_users,
     // which would let the self-promotion test pass even if the self-guard were deleted).
@@ -449,15 +444,14 @@ describe('authz: admin-only routes reject non-admins', () => {
     });
 });
 
-// ── Internal gateway-update: JWT-exempt but gated by a shared secret; must reject without it ─────────
-describe('authz: internal /gateway-update requires the shared secret', () => {
-    test('with NO x-gateway-secret header → rejected (never a config write / process.exit)', async () => {
-        const r = await request(app).post('/api/internal/gateway-update').send({ gatewayPort: 9999 });
-        assert.ok(r.status === 401 || r.status === 403, `must reject a secret-less caller, got ${r.status}`);
-    });
-    test('with a WRONG x-gateway-secret → rejected', async () => {
-        const r = await request(app).post('/api/internal/gateway-update')
-            .set('x-gateway-secret', 'definitely-not-the-secret').send({ gatewayPort: 9999 });
-        assert.ok(r.status === 401 || r.status === 403, `must reject a wrong secret, got ${r.status}`);
+// ── No JWT-exempt control-plane hook on the public API ─────────────────────────────────────────────
+// /api/internal/gateway-update was authorized by a shared secret that every enrolled node held, and it
+// rewrote the config and restarted the process. Nothing called it, so it is gone: the real app must not
+// mount an /api/internal router again (the gateway's control plane is its own mTLS listener).
+describe('authz: no shared-secret control-plane hook is mounted', () => {
+    test('backend/src/index.ts mounts no /api/internal router, and the module is gone', () => {
+        const src = fs.readFileSync(path.join(__dirname, '..', 'index.ts'), 'utf8');
+        assert.doesNotMatch(src, /app\.use\(\s*['"`]\/api\/internal/, 'an /api/internal router is mounted again');
+        assert.strictEqual(fs.existsSync(path.join(__dirname, '..', 'routes', 'internal.ts')), false);
     });
 });

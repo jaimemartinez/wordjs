@@ -3,7 +3,9 @@
  * Equivalent to wp-includes/class-wp-term.php and wp-includes/taxonomy.php
  */
 
-const { db, dbAsync } = require('../config/database');
+const { dbAsync } = require('../config/database');
+// An id no column can hold names no row: findById answers null for it (core/query-params).
+const { isStorableId } = require('../core/query-params');
 const { clampLimit, clampOffset } = require('../core/pagination');
 const { sanitizeTitle, boundSlug } = require('../core/formatting');
 
@@ -185,6 +187,8 @@ class Term {
      * Equivalent to get_term()
      */
     static async findById(termId: number, taxonomy: any = null) {
+        // An id no column can hold names no row (core/query-params isStorableId) — never a driver error.
+        if (!isStorableId(termId)) return null;
         let sql = `
       SELECT t.*, tt.taxonomy, tt.description, tt.parent, tt.count, tt.term_taxonomy_id
       FROM terms t

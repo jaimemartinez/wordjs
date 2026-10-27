@@ -135,12 +135,12 @@ app.use(helmet({
     contentSecurityPolicy: {
         directives: {
             defaultSrc: ["'self'"],
-            // The only HTML this origin serves is the Swagger UI page at `${prefix}/docs`, whose
-            // swagger-ui-dist bootstrap is an inline <script> — that, and nothing else, is what
-            // 'unsafe-inline' is for. No script here is ever built from a string, so no 'unsafe-eval':
+            // The only HTML this origin serves is the Swagger UI page at `${prefix}/docs`, and every script
+            // on it is a file (swagger-ui-express emits its init code as swagger-ui-init.js, not inline), so
+            // no inline script is allowed. No script here is ever built from a string, so no 'unsafe-eval':
             // a theme is a token contract that ships no JavaScript, and a plugin's admin bundle is
-            // executed by the FRONTEND, under the frontend's own header (frontend/next.config.ts).
-            scriptSrc: ["'self'", "'unsafe-inline'"],
+            // executed by the FRONTEND, under the frontend's own header (frontend/src/lib/contentSecurityPolicy.ts).
+            scriptSrc: ["'self'"],
             styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
             fontSrc: ["'self'", "https://fonts.gstatic.com", "data:"],
             imgSrc: ["'self'", "data:", "blob:", "https:", "*"], // Allow images from everywhere (CMS content)
@@ -449,8 +449,9 @@ const authLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:auth:'),
-    passOnStoreError: true,
+    // Sign-in/installation doors keep counting through a Redis outage (core/limiter-fallback-store).
+    store: require('./core/limiter-fallback-store').withMemoryFallback(limiterStore('rl:auth:')),
+    passOnStoreError: false,
     message: { error: 'Too many attempts, please try again later.' }
 });
 
@@ -465,8 +466,9 @@ const loginIpLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:loginip:'),
-    passOnStoreError: true,
+    // Sign-in/installation doors keep counting through a Redis outage (core/limiter-fallback-store).
+    store: require('./core/limiter-fallback-store').withMemoryFallback(limiterStore('rl:loginip:')),
+    passOnStoreError: false,
     skipSuccessfulRequests: true, // only failed logins count toward the cap
     message: { error: 'Too many failed login attempts from your network, please try again later.' }
 });
@@ -503,8 +505,9 @@ const setupLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: ipKey,
-    store: limiterStore('rl:setup:'),
-    passOnStoreError: true,
+    // Sign-in/installation doors keep counting through a Redis outage (core/limiter-fallback-store).
+    store: require('./core/limiter-fallback-store').withMemoryFallback(limiterStore('rl:setup:')),
+    passOnStoreError: false,
     message: { error: 'Too many setup attempts, please try again later.' }
 });
 
@@ -519,9 +522,10 @@ const mcpLimiter = rateLimit({
     standardHeaders: true,
     legacyHeaders: false,
     keyGenerator: (req: any) => {
-        const h = String((req.headers && req.headers.authorization) || '');
-        if (h.startsWith('Bearer wja_')) {
-            return 'agent:' + require('crypto').createHash('sha256').update(h.slice(7)).digest('hex').slice(0, 32);
+        // The same reader agentAuth uses, so the bucket is keyed by exactly the token that authenticates.
+        const t = require('./middleware/auth').bearerToken(req);
+        if (t && t.startsWith('wja_')) {
+            return 'agent:' + require('crypto').createHash('sha256').update(t).digest('hex').slice(0, 32);
         }
         return ipKey(req);
     },
@@ -1247,8 +1251,8 @@ app.get('/api', (req: Request, res: Response) => {
     });
 });
 
-// Internal Routes (Gateway Hooks)
-app.use('/api/internal', require('./routes/internal'));
+// (No /api/internal router: its one hook, a secret-gated gateway-port update nothing ever called, was
+// removed. The gateway's control plane is its own mTLS listener; a path here is answered 404.)
 
 // NOTE: the public site is rendered by the Next.js frontend in BOTH split and monolith mode (the
 // gateway/monolith only route /api,/uploads,/themes,/plugins,/.well-known,/healthz,/readyz,/metrics to
@@ -1423,7 +1427,9 @@ async function initializeMainSite() {
                     key: fs.readFileSync(keyPath),
                     cert: fs.readFileSync(certPath),
                     ca: fs.readFileSync(caPath),
-                    rejectUnauthorized: true
+                    rejectUnauthorized: true,
+                    // The hostname AND the gateway's identity: every cluster leaf carries the loopback SANs.
+                    checkServerIdentity: require('./core/cert-manager').checkGatewayIdentity
                 };
             };
             refreshClientOpts();

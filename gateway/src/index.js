@@ -27,7 +27,7 @@ require('winston-daily-rotate-file');
 const fs = require('fs');
 const path = require('path');
 
-const { createProxyServer, createUpstreamAgent, httpKeepAliveAgent } = require('./proxy-config');
+const { createProxyServer, createUpstreamAgent, upstreamAgents, httpKeepAliveAgent } = require('./proxy-config');
 const { helmetOptions } = require('./security-headers');
 const clusterCa = require('./cluster-ca');
 const purge = require('./purge');
@@ -426,12 +426,17 @@ if (cluster.isPrimary) {
         }
         return hosts;
     };
-    const forwarder = tcpForward.createForwarder({ backendHosts, logger });
+    // `tcpForwardBind` (gateway-config.json) narrows the forwards to one address of this machine; unset,
+    // they listen where the public listener does (every interface).
+    const forwardBind = tcpForward.bindAddress(config.tcpForwardBind);
+    if (config.tcpForwardBind && !forwardBind) logger.warn('[Gateway] [Forward] tcpForwardBind is not an IP address — listening on every interface');
+    const forwarder = tcpForward.createForwarder({ backendHosts, logger, bindHost: forwardBind });
     const reservedPorts = () => [FINAL_PORT, parseInt(config.gatewayInternalPort, 10) || 3100,
         parseInt(config.gatewayEnrollPort, 10) || ((parseInt(config.gatewayInternalPort, 10) || 3100) + 1),
         Number((config.acme || {}).http01Port) || 0].filter(Boolean);
     {
-        const boot = tcpForward.sanitizeForwards(Array.isArray(config.tcpForwards) ? config.tcpForwards : [], reservedPorts());
+        const boot = tcpForward.sanitizeForwards(Array.isArray(config.tcpForwards) ? config.tcpForwards : [], reservedPorts(),
+            tcpForward.sanitizeMailPorts(config.tcpForwardMailPorts));
         if (boot.error) logger.warn(`[Gateway] [Forward] tcpForwards in gateway-config.json ignored: ${boot.error}`);
         else if (boot.value.length) forwarder.apply(boot.value);
     }
@@ -468,11 +473,12 @@ if (cluster.isPrimary) {
     const MTLS_CA = path.join(CERTS_DIR, 'cluster-ca.crt');
     const MTLS_KEY = path.join(CERTS_DIR, 'gateway-internal.key');
     const MTLS_CERT = path.join(CERTS_DIR, 'gateway-internal.crt');
-    let healthAgent = null;
+    // Per-role verifying agents (src/proxy-config.js): a target is probed as the role that owns it.
+    let healthAgents = null;
 
     if (fs.existsSync(MTLS_CA) && fs.existsSync(MTLS_KEY) && fs.existsSync(MTLS_CERT)) {
         try {
-            healthAgent = createUpstreamAgent({
+            healthAgents = upstreamAgents({
                 ca: fs.readFileSync(MTLS_CA),
                 key: fs.readFileSync(MTLS_KEY),
                 cert: fs.readFileSync(MTLS_CERT)
@@ -488,13 +494,19 @@ if (cluster.isPrimary) {
         // Dedupe identical target URLs across routes: probe each distinct URL over the network only
         // once per sweep, sharing the in-flight axios promise.
         const inflight = new Map();
-        const probeUrl = (url) => {
-            if (!inflight.has(url)) {
+        const probeUrl = (url, role) => {
+            const key = `${role} ${url}`;
+            if (!inflight.has(key)) {
                 const start = Date.now();
                 const isHttps = url.startsWith('https:');
-                inflight.set(url, axios.get(`${url}/health`, {
+                const httpsAgent = isHttps ? (healthAgents && healthAgents.forRole(role)) : null;
+                if (isHttps && !httpsAgent) {
+                    inflight.set(key, Promise.resolve({ ok: false, error: new Error(`no verified identity for role '${role}'`) }));
+                    return inflight.get(key);
+                }
+                inflight.set(key, axios.get(`${url}/health`, {
                     timeout: 5000,
-                    httpsAgent: isHttps ? healthAgent : null,
+                    httpsAgent,
                     validateStatus: (status) => status < 500 // Accept 4xx as "alive" if path missing
                 }).then((res) => {
                     // The certificate the node answered with: when it expires, for Admin → Servers (QA
@@ -508,16 +520,17 @@ if (cluster.isPrimary) {
                 },
                         (e) => ({ ok: false, error: e })));
             }
-            return inflight.get(url);
+            return inflight.get(key);
         };
 
         // Probe a single (route, url) target. Updates group.metrics in place and flips the shared
         // `changed` flag on ANY status transition (Healthy<->Failing) or on eviction, so workers are
         // re-broadcast promptly and stop selecting a target that just started failing.
-        const checkOne = async (group, url) => {
+        const checkOne = async (group, prefix, url) => {
             if (!group.metrics) group.metrics = new Map();
             const prevStatus = group.metrics.get(url)?.status;
-            const result = await probeUrl(url);
+            // Probed as the role that owns the ROUTE (the identity the proxy will demand of it).
+            const result = await probeUrl(url, registration.groupOwner(prefix, targetOwner.get(url)));
             if (result.ok) {
                 group.metrics.set(url, { status: 'Healthy', latency: result.latency, failCount: 0 });
                 if (prevStatus && prevStatus !== 'Healthy') changed = true;
@@ -558,8 +571,8 @@ if (cluster.isPrimary) {
         // Run all probes CONCURRENTLY so the sweep takes ~one timeout instead of the sum of them.
         // metrics are per-group, so every (route, url) pair must be checked — but a given URL is only
         // probed over the network once per sweep: checkOne reuses the in-flight axios promise per URL.
-        const probes = [...registry.entries()].flatMap(([, group]) =>
-            Array.from(group.targets).map(url => checkOne(group, url))
+        const probes = [...registry.entries()].flatMap(([prefix, group]) =>
+            Array.from(group.targets).map(url => checkOne(group, prefix, url))
         );
         await Promise.all(probes);
 
@@ -680,8 +693,9 @@ if (cluster.isPrimary) {
                 const ROLE_ROUTES = routing.ROLE_ROUTES;
                 // Does the peer's certificate cover `host` (a SAN entry, its CN, or loopback)? Binds a registered
                 // target to the identity the peer actually proved so it can't point a route at an external box.
-                // Loopback is always allowed (a local target can't be an external MITM; same-host cross-service
-                // eviction is caught by the ownership check below, not here).
+                // Loopback passes here because registration.targetProblem has already refused it from any peer
+                // that is not on this machine (a loopback target names the GATEWAY's own ports); same-host
+                // cross-service eviction is caught by the ownership check below.
                 const certCoversHost = (cert, host) => {
                     if (!host) return false;
                     const h = String(host).toLowerCase().replace(/^\[|\]$/g, '');
@@ -714,23 +728,39 @@ if (cluster.isPrimary) {
                     // string would otherwise be checked as an object (unowned) and stored as its
                     // stringification (somebody else's target) — the guard inspecting a different value
                     // than the sink receives.
-                    const targetUrl = String((req.body && req.body.url) ?? '');
-                    let host;
-                    try { host = new URL(targetUrl).hostname; } catch { host = null; }
+                    // It is the CANONICAL origin (registration.normalizeTarget): spelling variants of one
+                    // listener — a trailing path, `localhost` for `127.0.0.1`, an explicit default port —
+                    // are one target, so none of them can slip past the ownership check below.
+                    const target = registration.normalizeTarget(typeof (req.body && req.body.url) === 'string' ? req.body.url : '');
+                    const problem = registration.targetProblem(target, req.socket.remoteAddress);
+                    if (problem === 'loopback-from-remote') {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' from ${logSafe(req.socket.remoteAddress)} declared a loopback target; only a node on this machine may`);
+                        return res.status(403).json({ error: 'A loopback target may only be registered by a node on the gateway machine. Advertise the address of this node instead.' });
+                    }
+                    if (problem === 'plain-http-remote') {
+                        logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' declared a plain-HTTP target on another machine '${logSafe(target.url)}'`);
+                        return res.status(403).json({ error: 'A node on another machine must serve HTTPS with its cluster certificate. Restart it so it listens with mTLS.' });
+                    }
+                    const targetUrl = target ? target.url : '';
+                    const host = target ? target.host : null;
                     if (!host || !certCoversHost(cert, host)) {
                         logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' target host '${logSafe(host || '(invalid url)')}' not covered by its certificate`);
                         return res.status(403).json({ error: 'Target URL host is invalid or not covered by your certificate identity.' });
                     }
                     // Taken out of the cluster from the admin panel: not put back by its own heartbeat.
-                    if (removedNodes.has(targetUrl)) {
+                    // Compared on the canonical socket, like ownership: a re-spelled URL is the same node.
+                    if (removedNodes.has(targetUrl) || removedNodes.list().some((u) => {
+                        const r = registration.normalizeTarget(u);
+                        return r && r.socket === target.socket;
+                    })) {
                         logger.warn(`[Gateway] [Internal] REGISTER DENIED: '${logSafe(targetUrl)}' was removed from the cluster by an administrator`);
                         return res.status(403).json({ error: 'This node was removed from the cluster. Mint a new join token to admit it again.', code: 'node_removed' });
                     }
                     // Ownership: a peer may only (re)register a target url that is unowned or already its own — it
                     // can NEVER touch (and thus evict) another identity's target (e.g. the backend's /api, which
                     // otherwise let a frontend evict it and capture /api/v1/auth via the `/` catch-all).
-                    const owner = targetOwner.get(targetUrl);
-                    if (owner && owner !== cn) {
+                    const owner = registration.conflictingOwner(targetOwner, targetUrl, cn);
+                    if (owner) {
                         logger.warn(`[Gateway] [Internal] REGISTER DENIED: identity '${logSafe(cn)}' may not register target '${logSafe(targetUrl)}' owned by '${logSafe(owner)}'`);
                         return res.status(403).json({ error: 'That target is registered by another identity.' });
                     }
@@ -756,11 +786,12 @@ if (cluster.isPrimary) {
                 let purgeAgent = null;
                 const purgeUpstreamAgent = () => {
                     if (!purgeAgent) {
+                        // Purges go to frontend nodes only, so the only identity accepted is CN=frontend.
                         purgeAgent = createUpstreamAgent({
                             ca: fs.readFileSync(MTLS_CA),
                             key: fs.readFileSync(MTLS_KEY),
                             cert: fs.readFileSync(MTLS_CERT)
-                        });
+                        }, ['frontend']);
                     }
                     return purgeAgent;
                 };
@@ -912,10 +943,16 @@ if (cluster.isPrimary) {
                 });
                 internalApp.post('/tcp-forwards', requireIdentity(['backend']), (req, res) => {
                     syncConfigFromDisk();
-                    const checked = tcpForward.sanitizeForwards(req.body && req.body.forwards, reservedPorts());
+                    // The backend names the port its inbound SMTP listener holds, when it is not one of the
+                    // standard mail ports; that is the only other port a forward may reach.
+                    const mailPorts = tcpForward.sanitizeMailPorts(req.body && req.body.mailPorts);
+                    const checked = tcpForward.sanitizeForwards(req.body && req.body.forwards, reservedPorts(), mailPorts);
                     if (checked.error) return res.status(400).json({ error: checked.error, code: 'cluster_invalid_forward' });
                     try {
                         config.tcpForwards = checked.value;
+                        // Kept with the forwards that use it, so the next boot accepts what was accepted now.
+                        const used = mailPorts.filter((p) => checked.value.some((f) => f.targetPort === p));
+                        if (used.length) config.tcpForwardMailPorts = used; else delete config.tcpForwardMailPorts;
                         writeGatewayConfig(GATEWAY_CONFIG_PATH, configToWrite());
                     } catch (e) {
                         return res.status(500).json({ error: `could not save the forwards: ${e.message}` });
@@ -1049,6 +1086,8 @@ if (cluster.isPrimary) {
                     if (port && newPort === null) return res.status(400).json({ error: 'port must be an integer between 1 and 65535' });
                     const newOrigin = siteUrl ? siteOriginOrNull(siteUrl) : null;
                     if (siteUrl && !isValidSiteOrigin(newOrigin)) return res.status(400).json({ error: 'siteUrl must be an http(s) origin' });
+                    // A switch is a boolean: the string "false" is truthy and used to turn HTTPS on.
+                    if (typeof sslEnabled !== 'undefined' && typeof sslEnabled !== 'boolean') return res.status(400).json({ error: 'sslEnabled must be true or false' });
 
                     try {
                         // Update Config Object — the file's current content, not the boot-time copy.
@@ -1184,7 +1223,9 @@ if (cluster.isPrimary) {
                 return res.json({
                     cert: certPem,
                     ca: caCertPem,
-                    config: {
+                    // What the node is told (src/cluster-admin.js enrollmentConfig): the gateway secret
+                    // goes to a BACKEND node only.
+                    config: clusterAdmin.enrollmentConfig(role, {
                         gatewaySecret: GATEWAY_SECRET,
                         gatewayPort: config.gatewayPort || 3000,
                         gatewayInternalPort: config.gatewayInternalPort || 3100,
@@ -1194,7 +1235,7 @@ if (cluster.isPrimary) {
                         // old code read it out of the backend's config file, which only exists when the
                         // two share a disk, so cross-machine purges could never be authenticated.
                         revalidateSecret: ensureRevalidateSecret()
-                    }
+                    })
                 });
             } catch (e) {
                 logger.error(`[Gateway] [Enroll] signing failed: ${e.message}`);
@@ -1276,15 +1317,32 @@ if (cluster.isPrimary) {
     const MTLS_KEY = path.join(CERTS_DIR, 'gateway-internal.key');
     const MTLS_CERT = path.join(CERTS_DIR, 'gateway-internal.crt');
 
-    let proxyAgent = null;
+    // One verifying agent per upstream ROLE (src/proxy-config.js upstreamAgents): an https target is
+    // only accepted when its certificate names the role that owns the route the request resolved to.
+    let proxyAgents = null;
     if (fs.existsSync(MTLS_CA) && fs.existsSync(MTLS_KEY) && fs.existsSync(MTLS_CERT)) {
-        proxyAgent = createUpstreamAgent({
+        proxyAgents = upstreamAgents({
             ca: fs.readFileSync(MTLS_CA),
             key: fs.readFileSync(MTLS_KEY),
             cert: fs.readFileSync(MTLS_CERT)
         });
         logger.info(`[Gateway] Worker ${process.pid} mTLS ENABLED for upstream.`);
     }
+    // The agent for one resolved upstream: plain keep-alive for http, the role's verifying agent for
+    // https — and null (refuse) for an https target whose role has no agent. The one exception is the
+    // pre-install bootstrap on a gateway that has no cluster identity yet: there is nothing to verify
+    // with, and it only ever dials this machine's loopback (false = Node's default agent, as before).
+    const agentFor = (upstream) => {
+        if (!upstream.target.startsWith('https:')) return httpKeepAliveAgent;
+        if (proxyAgents) return proxyAgents.forRole(upstream.role) || null;
+        return upstream.bootstrap ? false : null;
+    };
+    // The TLS options for one proxied call. http-proxy turns a false `secure` into a per-request
+    // rejectUnauthorized of false; the verifying agent's own options happen to win Node's merge, so the
+    // check still ran, but only because of that merge order. The option is therefore left unset (http-proxy
+    // then asks for verification too), and only the identity-less pre-install bootstrap — no cluster CA to
+    // verify against, loopback only — turns verification off, explicitly and here alone.
+    const tlsFor = (agent) => (agent === false ? { secure: false } : {});
 
     const requireAuth = (req, res, next) => {
         // Never accept the shipped public default as valid auth: an unconfigured gateway must not
@@ -1321,7 +1379,18 @@ if (cluster.isPrimary) {
         const pol = edgePolicy.get();
         return pol && typeof pol.ownAddresses === 'function' ? pol.ownAddresses() : [];
     });
-    const edge = hostEdge.createHostEdge({ getPolicy: edgePolicy.get, logger, forwardedHostIsMarker: false, refused: edgeRefused, relayPeers });
+    // The proof a frontend node's relayed reads carry (hostEdge.relayProof), from the cluster's revalidate
+    // secret. The primary may mint that secret after this worker started, so it is re-read from disk —
+    // at most every few seconds, and only while it is missing.
+    let relayKeyCache = { value: null, checkedAt: 0 };
+    const relayKey = () => {
+        if (relayKeyCache.value) return relayKeyCache.value;
+        if (Date.now() - relayKeyCache.checkedAt < 5000) return null;
+        const secret = config.revalidateSecret || syncConfigFromDisk().revalidateSecret;
+        relayKeyCache = { value: hostEdge.relayProof(secret ? String(secret) : ''), checkedAt: Date.now() };
+        return relayKeyCache.value;
+    };
+    const edge = hostEdge.createHostEdge({ getPolicy: edgePolicy.get, logger, forwardedHostIsMarker: false, refused: edgeRefused, relayPeers, relayKey });
     app.use((req, res, next) => {
         if (!edge.handle(req, res)) next();
     });
@@ -1360,7 +1429,7 @@ if (cluster.isPrimary) {
     // Longest-prefix selection, OWNER-AWARE, in src/routing.js (audit #22). The inline version this
     // replaced routed by prefix length alone, so an evicted '/api' let the frontend's '/' catch-all
     // inherit the entire API surface — credentials included — for as long as the backend was down.
-    const getTarget = (url) => routing.resolveTarget(workerRegistry, url);
+    const getTarget = (url) => routing.resolveUpstream(workerRegistry, url);
 
     /**
      * Pre-install bootstrap route to the services on THIS machine.
@@ -1417,12 +1486,21 @@ if (cluster.isPrimary) {
     // second hand-kept prefix list. The old copy dropped '/public' (so the UI framework stylesheet
     // bootstrapped to Next and 404'd) and did not know '/api/revalidate' is a Next route, which is the
     // dispatcher-drift class the audit found in all three dispatchers at once.
+    //
+    // "Has not registered even once" is a LATCH, not a look at the targets of the moment: the health
+    // sweep empties a group whose node stops answering (a restart, an OOM), and re-engaging the
+    // bootstrap then would send the route — passwords and cookies included, in plain HTTP on a gateway
+    // that booted before the local certificates existed — to whatever process holds that local port.
+    // Once the role's group exists (persisted, empty or not), an outage is answered 503 instead.
     const bootstrapTarget = (url) => {
         const service = routing.requiredRoleForPath(url) === 'backend' ? 'backend' : 'frontend';
-        for (const group of workerRegistry.values()) {
-            if (group.name === service && group.targets && group.targets.size > 0) return null;
-        }
-        return bootstrapUrl(service);
+        if (routing.roleEverRegistered(workerRegistry, service)) return null;
+        return { target: bootstrapUrl(service), role: service, bootstrap: true };
+    };
+    // A path whose role has registered, with no target to serve it right now: the service is down.
+    const registeredButDown = (url) => {
+        const service = routing.requiredRoleForPath(url) === 'backend' ? 'backend' : 'frontend';
+        return routing.roleEverRegistered(workerRegistry, service);
     };
 
     // Liveness probe — answered by the gateway itself (edge is up), independent of any backend.
@@ -1462,9 +1540,14 @@ if (cluster.isPrimary) {
         // XFP/XFPort are dropped for xfwd to write the listener's own (src/host-edge.js).
         // (The internal mTLS listener is a separate app, reached only by cert-authenticated peers.)
         hostEdge.pinForwardedHeaders(req);
-        const target = getTarget(req.url) || bootstrapTarget(req.url);
-        if (target) {
-            const isHttps = target.startsWith('https:');
+        const upstream = getTarget(req.url) || bootstrapTarget(req.url);
+        const agent = upstream ? agentFor(upstream) : undefined;
+        if (upstream && agent === null) {
+            logger.error(`[Gateway] no verified upstream identity for ${logSafe(upstream.target)} (role ${logSafe(String(upstream.role))}) — refusing to proxy`);
+            return upstreamDown.sendUpstreamFailure(req, res, 'error');
+        }
+        if (upstream) {
+            const target = upstream.target;
             const isSSE = (req.headers['accept'] || '').includes('text/event-stream');
             // Behind a trusted proxy the backend is told the client Express resolved, not the proxy.
             if (trustsProxy) runtimeSettings.stateForwardedHeaders(req, req.ip);
@@ -1475,8 +1558,8 @@ if (cluster.isPrimary) {
             proxy.web(req, res, {
                 ...(trustsProxy ? { xfwd: false } : {}),
                 target,
-                agent: isHttps ? proxyAgent : httpKeepAliveAgent,
-                secure: false,
+                agent: agent || undefined,
+                ...tlsFor(agent),
                 // Increase timeout for SSE (1 hour); the AI routes wait for the provider (runtime-settings.js)
                 timeout: isSSE ? 3600000 : runtimeSettings.proxyTimeoutFor(req.url, process.env),
                 proxyTimeout: isSSE ? 3600000 : runtimeSettings.proxyTimeoutFor(req.url, process.env)
@@ -1499,6 +1582,8 @@ if (cluster.isPrimary) {
                     upstreamDown.sendUpstreamFailure(req, res, code === 'ECONNREFUSED' ? 'down' : 'error');
                 }
             });
+        } else if (registeredButDown(req.url)) {
+            upstreamDown.sendUpstreamFailure(req, res, 'down');
         } else { res.status(404).json({ error: 'Not Found' }); }
     });
 
@@ -1609,10 +1694,11 @@ if (cluster.isPrimary) {
         // before the wizard has issued the cluster identity — so the wizard page never became interactive.
         // The scheme is not flipped on a WebSocket error: a client closing the socket also ends in
         // ECONNRESET there, and the HTTP path already corrects a wrong scheme on the page load.
-        const target = getTarget(req.url) || bootstrapTarget(req.url);
-        if (target) {
-            const isHttps = target.startsWith('https:');
-            proxy.ws(req, socket, head, { ...(trustsProxy ? { xfwd: false } : {}), target, agent: isHttps ? proxyAgent : httpKeepAliveAgent, secure: false }, (err) => {
+        const upstream = getTarget(req.url) || bootstrapTarget(req.url);
+        const agent = upstream ? agentFor(upstream) : null;
+        if (upstream && agent !== null) {
+            const target = upstream.target;
+            proxy.ws(req, socket, head, { ...(trustsProxy ? { xfwd: false } : {}), target, agent: agent || undefined, ...tlsFor(agent) }, (err) => {
                 // Skip benign client-close noise (ECONNRESET/EPIPE), like the HTTP/SSE path; guard err deref.
                 if (err && err.code !== 'ECONNRESET' && err.code !== 'EPIPE') {
                     logger.error(`[Gateway] WebSocket Error [${target}]: ${err && err.message}`);

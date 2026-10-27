@@ -53,6 +53,7 @@ const Media = require('../models/Media');
 const Post = require('../models/Post');
 const config = require('../config/app');
 const egress = require('./egress-guard');
+const siteContext = require('./site-context');
 const { runContentMutation } = require('./content-outbox');
 const { fileTypeFromBuffer } = require('./file-type-detect');
 // isPlainSegment is the FORM gate a path segment must pass before it can become a path, and
@@ -164,6 +165,8 @@ const DEFAULT_MAX_FILE_BYTES = 50 * 1024 * 1024;
 /** Default ceiling for the whole run, so one WXR cannot fill the disk. */
 const DEFAULT_MAX_TOTAL_BYTES = 1024 * 1024 * 1024;
 const DEFAULT_TIMEOUT_MS = 30000;
+/** Absolute ceiling for one attachment (redirects included), whatever pace the server keeps. */
+const DEFAULT_DEADLINE_MS = 5 * 60 * 1000;
 const MAX_REDIRECTS = 5;
 /** Enough for every signature file-type recognises; also bounds what its parser can iterate over. */
 const MAGIC_BYTES = 4100;
@@ -188,6 +191,8 @@ interface MediaSettings {
     maxFileBytes: number;
     maxTotalBytes: number;
     timeoutMs: number;
+    /** Absolute ceiling for one attachment's fetch, redirects included (`timeoutMs` is the idle gap). */
+    deadlineMs: number;
 }
 
 /**
@@ -206,13 +211,29 @@ function isDevLoopback(u: URL, allowHttp: boolean): boolean {
     return (config.nodeEnv || process.env.NODE_ENV || 'production') !== 'production';
 }
 
-/** The address of an allowed private source host, or a thrown reason when it is one no opt-in opens. */
+/**
+ * May an import on THIS site download from the export's own host on a private network? Yes on the
+ * primary site (single-site installs, and the network's own site in multisite) and wherever the operator
+ * opted in with WORDJS_IMPORT_ALLOW_PRIVATE_SOURCE=1 — the same rule core/ai-provider applies to a
+ * private AI server. A secondary site's administrator cannot point the server at the network's hosts.
+ */
+function privateSourceAllowed(): boolean {
+    if (process.env.WORDJS_IMPORT_ALLOW_PRIVATE_SOURCE === '1') return true;
+    try { return siteContext.isPrimarySite(); } catch { return false; }
+}
+
+/**
+ * The address of an allowed private source host, or a thrown reason when it is one no opt-in opens.
+ *
+ * The opt-in opens the LAN, never this machine: loopback is judged on the NUMERIC address, so every
+ * spelling of it (127.0.0.0/8, ::1, ::ffff:127.0.0.1, a NAT64 or 6to4 wrapping of 127.x, 0.0.0.0) is
+ * refused, and so is every address no egress approval can open (link-local, metadata, multicast).
+ */
 async function resolvePrivateSource(hostname: string): Promise<string> {
     const net = require('net');
     const host = hostname.replace(/^\[|\]$/g, '');
     const ip = net.isIP(host) ? host : (await require('dns').promises.lookup(host, { verbatim: true })).address;
-    const loopback = /^127\./.test(ip) || ip === '::1';
-    if (loopback || egress.isNeverExemptIp(ip)) throw new Error(`refused: ${hostname} resolves to ${ip}, which no import may reach`);
+    if (egress.isLoopbackIp(ip) || egress.isNeverExemptIp(ip)) throw new Error(`refused: ${hostname} resolves to ${ip}, which no import may reach`);
     return ip;
 }
 
@@ -254,6 +275,11 @@ interface DownloadBudget {
     limit: number;
 }
 
+/** What one fetch reports besides its bytes: whether any hop was served by the private-source exemption. */
+interface FetchOrigin {
+    privateSource: boolean;
+}
+
 /**
  * Fetch one attachment. Rejects on an SSRF-blocked target, a non-2xx status, a body over `maxFileBytes`,
  * the run's total byte budget, a redirect loop, or a timeout — every one of which the caller records per
@@ -261,7 +287,9 @@ interface DownloadBudget {
  */
 async function fetchAttachment(
     rawUrl: string, settings: MediaSettings, budget: DownloadBudget, hops = 0,
+    origin: FetchOrigin = { privateSource: false }, deadline = Date.now() + settings.deadlineMs,
 ): Promise<Buffer> {
+    if (Date.now() >= deadline) throw new Error('download exceeded its time limit');
     const u = assertSaneAttachmentUrl(rawUrl, settings.allowHttp);
     const devLoopback = isDevLoopback(u, settings.allowHttp);
     // The administrator's opt-in for the export's own site on a private network: that host's address is
@@ -269,6 +297,7 @@ async function fetchAttachment(
     const privateIp = !devLoopback && settings.privateSourceHost && u.hostname.toLowerCase() === settings.privateSourceHost
         ? await resolvePrivateSource(u.hostname)
         : null;
+    if (privateIp) origin.privateSource = true;
     if (!devLoopback && !privateIp) {
         try {
             await egress.assertUrlAllowed(u.href); // throws on an internal/blocked target
@@ -300,7 +329,7 @@ async function fetchAttachment(
                 if (hops >= MAX_REDIRECTS) return reject(new Error('too many redirects'));
                 let next: string;
                 try { next = new URL(String(res.headers.location), u).href; } catch { return reject(new Error('invalid redirect target')); }
-                resolve(fetchAttachment(next, settings, budget, hops + 1));
+                resolve(fetchAttachment(next, settings, budget, hops + 1, origin, deadline));
                 return;
             }
             if (status < 200 || status >= 300) { res.destroy(); return reject(new Error(`HTTP ${status}`)); }
@@ -328,6 +357,16 @@ async function fetchAttachment(
         });
         req.on('error', reject);
         req.on('timeout', () => req.destroy(new Error('download timed out')));
+        // `timeout` is an IDLE timer: a server that trickles a byte just under it holds the import open
+        // indefinitely. The deadline bounds the whole fetch, redirects included, whatever the pace.
+        const overall = setTimeout(() => {
+            const err = new Error('download exceeded its time limit');
+            reject(err);
+            req.destroy(err);
+        }, Math.max(0, deadline - Date.now()));
+        overall.unref?.();
+        req.on('error', () => clearTimeout(overall));
+        req.on('response', (res: IncomingMessage) => res.on('close', () => clearTimeout(overall)));
         req.end();
     });
 }
@@ -354,8 +393,19 @@ async function detectHeadMime(head: Buffer): Promise<string | null> {
     }
 }
 
-async function magicByteProblem(body: Buffer, mimeType: string): Promise<string | null> {
+async function magicByteProblem(body: Buffer, mimeType: string, privateSource = false): Promise<string | null> {
     const head = body.subarray(0, MAGIC_BYTES);
+    if (privateSource) {
+        // From a host on a private network only a file whose bytes PROVE its declared kind is stored:
+        // text, JSON, CSV or markup carries no signature, so any internal page could pass for one. ASF is
+        // never handed to the parser (see routes/media.ts), so it cannot be proven and is refused too.
+        const asf = head.length >= ASF_GUID.length && head.subarray(0, ASF_GUID.length).equals(ASF_GUID);
+        const detected = asf ? null : await detectHeadMime(head);
+        if (!detected) return `content signature could not be verified for ${mimeType}, which a private-network source requires`;
+        if (!Media.isAllowedMimeType(detected)) return `content type ${detected} is not allowed`;
+        const sameKind = detected === mimeType || (!requiresSignature(mimeType) && detected.split('/')[0] === mimeType.split('/')[0]);
+        return sameKind ? null : `content type ${detected} does not match the declared ${mimeType}`;
+    }
     const unverified = requiresSignature(mimeType)
         ? `content signature could not be verified for ${mimeType}`
         : null;
@@ -561,11 +611,13 @@ function normalizeSettings(options: any): MediaSettings {
     return {
         mode,
         allowHttp: options?.allowHttp === true,
-        privateSourceHost: typeof options?.privateSourceHost === 'string' && options.privateSourceHost
+        // Enforced here as well as in the route, so no caller of core can widen it on a secondary site.
+        privateSourceHost: typeof options?.privateSourceHost === 'string' && options.privateSourceHost && privateSourceAllowed()
             ? String(options.privateSourceHost).toLowerCase() : null,
         maxFileBytes: positive(options?.maxFileBytes, DEFAULT_MAX_FILE_BYTES),
         maxTotalBytes: positive(options?.maxTotalBytes, DEFAULT_MAX_TOTAL_BYTES),
         timeoutMs: positive(options?.timeoutMs, DEFAULT_TIMEOUT_MS),
+        deadlineMs: positive(options?.deadlineMs, DEFAULT_DEADLINE_MS),
     };
 }
 
@@ -729,15 +781,16 @@ class MediaImporter {
         if (typeof placed === 'string') return this.fail(url, placed);
 
         let body: Buffer;
+        const origin: FetchOrigin = { privateSource: false };
         try {
-            body = await fetchAttachment(url, this.settings, this.budget);
+            body = await fetchAttachment(url, this.settings, this.budget, 0, origin);
         } catch (e: any) {
             return this.fail(url, e?.message || String(e));
         } finally {
             this.stats.fetchedBytes = this.budget.fetched;
         }
 
-        const problem = await magicByteProblem(body, placed.mimeType);
+        const problem = await magicByteProblem(body, placed.mimeType, origin.privateSource);
         if (problem) return this.fail(url, problem);
 
         // An SVG is markup a browser runs: it is stored only as the upload route's sanitizer leaves it.
@@ -990,4 +1043,7 @@ module.exports = {
     uploadPathOf,
     referencesPresentUpload,
     createMediaImporter,
+    privateSourceAllowed,
+    // Tests: the content check, driven directly with and without the private-source rule.
+    _magicByteProblem: magicByteProblem,
 };

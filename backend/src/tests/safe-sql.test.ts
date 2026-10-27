@@ -44,6 +44,7 @@ const path = require('path');
 
 const TMP_ROOT = fs.mkdtempSync(path.join(os.tmpdir(), 'wordjs-safe-sql-'));
 fs.mkdirSync(path.join(TMP_ROOT, 'themes'), { recursive: true });
+fs.mkdirSync(path.join(TMP_ROOT, 'plugins', 'import'), { recursive: true }); // the installed plugin whose wjp_import_* tables section D imports
 process.chdir(TMP_ROOT);
 
 const config = require('../config/app');

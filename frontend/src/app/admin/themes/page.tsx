@@ -1,11 +1,11 @@
 "use client";
 
 import { useEffect, useState, useRef } from "react";
-import { themesApi, themesMarketplaceApi, settingsApi, Theme, ThemeMarketplaceEntry, ThemePermissions } from "@/lib/api";
+import { themesApi, themesMarketplaceApi, settingsApi, Theme, ThemeMarketplaceEntry, ThemePermissions, MarketplaceSourceStatus, marketplaceSourceKey, marketplaceSourceKeysPayload, normMarketplaceSource } from "@/lib/api";
 import ThemePermissionsDialog from "./ThemePermissionsDialog";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
-import { PageHeader, Button, EmptyState } from "@/components/ui";
+import { PageHeader, Button, EmptyState, Input } from "@/components/ui";
 import CreateThemeDialog from "./CreateThemeDialog";
 import ThemeCheckDialog from "./ThemeCheckDialog";
 
@@ -37,6 +37,10 @@ export default function ThemesPage() {
     const [installingId, setInstallingId] = useState<string | null>(null);
     const [showSources, setShowSources] = useState(false);
     const [srcList, setSrcList] = useState<string[]>([]);
+    // Optional Ed25519 public key pinned per source (by the URL as listed); '' = none.
+    const [srcKeys, setSrcKeys] = useState<Record<string, string>>({});
+    // Per-source status of the last catalog read (count, signature, or the error of a refused source).
+    const [sourcesStatus, setSourcesStatus] = useState<MarketplaceSourceStatus[]>([]);
     const [defaultSrc, setDefaultSrc] = useState("");
     const [newSrc, setNewSrc] = useState("");
     const [savingSrc, setSavingSrc] = useState(false);
@@ -63,6 +67,7 @@ export default function ThemesPage() {
         try {
             const data = await themesMarketplaceApi.catalog(refresh);
             setMarket(data.themes || []);
+            setSourcesStatus(data.sources || []);
         } catch (error: any) {
             setMessage({ type: "error", text: error.message || t('themes.market.loadError') });
             setMarket([]);
@@ -76,7 +81,9 @@ export default function ThemesPage() {
         try {
             const s = await themesMarketplaceApi.getSources();
             setDefaultSrc(s.default);
-            setSrcList(s.usingDefault ? [s.default] : s.configured);
+            const list = s.usingDefault ? [s.default] : s.configured;
+            setSrcList(list);
+            setSrcKeys(Object.fromEntries(list.map((u) => [u, marketplaceSourceKey(s.keys, u)])));
         } catch (error: any) {
             setMessage({ type: "error", text: error.message || t('themes.sources.loadError') });
         }
@@ -96,8 +103,9 @@ export default function ThemesPage() {
     const saveSources = async () => {
         setSavingSrc(true);
         try {
-            const res = await themesMarketplaceApi.setSources(srcList);
+            const res = await themesMarketplaceApi.setSources(srcList, marketplaceSourceKeysPayload(srcList, srcKeys));
             setSrcList(res.configured);
+            setSrcKeys(Object.fromEntries(res.configured.map((u) => [u, marketplaceSourceKey(res.keys, u)])));
             setMessage({ type: "success", text: srcList.length ? t('themes.sources.saved') : t('themes.sources.savedEmpty') });
             setShowSources(false);
             await loadMarket(true);
@@ -406,17 +414,40 @@ export default function ThemesPage() {
                             <button type="button" onClick={() => setShowSources(false)} className="text-xs font-bold text-gray-400 hover:text-gray-700 uppercase tracking-widest">{t('common.close')}</button>
                         </div>
                         <p className="text-xs text-gray-400 mb-4">
-                            {t('themes.sources.description')}
+                            {t('themes.sources.description')} {t('themes.sources.publicKeyHelp')}
                         </p>
                         <div className="space-y-2 mb-4">
-                            {srcList.map((u, i) => (
-                                <div key={u} className="flex items-center gap-2 bg-gray-50 border border-gray-100 rounded-xl px-3 py-2">
-                                    <span className="text-[11px] font-mono text-gray-400 w-4 shrink-0">{i + 1}</span>
-                                    <span className="flex-1 font-mono text-[11px] text-gray-700 truncate" title={u}>{u}</span>
-                                    {u === defaultSrc && <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">default</span>}
-                                    <button type="button" onClick={() => setSrcList((l) => l.filter((x) => x !== u))} aria-label={t('themes.sources.remove')} className="w-7 h-7 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-rose-500 hover:border-rose-200 transition-colors shrink-0"><i className="fa-solid fa-trash-can text-[11px]"></i></button>
-                                </div>
-                            ))}
+                            {srcList.map((u, i) => {
+                                const st = sourcesStatus.find((s) => normMarketplaceSource(s.url) === normMarketplaceSource(u));
+                                return (
+                                    <div key={u} className="bg-gray-50 border border-gray-100 rounded-xl px-3 py-2 space-y-1.5">
+                                        <div className="flex items-center gap-2">
+                                            <span className="text-[11px] font-mono text-gray-400 w-4 shrink-0">{i + 1}</span>
+                                            <span className="flex-1 min-w-0 font-mono text-[11px] text-gray-700 truncate" title={u}>{u}</span>
+                                            {u === defaultSrc && <span className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-blue-50 text-blue-600 border border-blue-100 shrink-0">default</span>}
+                                            {st && (st.ok
+                                                ? (st.signature === 'verified'
+                                                    ? <span data-signature="verified" className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-600 border border-emerald-100 shrink-0"><i className="fa-solid fa-shield-halved mr-1"></i>{t('themes.sources.signatureVerified')}</span>
+                                                    : st.signature === 'unsigned' && <span data-signature="unsigned" className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-gray-100 text-gray-500 border border-gray-200 shrink-0">{t('themes.sources.signatureUnsigned')}</span>)
+                                                : <span title={st.error} className="text-[8px] font-black uppercase tracking-wider px-2 py-0.5 rounded-full bg-rose-50 text-rose-600 border border-rose-100 shrink-0">error</span>)}
+                                            <button type="button" onClick={() => setSrcList((l) => l.filter((x) => x !== u))} aria-label={t('themes.sources.remove')} className="w-7 h-7 rounded-lg bg-white border border-gray-200 text-gray-400 hover:text-rose-500 hover:border-rose-200 transition-colors shrink-0"><i className="fa-solid fa-trash-can text-[11px]"></i></button>
+                                        </div>
+                                        {st && !st.ok && st.error && <p className="pl-6 text-[11px] text-rose-600 break-words">{st.error}</p>}
+                                        <div className="pl-6">
+                                            <Input
+                                                size="sm"
+                                                className="font-mono"
+                                                value={srcKeys[u] || ""}
+                                                onChange={(e) => setSrcKeys((k) => ({ ...k, [u]: e.target.value }))}
+                                                placeholder={t('themes.sources.publicKey')}
+                                                aria-label={`${t('themes.sources.publicKey')} — ${u}`}
+                                                spellCheck={false}
+                                                autoComplete="off"
+                                            />
+                                        </div>
+                                    </div>
+                                );
+                            })}
                             {srcList.length === 0 && <div className="text-[11px] text-gray-400 italic px-1">{t('themes.sources.empty')}</div>}
                         </div>
                         <div className="flex items-center gap-2 mb-4">

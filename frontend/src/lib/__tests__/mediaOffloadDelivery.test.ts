@@ -3,14 +3,14 @@
  *
  *   1. THE CSP ORIGIN (frontend/media-csp.js). The page CSP is baked at build time; the custom servers
  *      add the configured media/CDN origin at response time — to img-src and media-src, and NOTHING
- *      else. Read from the header the REAL next.config.ts produces, through a real Node response.
+ *      else. Read from the policy the REAL src/proxy.ts writes (lib/contentSecurityPolicy), through a real Node response.
  *   2. THE DELIVERY REWRITE (lib/mediaDelivery). Content keeps relative /uploads paths; only the SSR
  *      copy of a page points at the CDN, and only real /uploads URLs (not fonts, not absolute URLs).
  */
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import http from 'node:http';
 import type { AddressInfo } from 'node:net';
-import nextConfig from '../../../next.config';
+import { contentSecurityPolicy } from '../contentSecurityPolicy';
 import { normalizeMediaBase, rewriteMediaString, rewriteMediaUrls, mediaBaseFromSettings } from '../mediaDelivery';
 import { refreshMediaCdnOrigin, publishMediaCdnOrigin } from '../server-api';
 import mediaCsp from '../../../media-csp.js';
@@ -22,10 +22,9 @@ const { withMediaOrigin, installMediaCsp, currentMediaOrigin, GLOBAL_KEY } = med
     GLOBAL_KEY: string;
 };
 
+/** The page policy src/proxy.ts writes on a public page (the one the custom servers then amend). */
 async function builtCsp(): Promise<string> {
-    const groups = await (nextConfig.headers as () => Promise<any[]>)();
-    const all = groups.find((g) => g.source === '/:path*');
-    return all.headers.find((h: any) => h.key === 'Content-Security-Policy').value;
+    return contentSecurityPolicy({});
 }
 const directives = (csp: string) => new Map(csp.split(';').map((d) => d.trim()).filter(Boolean).map((d) => {
     const [name, ...v] = d.split(/\s+/);

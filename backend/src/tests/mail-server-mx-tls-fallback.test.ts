@@ -94,16 +94,17 @@ const SUITE_HOOK = `
 ;module.exports.__mxTlsSuite = {
     deliverDirect,
     isTlsVerifyError,
-    install(mxHost, pinnedIp) {
+    install(mxHost, pinnedIp, ...more) {
         wordjs = { dns: { resolveMx: async () => [{ exchange: mxHost, priority: 10 }] } };
-        assertPublicHost = async () => [pinnedIp];
+        assertPublicHost = async () => [pinnedIp, ...more];
+        outboundFamilyHint = 4;
     },
 };`;
 
 const plugin: {
     deliverDirect: (...args: any[]) => Promise<any>;
     isTlsVerifyError: (e: any) => boolean;
-    install: (mxHost: string, pinnedIp: string) => void;
+    install: (mxHost: string, pinnedIp: string, ...more: string[]) => void;
 } = (() => {
     const moduleObj: any = { exports: {} };
     const requireShim = (spec: string) => {
@@ -419,4 +420,43 @@ test('a host that REFUSES STARTTLS with a reply (454) gets the message in plaint
     assert.ok(run.warnings.some((w) => /\[MailServer\]\[TLS\].*refused STARTTLS \(454\)/.test(w)), run.warnings.join('\n'));
     assert.strictEqual(srv.received.length, 1, 'delivered exactly once');
     assert.match(srv.received[0], /Subject: Hello/);
+});
+
+// --- An address family that cannot reach port 25 ------------------------------------------------
+// A VPS provider may filter or throttle outbound SMTP on IPv4 while IPv6 gets through (and the other way
+// round). The MX resolves to both: the unreachable address is followed by the same host over the other
+// family, and the family that worked is tried first from then on.
+
+test('an MX unreachable over IPv4 is delivered over its IPv6 address, which is then tried first', async (t) => {
+    const received: string[] = [];
+    const server = new SMTPServer({
+        key: VALID_LEAF.key, cert: VALID_LEAF.pem, authOptional: true, disabledCommands: ['AUTH'], logger: false, closeTimeout: 500,
+        onData(stream: any, _session: any, cb: (err?: Error) => void) {
+            let body = '';
+            stream.on('data', (d: Buffer) => { body += d.toString(); });
+            stream.on('end', () => { received.push(body); cb(); });
+        },
+    });
+    server.on('error', () => { /* see below */ });
+    const listening = await new Promise<boolean>((resolve) => {
+        server.server.once('error', () => resolve(false));
+        server.listen(0, '::1', () => resolve(true));
+    });
+    if (!listening) { t.skip('this runner has no IPv6 loopback'); return; }
+    closers.push(() => new Promise<void>((resolve) => server.close(() => resolve())));
+    try {
+        // The same port on 127.0.0.1 has no listener: a refused connect, like a filtered IPv4 path.
+        plugin.install(MX_HOST, '127.0.0.1', '::1');
+        const first = await deliver(server.server.address().port);
+        assert.strictEqual(first.error, null, first.error && first.error.message);
+        assert.deepStrictEqual(first.attempts.map((a) => a.host), ['127.0.0.1', '::1'], 'IPv4 first, then the same MX over IPv6');
+        assert.ok(first.warnings.some((w) => w.includes('unreachable at 127.0.0.1')), first.warnings.join('\n'));
+
+        const second = await deliver(server.server.address().port);
+        assert.strictEqual(second.error, null);
+        assert.deepStrictEqual(second.attempts.map((a) => a.host), ['::1'], 'the family that worked goes first');
+        assert.strictEqual(received.length, 2);
+    } finally {
+        plugin.install(MX_HOST, '127.0.0.1');
+    }
 });

@@ -220,16 +220,25 @@ describe('Admin → Servers', () => {
 });
 
 describe('Admin → Servers: ports forwarded to the backend node (QA X4-01)', () => {
-    test('the password is asked, the list reaches the gateway as typed, and the change is audited', async () => {
+    test('the password and a fresh code are asked, the list reaches the gateway as typed, and the change is audited', async () => {
         calls.length = 0;
-        const bad = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: 'nope', forwards: [] });
+        const bad = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: 'nope', forwards: [], mfaCode: freshCode() });
         assert.strictEqual(bad.status, 403);
-        assert.strictEqual(calls.length, 0);
-        const notList = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: PASSWORD, forwards: 'x' });
+        // Opening a public port takes the same step-up as admitting a node.
+        const noCode = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: PASSWORD, forwards: [{ port: 25, targetPort: 25 }] });
+        assert.strictEqual(noCode.status, 403);
+        assert.strictEqual(noCode.body.code, 'rest_mfa_step_up_required');
+        assert.strictEqual(calls.length, 0, 'a refused request reaches no gateway');
+        const notList = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: PASSWORD, forwards: 'x', mfaCode: freshCode() });
         assert.strictEqual(notList.status, 400);
-        const ok = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: PASSWORD, forwards: [{ port: 25, targetPort: 2525 }, { port: 587, targetPort: 2587, proxyProtocol: false }] });
+        // proxyProtocol is a boolean: "false" is truthy and is not a way to say off.
+        const strFlag = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: PASSWORD, forwards: [{ port: 25, targetPort: 25, proxyProtocol: 'false' }], mfaCode: freshCode() });
+        assert.strictEqual(strFlag.status, 400, JSON.stringify(strFlag.body));
+        assert.strictEqual(calls.length, 0);
+        const ok = await as('owner', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: PASSWORD, mfaCode: freshCode(), forwards: [{ port: 25, targetPort: 2525 }, { port: 587, targetPort: 2587, proxyProtocol: false }] });
         assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
-        assert.deepStrictEqual(calls, [{ method: 'POST', path: '/tcp-forwards', body: { forwards: [{ port: 25, targetPort: 2525, proxyProtocol: true }, { port: 587, targetPort: 2587, proxyProtocol: false }] } }]);
+        // No inbound SMTP listener on this node: no extra mail port is declared to the gateway.
+        assert.deepStrictEqual(calls, [{ method: 'POST', path: '/tcp-forwards', body: { forwards: [{ port: 25, targetPort: 2525, proxyProtocol: true }, { port: 587, targetPort: 2587, proxyProtocol: false }], mailPorts: [] } }]);
         assert.strictEqual(ok.body.forwards[0].listening, true);
         assert.strictEqual((await audit('cluster.forwards.set')).length, 1);
         assert.strictEqual((await as('writer', 'put', `${API}/system/cluster/forwards`).send({ currentPassword: PASSWORD, forwards: [] })).status, 403);

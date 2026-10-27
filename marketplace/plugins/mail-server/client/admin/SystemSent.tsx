@@ -109,7 +109,9 @@ function Detail({ id, t, locale, toast, onClose, onChanged, goQueue }: any) {
         setBusy(true);
         try {
             const r = await api(`/plugin/mail-server/admin/queue/${m.queue.id}/retry`, { method: 'POST' }) as any;
-            if (r && r.success) toast('success', t('read.delivered')); else toast('error', r?.message || t('read.stillFailing'));
+            if (r && r.waiting) toast('progress', t('read.retryWaiting'));
+            else if (r && r.pending) toast('progress', t('read.retryPending'));
+            else if (r && r.success) toast('success', t('read.delivered')); else toast('error', r?.message || t('read.stillFailing'));
             await load();
             onChanged();
         } catch (e: any) { toast('error', errorText(e, t)); }
@@ -129,7 +131,7 @@ function Detail({ id, t, locale, toast, onClose, onChanged, goQueue }: any) {
         <Sheet open={!!id} onClose={onClose} wide title={m ? (m.subject || t('srv.sys.noSubject')) : t('srv.sys.detail')}
             footer={m && m.queue ? (
                 <>
-                    <Button variant="ghost" icon="fa-solid fa-list" onClick={() => { onClose(); goQueue(); }}>{t('srv.sys.openQueue')}</Button>
+                    {m.queue.status === 'retry' && <Button variant="ghost" icon="fa-solid fa-list" onClick={() => { onClose(); goQueue(); }}>{t('srv.sys.openQueue')}</Button>}
                     <Button variant="primary" icon="fa-solid fa-paper-plane" loading={busy} onClick={retry}>{t('srv.sys.retry')}</Button>
                 </>
             ) : null}>

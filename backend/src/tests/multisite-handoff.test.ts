@@ -400,6 +400,24 @@ describe('redeeming a handoff (the target site)', () => {
             assert.strictEqual(reset.body.code, 'rest_network_handoff_account');
         });
 
+        test('nor delete it, nor rewrite it through a site import', async () => {
+            const me = await bearer('get', `${API}/auth/me`, TWO, session);
+            const id = me.body.id;
+            const del = await bearer('delete', `${API}/users/${id}`, TWO, tokens.two);
+            assert.strictEqual(del.status, 403, JSON.stringify(del.body));
+            assert.strictEqual(del.body.code, 'rest_network_handoff_account');
+            const data = { version: '1.0', content: { users: [
+                { id: 900, username: me.body.username, email: 'taken@two.example.com', displayName: 'Rewritten', role: 'subscriber' },
+            ] } };
+            const imp = await bearer('post', `${API}/import`, TWO, tokens.two).send({ data, updateExisting: true, importUsers: true });
+            assert.strictEqual(imp.status, 200, JSON.stringify(imp.body));
+            const row = await siteContext.runWithSite(siteTwo, () => database.getDbAsync().get('SELECT user_email, display_name FROM users WHERE id = ?', [id]));
+            assert.ok(row, 'the handoff account still exists');
+            assert.notStrictEqual(row.user_email, 'taken@two.example.com', 'the import rewrote the handoff account');
+            const role = await siteContext.runWithSite(siteTwo, () => database.getDbAsync().get(`SELECT meta_value FROM user_meta WHERE user_id = ? AND meta_key = 'role'`, [id]));
+            assert.strictEqual(role.meta_value, 'administrator');
+        });
+
         test('the account cannot sign in by password, even with the right one', async () => {
             const me = await bearer('get', `${API}/auth/me`, TWO, session);
             const id = me.body.id;

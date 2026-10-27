@@ -375,8 +375,7 @@ function subscriberStream<T>(
 }
 
 function hasCredential(req: Request): boolean {
-    const auth = (req.headers && req.headers.authorization) || '';
-    if (typeof auth === 'string' && auth.startsWith('Bearer ') && auth !== 'Bearer null' && auth !== 'Bearer undefined') return true;
+    try { if (require('../../middleware/auth').bearerToken(req)) return true; } catch { /* unreadable header: the cookie check below decides */ }
     try { return !!require('../../middleware/auth').SESSION_COOKIE && !!(req.cookies && req.cookies[require('../../middleware/auth').SESSION_COOKIE]); }
     catch { return false; }
 }

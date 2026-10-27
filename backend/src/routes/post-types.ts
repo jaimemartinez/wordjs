@@ -12,7 +12,10 @@ const {
     deleteCustomPostType, postTypeExists,
     getContentTypeSchema, getContentTypeSchemas, saveContentTypeSchema,
 } = require('../core/post-types');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, optionalAuth } = require('../middleware/auth');
+const {
+    capsFor, capsForType, isInternalPostType, readPolicyForType,
+} = require('../core/post-capabilities');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params.
@@ -28,6 +31,22 @@ const CONTENT_TYPE_NAME_RE = /^[a-z][a-z0-9_-]{0,31}$/;
  * with a 200. Refused up front, in both handlers, so the two cannot drift apart.
  */
 const TYPE_LIST_QUERY_FIELDS: readonly string[] = Object.freeze(['rest']);
+
+/**
+ * WHO MAY SEE A TYPE'S DEFINITION through the read routes below. A type whose published entries anyone
+ * may read (not internal, declared publicly readable — readPolicyForType) is public, schema included:
+ * the public site and headless clients render its entries. Any other type — an internal one, or one
+ * declared non-public (a store of form submissions, members' records) — describes data the public never
+ * sees, and its definition (fields, statuses, capability names) is shown only to who may edit its
+ * entries: the type's edit or edit_others capability. To everyone else it does not exist (the list
+ * leaves it out, the single routes answer 404).
+ */
+function canSeeTypeDefinition(user: any, name: string): boolean {
+    if (!isInternalPostType(name) && readPolicyForType(name).publiclyReadable) return true;
+    if (!user || typeof user.can !== 'function') return false;
+    const caps = capsForType(name) || capsFor('post');
+    return user.can(caps.edit) || user.can(caps.editOthers);
+}
 
 function validLegacyList(value: unknown): boolean {
     return value === undefined || (Array.isArray(value) && value.every((entry) => typeof entry === 'string'));
@@ -45,6 +64,7 @@ function validLegacyList(value: unknown): boolean {
  * /types:
  *   get:
  *     summary: List all post types
+ *     description: Types whose entries are not public are listed only to callers who may edit their entries.
  *     tags: [PostTypes]
  *     parameters:
  *       - in: query
@@ -56,11 +76,11 @@ function validLegacyList(value: unknown): boolean {
  *       200:
  *         description: List of post types
  */
-router.get('/', asyncHandler(async (req: Request, res: Response) => {
+router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     requireScalarQuery(req.query, TYPE_LIST_QUERY_FIELDS);
 
     const showInRest = req.query.rest !== 'false';
-    const types = getPostTypes({ showInRest });
+    const types = getPostTypes({ showInRest }).filter((t: any) => canSeeTypeDefinition(req.user, t.name));
 
     res.json(types.map((t: any) => ({
         name: t.name,
@@ -86,11 +106,11 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
  *       200:
  *         description: Declarative content schemas
  */
-router.get('/schemas', asyncHandler(async (req: Request, res: Response) => {
+router.get('/schemas', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     requireScalarQuery(req.query, TYPE_LIST_QUERY_FIELDS);
 
     const showInRest = req.query.rest !== 'false';
-    res.json(getContentTypeSchemas({ showInRest }));
+    res.json(getContentTypeSchemas({ showInRest }).filter((schema: any) => canSeeTypeDefinition(req.user, schema.name)));
 }));
 
 /**
@@ -109,11 +129,11 @@ router.get('/schemas', asyncHandler(async (req: Request, res: Response) => {
  *       200:
  *         description: Declarative content schema
  *       404:
- *         description: Content schema not found
+ *         description: Content schema not found, or one whose entries are not public and this caller may not edit
  */
-router.get('/:name/schema', asyncHandler(async (req: Request, res: Response) => {
+router.get('/:name/schema', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     const schema = getContentTypeSchema(req.params.name);
-    if (!schema) return res.status(404).json({ error: 'Content schema not found' });
+    if (!schema || !canSeeTypeDefinition(req.user, schema.name)) return res.status(404).json({ error: 'Content schema not found' });
     res.json(schema);
 }));
 
@@ -132,11 +152,13 @@ router.get('/:name/schema', asyncHandler(async (req: Request, res: Response) => 
  *     responses:
  *       200:
  *         description: Post type details
+ *       404:
+ *         description: Post type not found, or one whose entries are not public and this caller may not edit
  */
-router.get('/:name', asyncHandler(async (req: Request, res: Response) => {
+router.get('/:name', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     const type = getPostType(req.params.name);
 
-    if (!type) {
+    if (!type || !canSeeTypeDefinition(req.user, type.name)) {
         return res.status(404).json({ error: 'Post type not found' });
     }
 

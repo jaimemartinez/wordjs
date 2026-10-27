@@ -290,8 +290,9 @@ describe('the options bridge refuses the host\'s bookkeeping, under every spelli
                 assert.strictEqual(isProtectedOption(name), false, name);
             }
             await asPlugin(async () => {
-                await bridge().options.set('bookings_config', { slots: 3 });
-                assert.deepStrictEqual(await bridge().options.get('bookings_config'), { slots: 3 });
+                // A plugin writes its own options (named after its slug: the bridge's write allowlist).
+                await bridge().options.set('wjs_hb_probe_config', { slots: 3 });
+                assert.deepStrictEqual(await bridge().options.get('wjs_hb_probe_config'), { slots: 3 });
             });
         });
     });

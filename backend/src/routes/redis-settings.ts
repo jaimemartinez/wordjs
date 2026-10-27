@@ -20,7 +20,7 @@ const router = express.Router();
 const { authenticate, sessionOnly, accountAuthorityOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
-const { requireSudoPassword } = require('./users');
+const { requireSudoPassword, requireSudoConfirmation } = require('./users');
 const { recordAudit } = require('../core/audit');
 
 router.use(authenticate, isAdmin);
@@ -158,7 +158,7 @@ router.get('/', (req: Request, res: Response) => {
  * /system/redis/test:
  *   post:
  *     summary: Try a connection to a Redis server without saving it
- *     description: Opens one connection, sends PING and closes it (3 s at most). An omitted password uses the stored one. Answers which of refused, timeout, auth, notfound or failed went wrong - never the server's own error text.
+ *     description: Opens one connection, sends PING and closes it (3 s at most). An omitted password uses the stored one - for another host, port or database than the stored ones only with the administrator's currentPassword (403 rest_sudo_required without it). Answers which of refused, timeout, auth, notfound or failed went wrong - never the server's own error text.
  *     tags: [System]
  *     security:
  *       - bearerAuth: []
@@ -177,6 +177,9 @@ router.get('/', (req: Request, res: Response) => {
  *                 type: integer
  *               password:
  *                 type: string
+ *               currentPassword:
+ *                 type: string
+ *                 description: The administrator's own password; needed only to test another server with the stored password.
  *     responses:
  *       200:
  *         description: "{ ok, reason? }"
@@ -191,7 +194,15 @@ router.post('/test', sessionOnly, accountAuthorityOnly, asyncHandler(async (req:
     const target = { ...t.value };
     if (target.password === undefined) {
         const file = fileRedis();
-        target.password = file && file.password ? String(file.password) : undefined;
+        if (file && file.password) {
+            // The stored password is reused only for the server it belongs to. Testing ANOTHER host, port
+            // or database with it would send the stored secret wherever the form points, so that needs the
+            // administrator's own password first (or the password typed into the form).
+            const sameServer = String(file.host || '127.0.0.1') === target.host
+                && (Number(file.port) || 6379) === target.port && (Number(file.db) || 0) === target.db;
+            if (!sameServer && await requireSudoConfirmation(req, res)) return;
+            target.password = String(file.password);
+        }
     }
     res.set('Cache-Control', 'no-store');
     res.json(await tryConnection(target));

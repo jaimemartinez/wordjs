@@ -600,6 +600,10 @@ const CHROME_STRINGS: Tri[] = [
     { es: "No pudimos cargar esta publicación. Para no sobrescribir su contenido, el editor no se abrirá. Reintenta cuando tengas conexión.", en: "We couldn't load this post. To avoid overwriting its content, the editor won't open. Retry when you're back online.", pt: "Não foi possível carregar esta publicação. Para não sobrescrever seu conteúdo, o editor não será aberto. Tente novamente quando tiver conexão." },
     { es: "Reintentar", en: "Retry", pt: "Tentar novamente" },
     { es: "Volver", en: "Go back", pt: "Voltar" },
+    // Editor screen for an entry in the trash (the server refuses edits until it is restored)
+    { es: "Este contenido está en la papelera", en: "This entry is in the trash", pt: "Este conteúdo está na lixeira" },
+    { es: "Restáuralo para poder editarlo. Volverá al estado que tenía antes de enviarlo a la papelera.", en: "Restore it to edit it. It will go back to the status it had before it was trashed.", pt: "Restaure-o para poder editá-lo. Ele voltará ao status que tinha antes de ir para a lixeira." },
+    { es: "No se pudo restaurar el contenido.", en: "The entry could not be restored.", pt: "Não foi possível restaurar o conteúdo." },
     { es: "No se pudo cargar el contenido; el guardado está deshabilitado para no sobrescribir la página.", en: "Could not load the content; saving is disabled to avoid overwriting the page.", pt: "Não foi possível carregar o conteúdo; o salvamento está desativado para não sobrescrever a página." },
     { es: "No se pudo cargar el contenido; el guardado está deshabilitado para no sobrescribir la publicación.", en: "Could not load the content; saving is disabled to avoid overwriting the post.", pt: "Não foi possível carregar o conteúdo; o salvamento está desativado para não sobrescrever a publicação." },
     // A11y audit panel chrome

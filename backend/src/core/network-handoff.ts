@@ -33,8 +33,8 @@
  *   · it has a random password nobody knows and an address under the reserved `.invalid` domain, and it
  *     can never sign in by itself: the password sign-in refuses it, and a session for it that does not
  *     carry the `hof` claim of a live handoff is no session (handoffSessionRefusal);
- *   · nothing may change it but the handoff: the site's administrators cannot edit it or reset its
- *     second factor (they may delete it; the next handoff creates it again), and a handoff session
+ *   · nothing may change it but the handoff: the site's administrators cannot edit it, reset its
+ *     second factor, delete it or rewrite it through a site import, and a handoff session
  *     cannot mint credentials that would outlive it (API tokens, agent connections, two-factor
  *     enrolment, a profile write of its own account) — refuseHandoffSession;
  *   · its role is set back to administrator on every handoff.
@@ -298,7 +298,7 @@ function refuseHandoffSession(req: Request, res: Response, next: NextFunction) {
 function refuseHandoffAccountTarget(res: Response) {
     return res.status(403).json({
         code: 'rest_network_handoff_account',
-        message: 'This account belongs to a network administrator\'s handoff and is managed by the network. It can only be deleted.',
+        message: 'This account belongs to a network administrator\'s handoff and is managed by the network.',
         data: { status: 403 },
     });
 }

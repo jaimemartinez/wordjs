@@ -223,6 +223,29 @@ export function routeIdOrNull(value: unknown): number | null {
 }
 
 /**
+ * THE SAME CONTRACT FOR AN ID THAT ARRIVES IN A REQUEST BODY (a comment's `post` and `parent`, a form's
+ * `pageId`, a category's or menu item's `parent`, a media folder). JSON gives it as a number or a string,
+ * so both are accepted — a number only when it is an integer in the id range, a string only when it is
+ * a route id (surrounding spaces ignored). Anything else, `9999999999` included, is `null`: the caller
+ * answers its own 400/404 instead of letting the value reach Postgres as an out-of-range integer.
+ */
+export function bodyId(value: unknown): number | null {
+    if (typeof value === 'number') return Number.isInteger(value) && value >= 1 && value <= MAX_ROUTE_ID ? value : null;
+    return typeof value === 'string' ? routeIdOrNull(value.trim()) : null;
+}
+
+/**
+ * May `value` name a row at all? The models' findById methods ask it first, so an id no column can hold
+ * answers "no such row" on every engine instead of an error on Postgres — whichever route forgot to ask.
+ */
+export function isStorableId(value: unknown): boolean {
+    return bodyId(value) !== null;
+}
+
+/** The largest id any id column holds (32-bit signed). */
+export const MAX_ID = MAX_ROUTE_ID;
+
+/**
  * An express `router.param()` handler enforcing the contract above for one parameter name.
  *
  * Register it once per router, next to the router's other declarations:

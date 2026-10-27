@@ -24,6 +24,234 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - The schema migrations that build unique indexes stay pending, and run again at every boot, until their index
   exists. Sign-in, password reset and other lookups by login or email refuse a value two accounts share.
 
+### Fixed
+- **mail-server 3.3.6: the server overview counts mail on PostgreSQL and MySQL, and keeps itself current.**
+  - **«Received» and «Sent · last 14 days» and the traffic chart read 0 on PostgreSQL and MySQL.** Those databases
+    return dates as date values, not text, so every message was left out. They now count.
+  - **The overview figures and the queue counter on the tab** update every 20 seconds while the page is open, on
+    every tab change, and after «Retry now» or «Stop». Before, they only changed after a reload.
+  - **The queue's sending order on PostgreSQL and MySQL** is by due time again, not by message number.
+
+## [2.11.14] - 2026-10-26
+
+### Added
+- **mail-server 3.3.5: the relay as a backup, and direct delivery that backs off.** On a server whose provider
+  limits outgoing port 25 (Hostinger allows 5 a minute), a failed delivery to Gmail tried every mail server over
+  IPv4 and IPv6: up to 10 connections per message, enough to keep the limit engaged.
+  - **A delivery stops after two mail servers of the recipient gave no reply at all.** Direct delivery then
+    pauses for 5 minutes. Messages that would go out during the pause wait in the queue without spending a retry
+    attempt, and *Configuration* shows the pause and when it ends.
+  - **«Use the relay»** in the relay settings has two choices:
+    - **«Always»** works as before: all outgoing mail goes through the relay.
+    - **«Only when direct delivery fails»** delivers straight to the recipients' servers and sends a message
+      through the relay when they give no answer or while direct delivery is paused.
+
+## [2.11.13] - 2026-10-26
+
+### Security
+- **Plugin boundary hardening.**
+  - **Plugin DDL runs under the plugin's own database user.** On PostgreSQL the plugin's role now owns its tables
+    and runs its `CREATE`/`ALTER`/`DROP` itself; on MySQL/MariaDB the plugin's user is granted exactly the objects
+    the statement names, just before it runs. Views and triggers a plugin creates run with the plugin's rights. When
+    the site's database user cannot create per-plugin users, **Site Health** now says which plugins fall back to the
+    SQL checks alone and what right to grant.
+  - **Stricter plugin SQL checks.** Every name in a target list (`DROP TABLE a, b`, multi-table `UPDATE`/`DELETE`),
+    the table a trigger is attached to, and the tables a `CREATE TABLE` copies or extends (`LIKE`, `INHERITS`,
+    `PARTITION OF`) must belong to the plugin. `DROP` takes one object and no `CASCADE`; `DEFINER`, `SQL SECURITY`,
+    `OWNER TO`, `SET SCHEMA`, tablespaces, data directories, non-InnoDB engines and trigger routines are refused.
+    **SQL comments (`--`, `/* */`, `#`) are no longer accepted in plugin SQL.** The MySQL and PostgreSQL drivers'
+    own comment scanners now follow their engine (`#` and `-- ` on MySQL, nested block comments on PostgreSQL).
+  - **Plugin options are written by allowlist.** With `settings:write` a plugin writes only options named after its
+    slug (`photo-carousel` → `photo_carousel_…`); `mail_domain` and `mail_delivery_ready` are written only by a
+    plugin holding `email:provider`. The record of options a plugin created can no longer hold a site setting.
+    photo-carousel 2.1.3, card-gallery 1.0.4, video-gallery 1.1.2 and mail-server 3.3.4 keep their options under
+    their own names and carry over what earlier versions stored.
+  - **A theme's tables are claimed under its real prefix** (`wjp_theme_<name>_`) from boot.
+  - **Reserved plugin slugs.** `core`, `theme` / `theme-*` (in any spelling that normalizes to it) and anything
+    starting with `@` can no longer be installed, uploaded or loaded as a plugin.
+  - **Plugin shortcode output is sanitized on the server** with the same allow-list as widget output (plus inert
+    `role`, `aria-*`, `tabindex` and image `loading`/`decoding`).
+  - **Re-uploading a plugin asks about the data a previous uninstall kept.** When `data/` or the plugin's tables are
+    still there, the upload (and a fresh marketplace install) answers 409 `existing_plugin_data` and the admin panel
+    asks: keep and reconnect them, or discard them and start clean.
+  - **Marketplace installs.** A fresh install must install as the catalog entry's slug; installing an older version
+    over a newer one needs `allowDowngrade: true`. Catalogs can be signed with Ed25519 (a detached `<index>.sig`):
+    the official catalog is checked against a key embedded in WordJS once it is configured, and an administrator can
+    pin a public key per source in the sources editor, which also shows whether each catalog is signed.
+  - **Plugin multipart routes bound their text fields** (count, size, name size, parts and header pairs), not only
+    the uploaded file.
+  - **Theme style values.** CSS escapes are refused; a value that references a token may only use the usual value
+    functions; `image-set()` / `cross-fade()` must use `url()`; and a `url()` must resolve under the theme's own
+    `/themes/<slug>/` folder, percent-encoded dot segments included.
+  - **Plugin yes/no flags are strict booleans.** `DELETE /api/v1/plugins/:slug` accepts `dropData` and
+    `POST /api/v1/plugins/:slug/permissions` accepts `network` only as `true` or `false` (absent = the default);
+    any other value is answered 400 and changes nothing.
+
+## [2.11.12] - 2026-10-26
+
+### Security
+- **Cluster hardening: the gateway, its control plane and the frontend's Content-Security-Policy.**
+  - **Each upstream must prove the role it serves.** The gateway now checks that an upstream's cluster certificate
+    names the role that owns the route (backend for `/api`, frontend for pages), with one connection pool per role,
+    for proxied requests, WebSockets, health checks and cache purges alike.
+  - **No loopback fallback after a node has registered.** The pre-install route to the services on the gateway's own
+    machine is used only until each role registers once; after that, a node that stops answering gets a 503.
+  - **Registered targets are checked in one canonical form.** A target URL is reduced to its origin before any check,
+    ownership compares the listener (every loopback spelling, either scheme), a loopback target is accepted only from
+    a node on the gateway machine, and a node on another machine must register an HTTPS target.
+  - **Multisite relays need proof.** The gateway takes a frontend node's `X-Forwarded-Host` only together with a
+    proof derived from the cluster's revalidate secret, which the frontend now sends with its server-side reads.
+  - **The gateway secret goes to backend nodes only**, and the unused `/api/internal/gateway-update` hook is removed
+    from the backend.
+  - **TCP forwards reach mail ports only** (25, 110, 143, 465, 587, 993, 995, 2525, 4190, or the port the backend's
+    inbound SMTP listener holds), changing them asks for the two-factor code of an account that has one, and
+    `tcpForwardBind` in `gateway-config.json` can narrow them to one address.
+  - **CSP.** The frontend writes its Content-Security-Policy per request (`src/proxy.ts`). The admin, the
+    sign-in screens, install, migration and portals get a fresh nonce with `'strict-dynamic'` and no
+    `'unsafe-inline'`. The public pages stay on ISR and keep `'unsafe-inline'`, but `script-src` no longer allows
+    every https host — only the origins active plugins declare (new optional `origins` on
+    `wordjs.assets.enqueueScript`; analytics-tag 1.1.0 declares its configured provider). Every document adds
+    `form-action 'self'` and `script-src-attr 'none'`; the backend's and the gateway's own policies no longer
+    allow inline script (their pages carry none).
+  - **Certificate and cluster switches are booleans.** `staging`, `enabled` and `sslEnabled` (Security → SSL and
+    automatic renewal), the gateway's own `sslEnabled`, and a TCP forward's `proxyProtocol` accept `true`/`false` or
+    nothing, and answer 400 otherwise; `renewBeforeDays` is a whole number from 1 to 60.
+  - **Forwarded headers.** The gateway no longer forwards hop-by-hop request headers (the fixed set and every
+    header `Connection` names; an upgrade keeps only `Connection: upgrade` and `Upgrade`), the gateway and the
+    monolith drop a client's `x-wordjs-site-route`, and the multisite rewrite never matches `/_next/` assets or
+    `/favicon.ico`. Proxied calls no longer pass `secure: false`; only the pre-install bootstrap without a cluster
+    identity skips verification.
+
+### Fixed
+- **mail-server 3.3.3: the queue fits a phone.** A delivery error with an address glued to a colon («name@gmail.com:
+  Direct delivery … Connection timeout») could not wrap, and widened *Email Center → Server → Queue* past the screen on a
+  phone. Such errors now wrap inside their card, in the queue and on a message in *Sent*, and the queue's buttons wrap
+  under the message when there is no room beside it.
+- **The inbound mail listener reports the server's IPv6 addresses too.** A mail plugin runs sandboxed and cannot
+  list the network interfaces, so it relies on the addresses WordJS reports with the listener status. Those were
+  IPv4 only. Now the global IPv6 addresses travel with them, so mail-server's DNS tab lists and checks the IPv6
+  address mail also leaves from. Link-local, private (ULA) and documentation addresses are left out.
+- **mail-server 3.3.2: direct delivery tries the other IP family when one cannot reach the recipient's server.**
+  Some VPS providers filter or rate-limit outgoing port 25 on IPv4 while IPv6 still works, or the reverse. Each
+  delivery waited out a connection timeout on every mail server of the recipient and then gave up with
+  «Connection timeout».
+  - **When an address does not answer**, the message is sent to the same mail server over its other address
+    (IPv6 or IPv4).
+  - **The family that got through is tried first** for the following messages, so they no longer wait for the
+    timeout.
+  - **When a server refuses IPv6 senders it cannot verify** (no reverse DNS, as Gmail does), the message is
+    tried over IPv4 before it counts as failed.
+  - **The DNS tab covers every public address mail leaves from, IPv4 and IPv6.**
+    - **Records:** it proposes an AAAA record for the mail host when the server has a public IPv6, and an SPF
+      value that names both addresses.
+    - **Checks:** for each address, it checks that the mail host points to it, that the SPF authorizes it, and
+      that the name the server announces (HELO) resolves back to it.
+    - **Reverse DNS (PTR):** WordJS cannot look it up, so it is shown per address, with the exact value to ask
+      the hosting provider for.
+
+## [2.11.11] - 2026-10-26
+
+### Fixed
+- **mail-server 3.3.1: a slow destination no longer restarts the mail server.** WordJS gives an isolated plugin
+  30 seconds to answer, and stops it when it takes longer. Delivering straight to a mail server that does not
+  answer can take minutes, so «Retry now» answered «Isolated plugin error» and the mail server was restarted
+  in the middle of the delivery. A site message cut off that way (an account e-mail, a plugin's mail, a
+  notification) stayed «queued» in *System sent*, did not appear in the queue and was never retried.
+  - **«Retry now»** (in *Queue*, *System sent* and a message in *Sent*) answers within 10 seconds. A delivery
+    still running then goes on in the background, the message shows as retrying, and its status updates by
+    itself. A second click while it runs starts nothing. If that delivery never reports back, the queue
+    retries the message 15 minutes later.
+  - **Sending from the mailbox** with the undo window off, **the delivery test** and **site mail** answer within
+    20 seconds. Site mail is reported as accepted and is delivered in the background. The test says the
+    recipient's server has not answered yet, and its result appears on the test message in *Sent*.
+  - **Site messages stuck as «queued»**, whose first delivery was cut off between 15 minutes and 3 days ago, go
+    back to the queue by themselves.
+  - **The queue lists only what is still waiting to go out:** scheduled sends and retries. A permanent failure
+    stays in *System sent* (status «Failed») and on its message in *Sent*, and it is retried from there. The
+    queue figure on the overview and the tab counter count only scheduled sends and retries.
+
+## [2.11.10] - 2026-10-26
+
+### Security
+- **Untrusted input, downloads and the updater, hardened.**
+  - **URLs in shortcodes.** `escUrl` percent-encodes quotes, angle brackets and backticks in every scheme, and the
+    `[embed]`, `[button]`, `[audio]` and `[video]` shortcodes escape each URL for its attribute. Media sources accept
+    `http(s)` only.
+  - **SVG uploads and imports.** URL attributes (`href`, `xlink:href`) are scheme-checked explicitly, `style` keeps
+    presentation properties with plain values or a same-document `url(#id)`, `<image>` no longer accepts `data:`
+    URLs, and camelCase SVG elements (`linearGradient`, `clipPath`, filters) are kept instead of being dropped.
+  - **WordPress import, private source.** "Allow downloads from this site's private address" is offered and honoured
+    on the primary site only (or anywhere with `WORDJS_IMPORT_ALLOW_PRIVATE_SOURCE=1`; elsewhere `403
+    private_source_not_allowed`). Loopback is refused in every numeric spelling, and from a private source only files
+    whose content signature confirms their type are stored.
+  - **Download deadlines.** WordPress-import attachments (`deadlineMs`, default 5 minutes) and marketplace downloads
+    (2 minutes) now have an absolute time limit besides the idle timeout; the update check closes its socket at 10 s.
+  - **Inbound SMTP (`smtp:inbound`).** The host listener reserves every in-progress message from one in-flight byte
+    budget and answers `452` when it is spent; one client address may hold a limited number of connections (`421`
+    beyond it). New listen options: `maxInflightBytes`, `maxClientsPerIp`.
+  - **Admin → Updates.** The panel runs the upgrade CLI shipped inside the installed release with the server's own
+    Node binary and no shell, instead of fetching `create-wordjs@latest`, and refuses a release that publishes no
+    checksum (`409 update_unverified_release`, shown on the screen). The supervisor's rollback does the same.
+  - **`create-wordjs`.** A release without a checksum is refused unless `--allow-unverified` is passed. The release
+    workflow signs the checksum file (`wordjs-<tag>.zip.sha256.sig`, Ed25519) when its signing key is configured, and
+    the CLI verifies a published signature against the public keys embedded in the package.
+  - **Site import.** Custom tables are limited to the `wjp_<slug>_` tables of plugins and themes installed on the
+    site; the export carries plugin and theme tables only.
+  - **Egress guard.** `198.18.0.0/15` and the local-use NAT64 prefix `64:ff9b:1::/48` are treated as internal.
+  - **Removed** the unused JSON-LD and meta-tag builders from `core/seo-helper` (the frontend renders structured
+    data with its own escaping).
+  - **Author ids and names.** Every `id` in post, comment and block HTML is namespaced as `user-content-<id>` (stored
+    by the backend, applied again by both frontend sanitizer paths), and `name` survives only on form controls, so
+    author markup cannot shadow properties the page relies on. In-page links to the plain fragment (`#intro`) still
+    land on the prefixed target.
+  - **Embeds.** Every embedded `<iframe>` gets the site's own `sandbox` and `allow` values, replacing the author's.
+  - **WordPress import.** Entities in text nodes are decoded (titles and attachment URLs come out as WordPress showed
+    them); a file with a `<!DOCTYPE` is refused; a form option sent more than once is refused with `400
+    rest_invalid_param`.
+  - **Multipart limits.** Every upload route (site import, fonts, WordPress import, plugins, themes, media, GraphQL)
+    bounds field count, field and field-name size, parts and header pairs.
+  - **Inbound SMTP.** No reverse-DNS lookup per connection (`clientHostname` is the address literal), a 5-second
+    shutdown grace and a cap on unauthenticated commands.
+
+### Added
+- **conference-manager 2.36.21: rename a locality.** The pencil next to its name on the «Localidades» card edits it in
+  place (Enter saves, Escape cancels). An empty name, or one another locality of the conference already has, is
+  refused with the reason; the new name also reaches that locality's registrations.
+
+## [2.11.9] - 2026-10-26
+
+### Security
+- **Content authorization follows the record it touches.**
+  - **A trashed entry is read-only until it is restored.** Editing it in place (content, meta, language,
+    translations, a revision restore, live collaboration) answers 409 `rest_post_trashed`, and the post and page
+    editors show a «Restore» screen instead of the editor. Deleting a trashed entry for good, or restoring it, is
+    judged by the status it had before the trash. GraphQL's `restoreContent` now goes through
+    `POST /posts/:id/restore`, like the admin, and applies a requested `status` afterwards with an ordinary update.
+  - **Comment moderation is scoped to the entry.** Holding `moderate_comments` / `edit_comments` lets a role
+    moderate the comments of the entries it may edit. The moderation list and its totals, the single-comment read
+    and every moderation action follow that rule, and a comment edit by a role without `moderate_comments` no
+    longer returns the commenter's e-mail and IP.
+  - **`GET /media/:id/usage`** follows the item's read rule and counts only the entries the caller may read.
+  - **Revision history** is read by the people who work on the entry: its author while they still hold the
+    type's edit capability, or whoever edits others' entries of that type.
+  - **`/types`** shows the definition of a type whose entries are not public only to callers who may edit them.
+- **Request bodies are checked before they are used.**
+  - **Ids in a body** (a comment's post and parent, a form's page, a post's parent and menu order, media
+    folders and the media moved into them, a category's or menu item's parent) must be ids an id column can hold;
+    anything else is a 400/404 instead of a database error. The models' lookups by id answer "not found" for such
+    a value.
+  - **`POST /roles`** takes a text name and a list of at most 500 capability names; the capabilities list
+    ignores a malformed role stored earlier.
+  - **`PUT /comments/:id`** normalizes the author and email like a new comment, and answers 400 for an unknown
+    status.
+  - **`PUT /menus/items/:itemId`** writes only a menu item's own fields, each checked, and a menu location must
+    be a name.
+  - **A webhook's `active`** must be `true` or `false`, and a new taxonomy's `public`, `showInRest` and
+    `showInMenu` are always stored as booleans.
+- **Multisite.** `/health/details` and `/health/site` on the main site take a network administrator. A network
+  administrator's handoff account on a site can no longer be deleted by the site's administrators or rewritten by a
+  site import; the network manages it.
+
 ## [2.11.8] - 2026-10-26
 
 ### Added
@@ -47,6 +275,41 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   - **One approximate time per group.** «Mi inscripción» now says «Grupo C · hacia las 12:15», the start of the
     group's turn rounded to 5 minutes, instead of an exact «Tu turno: 12:10–12:25». The exact range no longer
     reaches the phone.
+
+### Security
+- **Sign-in, sessions and two-factor authentication hardened.**
+  - **One reading of the `Authorization` header.** The two-factor policy, every authenticator, the AI-agent
+    endpoint and its rate-limit bucket now read the Bearer credential through one shared function, and the policy
+    for API tokens and agent connections is also checked inside the authenticators that accept them.
+  - **Signing out lasts.** A signed-out session stays revoked for a full session lifetime, including copies of it
+    refreshed earlier.
+  - **The live notification stream is re-checked** while it is open, like the collaboration stream: signing out,
+    «sign out everywhere», a password change, a revoked API token, a deleted account or a two-factor requirement
+    closes it. Query tickets carry the session they were issued from.
+  - **Confirming authority over privileged accounts.** Creating an administrator (or an account with a role that
+    manages users, roles or settings), promoting an account into such a role, changing another privileged account's
+    password or address, and resetting anyone's two-factor authentication now ask for your password, plus a current
+    code when your account has 2FA. The admin shows the fields when they are needed; one confirmation covers a
+    bulk role change for a few minutes.
+  - **Stored connection secrets stay with their server.** Testing Redis or S3 media storage against another
+    server, port, database, endpoint, region or bucket with the saved password or secret asks for your password.
+  - **AI agents.** Turning off «require a person to confirm what agents publish» follows the same two-factor rule
+    as granting an agent, and granting an agent is refused to the sessions that cannot create one.
+  - **Passwords and recovery.** The current-password check always uses your own account. Changing a password (or
+    an administrator changing someone's address) cancels a reset link already sent. Password recovery and sign-up
+    with email verification answer at a fixed pace. The code used to turn on two-factor authentication is spent.
+    Expired pending registrations are all pruned.
+  - **Password length is measured the way it is stored.** A new password may be at most 72 bytes (accented
+    letters count as 2, emoji as 4) on every screen and endpoint that sets one; the forms say so before sending.
+    Signing in with an existing password is unchanged.
+  - **Settings and inputs.** «Anyone can register», «require email verification» and the two comment e-mail
+    switches are stored as on/off and read the same way everywhere; any other value is refused. API-token and
+    agent lifetimes are whole days from 1 to 3650. Display names are plain text, trimmed, at most 250 characters.
+  - **Single use means single use.** A password-reset link and a two-factor sign-in challenge are each consumed
+    atomically, so concurrent requests cannot both use them.
+  - **Rate limits and secrets at rest.** The sign-in, registration/recovery and installer rate limits keep
+    counting on each server while Redis is unavailable. The audit digest of unknown sign-in names uses its own
+    derived key. Two-factor backup codes are stored salted and slow-hashed; codes created before keep working.
 
 ### Fixed
 - **GraphQL, streams and health probes: tighter resource bounds.**

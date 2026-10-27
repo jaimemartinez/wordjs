@@ -48,7 +48,7 @@ const ROUTE_TABLE = [
     ['/api/v1/posts', true],
     ['/api/v1/auth/login', true],
     ['/api', true],
-    ['/api/internal/gateway-update', true],   // CONTESTED: the backend mounts it for real (see below)
+    ['/api/internal/gateway-update', true],   // the backend's prefix; retired on both sides (see below)
     ['/api/revalidate', false],               // NEXT owns it — the on-demand purge receiver
     ['/api/revalidate/', false],
     ['/api/revalidateXYZ', true],             // segment boundary: not the Next route
@@ -264,14 +264,14 @@ test('every ADVERTISED prefix is claimed by all three dispatchers (population, n
     }
 });
 
-test('the contested route is contested for a REASON: the backend mounts it too', () => {
-    // /api/internal/gateway-update exists in BOTH trees (backend/src/index.ts mounts /api/internal,
-    // and frontend/src/app/api/internal/gateway-update/route.ts exists). Exempting it would take a
-    // live, secret-gated backend endpoint away from the backend. Pinning the fact here so the next
-    // person to touch the list meets the collision instead of discovering it in production.
+test('the retired /api/internal hook is served by nobody, and still routed to the backend', () => {
+    // /api/internal/gateway-update used to exist in BOTH trees. Both are gone: the backend mounts no
+    // /api/internal router and no Next route handler lives there. Every dispatcher keeps sending the
+    // path to the backend (its prefix), which answers 404 — never to a Next handler re-created later.
     const backendIndex = fs.readFileSync(path.join(REPO_ROOT, 'backend', 'src', 'index.ts'), 'utf8');
-    assert.match(backendIndex, /app\.use\('\/api\/internal'/, 'the backend still mounts /api/internal');
-    assert.ok(frontendProxy.CONTESTED_API_PATHS.includes('/api/internal/gateway-update'));
+    assert.doesNotMatch(backendIndex, /app\.use\(\s*['"`]\/api\/internal/, 'the backend mounts /api/internal again');
+    assert.deepStrictEqual(frontendProxy.CONTESTED_API_PATHS, []);
+    assert.strictEqual(fs.existsSync(path.join(REPO_ROOT, 'frontend', 'src', 'app', 'api', 'internal')), false);
     for (const decide of Object.values(dispatchers)) {
         assert.strictEqual(decide('/api/internal/gateway-update'), true);
     }

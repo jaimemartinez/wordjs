@@ -6,6 +6,7 @@ import { authApi } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import { apiErrorText } from "@/lib/apiErrorText";
 import { Button, IconButton, Input } from "@/components/ui";
+import { passwordTooLong } from "@/lib/passwordRules";
 
 // Public, unauthenticated. Two modes on one page:
 //   • No token in the URL  → "request a reset link" form (enter username/email → POST forgot-password).
@@ -63,6 +64,7 @@ function ResetPasswordInner() {
         e.preventDefault();
         setError("");
         if (password.length < 8) { setError(t("apiError.msg.passwordTooShort")); return; }
+        if (passwordTooLong(password)) { setError(t("password.tooLong")); return; }
         if (password !== confirm) { setError(t("reset.mismatch")); return; }
         setLoading(true);
         try {

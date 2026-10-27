@@ -7,7 +7,8 @@ const express = require('express');
 const log = require('../core/module-logger').moduleLogger('routes/notifications');
 const router = express.Router();
 const notificationService = require('../core/notifications');
-const { authenticate, authenticateAllowQuery } = require('../middleware/auth');
+const { authenticate, authenticateAllowQuery, streamRevalidator } = require('../middleware/auth');
+const { AsyncResource } = require('async_hooks');
 // These routes are reachable by ANY signed-in user, subscribers included, so a bare `e.message`
 // here published the database driver's text to the least-privileged account in the CMS.
 const { publicErrorText } = require('../middleware/errorHandler');
@@ -84,6 +85,10 @@ const { publicErrorText } = require('../middleware/errorHandler');
  */
 /** Seconds a refused stream is told to wait (429 Retry-After). */
 const STREAM_RETRY_AFTER_SECONDS = 30;
+/** How often an open stream re-checks the credential that opened it, on top of the event-driven checks. */
+const STREAM_REAUTH_INTERVAL_MS = 30 * 1000;
+/** How long a re-check may stay inconclusive (the store cannot be read) before the stream is closed anyway. */
+const STREAM_REAUTH_GRACE_MS = 2 * 60 * 1000;
 
 router.get('/stream', authenticateAllowQuery, (req: Request, res: Response) => {
     const startTime = Date.now();
@@ -139,10 +144,54 @@ router.get('/stream', authenticateAllowQuery, (req: Request, res: Response) => {
         }
     }, 5000); // Reduced from 30s to 5s
 
+    // RE-AUTHORIZATION. The route's auth ran once, at open time, and the stream can live for hours; every
+    // fact that ends a credential (sign-out, sign-out everywhere, password change or reset, a revoked API
+    // token, a deleted account, a 2FA obligation, the session's own expiry) must end the stream as well.
+    // Checked periodically and, through notificationService.recheck, as soon as such a fact is recorded.
+    // Bound to this request's async context, so a check triggered from another request still reads this
+    // stream's site.
+    const revalidate = streamRevalidator(req);
+    let ended = false;
+    let checking = false;
+    let inconclusiveSince = 0;
+    const endStream = () => {
+        if (ended) return;
+        ended = true;
+        clearInterval(keepAlive);
+        clearInterval(reauthTimer);
+        log.info(`[SSE] 🔒 Stream for User ${req.user.id} closed: its credential is no longer accepted`);
+        try { res.write(`event: error
+data: ${JSON.stringify({ error: 'unauthorized' })}
+
+`); } catch { /* closing anyway */ }
+        try { res.end(); } catch { /* already closed */ }
+        notificationService.removeClient(req.user.id, res);
+    };
+    const reauthorize = AsyncResource.bind(async () => {
+        if (ended || checking) return;
+        checking = true;
+        try {
+            const ok = await revalidate();
+            inconclusiveSince = 0;
+            if (!ok) endStream();
+        } catch (e) {
+            if (!inconclusiveSince) inconclusiveSince = Date.now();
+            log.warn({ err: e }, `[SSE] re-authorization of User ${req.user.id}'s stream was inconclusive`);
+            if (Date.now() - inconclusiveSince >= STREAM_REAUTH_GRACE_MS) endStream();
+        } finally {
+            checking = false;
+        }
+    });
+    (res as any)._wordjs_reauthorize = reauthorize;
+    const reauthTimer = setInterval(() => { void reauthorize(); }, STREAM_REAUTH_INTERVAL_MS);
+    if (typeof reauthTimer.unref === 'function') reauthTimer.unref();
+
     req.on('close', () => {
         const duration = (Date.now() - startTime) / 1000;
         log.info({ duration }, `[SSE] 🛑 Stream Closed for User ${req.user.id} after ${duration}s`);
+        ended = true;
         clearInterval(keepAlive);
+        clearInterval(reauthTimer);
         notificationService.removeClient(req.user.id, res);
     });
 });

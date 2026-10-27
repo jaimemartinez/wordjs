@@ -160,6 +160,16 @@ async function checkDatabase(): Promise<HealthCheck[]> {
         if (!fts) out.push({ id: 'database.search', group: 'database', status: 'warn', title: 'Search index', message: 'The full-text search index is missing, so search is slower and does not ignore accents. Restart WordJS to build it.' });
     }
     if (driver === 'postgres' || driver === 'mysql') {
+        // Each plugin's queries — its DDL included — run under its own database user, so the database itself
+        // keeps it to its own tables. When that user could not be created (the site's database user lacks
+        // CREATE ROLE / CREATE USER or GRANT OPTION), the plugin falls back to the SQL guard alone.
+        const missing = require('./plugin-db-isolation').degradedPrincipals();
+        if (missing.length) {
+            const plugins = missing.map((m: any) => m.slug).join(', ');
+            out.push(check('database.pluginIsolation', 'database', 'warn', 'missing', 'Plugin database isolation',
+                `These plugins run without their own database user, so only WordJS's SQL checks keep them to their own tables: ${plugins}. Give the database user WordJS connects with the right to create users (Postgres: CREATEROLE; MySQL/MariaDB: CREATE USER and GRANT OPTION) and restart WordJS.`,
+                { plugins }));
+        }
         const tool = driver === 'postgres' ? 'pg_dump' : 'mysqldump';
         const available = await require('./db-dump').isToolAvailable(tool);
         out.push(available
