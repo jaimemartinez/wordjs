@@ -1389,7 +1389,7 @@ function buildSecretAclScript(): string {
     const script = [
         "$ErrorActionPreference='Continue'",
         "$paths = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:WJS_AC_DIRS_B64)) -split \"`n\" | Where-Object { $_.Length -gt 0 }",
-        "$groups = @('S-1-15-2-1', 'S-1-15-2-2')",
+        `$groups = @(${ALL_APP_PACKAGES.map((g) => `'${g}'`).join(', ')})`,
         "function Exposed($p) {",
         "  try { $rules = @((Get-Acl -LiteralPath $p).GetAccessRules($true, $true, [System.Security.Principal.SecurityIdentifier])) } catch { return $true }",
         "  foreach ($g in $groups) {",
@@ -1406,7 +1406,7 @@ function buildSecretAclScript(): string {
         // Inherited entries become explicit copies on this path, then both groups' entries are removed;
         // Windows re-propagates the result to everything below that inherits from it.
         "    $null = & icacls $p /inheritance:d /C /Q",
-        "    $null = & icacls $p /remove:g *S-1-15-2-1 *S-1-15-2-2 /C /Q",
+        `    $null = & icacls $p /remove:g ${ALL_APP_PACKAGES.map((g) => `*${g}`).join(' ')} /C /Q`,
         "    if (-not (Exposed $p)) { Write-Output ('PROTECTED ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($p))); continue }",
         "  }",
         "  Write-Output ('EXPOSED ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($p)))",
@@ -1440,7 +1440,7 @@ async function protectSecretsFromAllAppContainers(appRoot: string, protect: bool
     const protectedPaths = lines.filter((l) => l.startsWith('PROTECTED ')).map((l) => decode(l.slice(10))).filter(Boolean);
     const exposed = lines.filter((l) => l.startsWith('EXPOSED ')).map((l) => decode(l.slice(8))).filter(Boolean);
     if (protectedPaths.length) log.warn({ count: protectedPaths.length }, `[Sandbox] ${protectedPaths.length} secret path(s) of this install were readable by every AppContainer (ALL APPLICATION PACKAGES); the entries of both application-package groups were removed from them.`);
-    if (exposed.length) log.warn({ count: exposed.length }, `[Sandbox] ${exposed.length} secret path(s) of this install are readable by every AppContainer and this account cannot change their ACL. Run once, elevated, for each: icacls "<path>" /inheritance:d, then icacls "<path>" /remove:g *S-1-15-2-1 *S-1-15-2-2`);
+    if (exposed.length) log.warn({ count: exposed.length }, `[Sandbox] ${exposed.length} secret path(s) of this install are readable by every AppContainer and this account cannot change their ACL. Run once, elevated, for each: icacls "<path>" /inheritance:d, then icacls "<path>" /remove:g ${ALL_APP_PACKAGES.map((g) => `*${g}`).join(' ')}`);
     return (secretExposure = { checked: true, protectedPaths, exposed });
 }
 
@@ -1902,6 +1902,7 @@ module.exports = {
     legacyProfileNameForPlugin,
     canonicalInstallRoot,
     secretPathsFor,
+    __buildSecretAclScript: buildSecretAclScript,
     protectSecretsFromAllAppContainers,
     readNetworkIsolationPolicy,
     applyNetworkIsolationPolicy,

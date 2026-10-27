@@ -120,6 +120,24 @@ test('the code and manifest are fingerprinted: a changed file refuses the launch
     fs.rmSync(root, { recursive: true, force: true });
 });
 
+test('a file is hashed through one descriptor, and one swapped after its lstat is not hashed at all', () => {
+    const root = tmpRoot();
+    try {
+        const a = path.join(root, 'index.js');
+        fs.writeFileSync(a, 'module.exports = 1;');
+        const seen = fs.lstatSync(a);
+        assert.match(String(integrity.__hashRegularFile(a, seen)), /^[0-9a-f]{64}$/);
+        // Replaced by another file (a new inode) between the walk's lstat and the open.
+        fs.rmSync(a);
+        fs.writeFileSync(a, 'module.exports = 2; // longer');
+        assert.strictEqual(integrity.__hashRegularFile(a, seen), null);
+        // Replaced by a directory.
+        fs.rmSync(a);
+        fs.mkdirSync(a);
+        assert.strictEqual(integrity.__hashRegularFile(a, seen), null);
+    } finally { fs.rmSync(root, { recursive: true, force: true }); }
+});
+
 test('a network permission may name its TCP ports, and only valid ones', () => {
     assert.deepStrictEqual(validateManifestPermissions([{ scope: 'network', ports: [25, 587] }]), []);
     assert.strictEqual(validateManifestPermissions([{ scope: 'network', ports: [0] }]).length, 1);

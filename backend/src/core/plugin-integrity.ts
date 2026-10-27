@@ -24,6 +24,23 @@ function recordFile(appRoot: string, slug: string): string {
     return pathi.join(pathi.resolve(appRoot), 'data', 'sandbox', 'plugin-integrity', `${storageKey(slug)}.json`);
 }
 
+/**
+ * SHA-256 of the regular file `a` that `st` (its lstat) described, read through ONE descriptor. Null when
+ * what was opened is not that file any more: another type, or another inode or size than the lstat saw.
+ */
+function hashRegularFile(a: string, st: any): string | null {
+    const noFollow = (fsi.constants && fsi.constants.O_NOFOLLOW) || 0;
+    let fd: number;
+    try { fd = fsi.openSync(a, fsi.constants.O_RDONLY | noFollow); } catch { return null; }
+    try {
+        const now = fsi.fstatSync(fd);
+        if (!now.isFile() || now.ino !== st.ino || now.dev !== st.dev || now.size !== st.size) return null;
+        return cryptoi.createHash('sha256').update(fsi.readFileSync(fd)).digest('hex');
+    } catch { return null; } finally {
+        try { fsi.closeSync(fd); } catch { /* */ }
+    }
+}
+
 /** SHA-256 over the code directory: every regular file (and link target) except the top-level `data`. */
 function digestCodeDir(dir: string): { digest: string; files: number } {
     const entries: string[] = [];
@@ -45,8 +62,9 @@ function digestCodeDir(dir: string): { digest: string; files: number } {
                 entries.push(`D\0${r}`);
                 walk(a, r, depth + 1);
             } else if (st.isFile()) {
-                const h = cryptoi.createHash('sha256').update(fsi.readFileSync(a)).digest('hex');
-                entries.push(`F\0${r}\0${st.size}\0${h}`);
+                const h = hashRegularFile(a, st);
+                // A file swapped between the lstat and the open never matches a recorded digest.
+                entries.push(h === null ? `X\0${r}` : `F\0${r}\0${st.size}\0${h}`);
             }
         }
     };
@@ -109,4 +127,4 @@ function listIntegrityMismatches(): string[] {
     return Array.from(mismatches.keys());
 }
 
-module.exports = { digestCodeDir, verifyPluginIntegrity, acceptPluginIntegrity, forgetPluginIntegrity, listIntegrityMismatches, __devRun: devRun };
+module.exports = { digestCodeDir, verifyPluginIntegrity, acceptPluginIntegrity, forgetPluginIntegrity, listIntegrityMismatches, __devRun: devRun, __hashRegularFile: hashRegularFile };

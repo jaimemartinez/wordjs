@@ -40,9 +40,11 @@ test('the probe protects the secrets first and requires an install-root canary t
     assert.ok(protect < probe.indexOf('launchInAppContainer({'), 'the secrets are protected before any contained launch');
     assert.match(src, /const secretDenied = !secretCanary \|\| verdict\.secret === 'EPERM' \|\| verdict\.secret === 'EACCES';/);
     assert.match(src, /if \(!netDenied \|\| !readDenied \|\| !execDenied \|\| !canWork \|\| !secretDenied\)/);
-    assert.match(src, /" {4}\$null = & icacls \$p \/inheritance:d \/C \/Q",\s+" {4}\$null = & icacls \$p \/remove:g \*S-1-15-2-1 \*S-1-15-2-2 \/C \/Q",/,
+    const script = String(sw.__buildSecretAclScript());
+    assert.match(script, /\$groups = @\('S-1-15-2-1', 'S-1-15-2-2'\)/);
+    assert.match(script, / {4}\$null = & icacls \$p \/inheritance:d \/C \/Q\n {4}\$null = & icacls \$p \/remove:g \*S-1-15-2-1 \*S-1-15-2-2 \/C \/Q\n/,
         'the two groups\' entries are removed: a deny entry for them is not honoured by the AppContainer check');
-    assert.doesNotMatch(src, /\/deny \\"\*S-1-15-2-1/, 'and no deny entry is relied on');
+    assert.doesNotMatch(script, /\/deny/, 'and no deny entry is relied on');
     assert.match(String(sw.__probeChildSource), /WJS_PROBE_SECRET/);
 });
 
