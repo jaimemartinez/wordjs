@@ -45,6 +45,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **mail-server 3.3.7:** declares the SMTP ports it uses (25, 465, 587 and 2525), and a relay on another port is
   explained in the console.
 
+## [2.11.16] - 2026-10-27
+
+### Fixed
+- **Audit log external copy.** «Send now» answers only once the entries written while a delivery was already
+  running have been sent too. On a multisite network each site keeps its own delivery status and retry timer.
+
 ## [2.11.15] - 2026-10-27
 
 ### Added

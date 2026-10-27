@@ -96,12 +96,24 @@ async function saveConfig(next: ExportConfig, secret?: string | null): Promise<v
         const { dbAsync } = require('../config/database');
         const head = await dbAsync.get('SELECT MAX(chain_seq) AS s FROM audit_log');
         await setCursor(head && head.s ? Number(head.s) : 0);
-        state.lastError = null;
+        slot().state.lastError = null;
     }
 }
 
 type State = { lastAttemptAt: number | null; lastSuccessAt: number | null; lastError: string | null; delivered: number };
-const state: State = { lastAttemptAt: null, lastSuccessAt: null, lastError: null, delivered: 0 };
+/** Everything the exporter keeps in memory, per site: each site has its own receiver, cursor and backoff. */
+type Slot = { state: State; flushing: Promise<number> | null; again: Promise<number> | null; timer: any; retryDelay: number };
+const slots = new Map<string, Slot>();
+function slot(): Slot {
+    let key = 'none';
+    try { key = String(require('./site-context').currentSiteIdOrNull() ?? 'none'); } catch { /* single site */ }
+    let s = slots.get(key);
+    if (!s) {
+        s = { state: { lastAttemptAt: null, lastSuccessAt: null, lastError: null, delivered: 0 }, flushing: null, again: null, timer: null, retryDelay: 30_000 };
+        slots.set(key, s);
+    }
+    return s;
+}
 
 /** The site's own address (the per-site `siteurl` option), so a receiver shared by several sites can tell them apart. */
 async function siteLabel(): Promise<string> {
@@ -203,12 +215,21 @@ async function send(c: ExportConfig, events: any[]): Promise<void> {
     if (c.mode === 'webhook') return sendWebhook(c, events, await getSecret());
 }
 
-let flushing: Promise<number> | null = null;
-
-/** Deliver every sealed row past the cursor. Never throws; returns how many rows were delivered. */
+/**
+ * Deliver every sealed row past the cursor. Never throws; returns how many rows were delivered.
+ * A caller that arrives while a pass is running gets that pass plus ONE more after it, so a row sealed
+ * after the running pass read its batch is delivered before this call resolves.
+ */
 async function flushExport(): Promise<number> {
-    if (flushing) return flushing;
-    flushing = (async () => {
+    const sl = slot();
+    if (sl.flushing) {
+        const running = sl.flushing;
+        if (!sl.again) sl.again = running.then(() => { sl.again = null; return flushExport(); });
+        const again = sl.again;
+        return running.then((a) => again.then((b) => a + b));
+    }
+    const { state } = sl;
+    sl.flushing = (async () => {
         let delivered = 0;
         try {
             const c = await getConfig();
@@ -237,12 +258,9 @@ async function flushExport(): Promise<number> {
             scheduleRetry();
         }
         return delivered;
-    })().finally(() => { flushing = null; });
-    return flushing;
+    })().finally(() => { sl.flushing = null; });
+    return sl.flushing;
 }
-
-let timer: any = null;
-let retryDelay = 30_000;
 
 function withSite(fn: () => any) {
     const sc = require('./site-context');
@@ -252,18 +270,20 @@ function withSite(fn: () => any) {
 
 /** Ask for a delivery soon (coalesced). Called after every sealing pass. */
 function scheduleFlush(): void {
-    if (timer) return;
-    const run = withSite(() => { timer = null; return flushExport().then((n) => { if (n) retryDelay = 30_000; }); });
-    timer = setTimeout(run, 250);
-    if (timer.unref) timer.unref();
+    const sl = slot();
+    if (sl.timer) return;
+    const run = withSite(() => { sl.timer = null; return flushExport().then((n) => { if (n) sl.retryDelay = 30_000; }); });
+    sl.timer = setTimeout(run, 250);
+    if (sl.timer.unref) sl.timer.unref();
 }
 
 function scheduleRetry(): void {
-    if (timer) return;
-    const run = withSite(() => { timer = null; return flushExport(); });
-    timer = setTimeout(run, retryDelay);
-    if (timer.unref) timer.unref();
-    retryDelay = Math.min(retryDelay * 2, 10 * 60_000);
+    const sl = slot();
+    if (sl.timer) return;
+    const run = withSite(() => { sl.timer = null; return flushExport(); });
+    sl.timer = setTimeout(run, sl.retryDelay);
+    if (sl.timer.unref) sl.timer.unref();
+    sl.retryDelay = Math.min(sl.retryDelay * 2, 10 * 60_000);
 }
 
 /** Send one test event through a saved config, without touching the cursor. */
@@ -286,6 +306,7 @@ async function exportStatus() {
         behind = r ? Number(r.c) || 0 : 0;
         oldestUndeliveredAt = behind && r ? require('./audit-chain').canonicalTs(r.oldest) || null : null;
     }
+    const { state } = slot();
     return {
         config: c, hasSecret: !!(await getSecret()), cursor, behind, oldestUndeliveredAt,
         lastAttemptAt: state.lastAttemptAt ? new Date(state.lastAttemptAt).toISOString() : null,
