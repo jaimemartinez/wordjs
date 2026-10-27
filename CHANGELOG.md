@@ -11,6 +11,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   with the conference's totals: assigned places (the sum of every locality's cupo), registered, places still
   available and localities without a limit. Editing a participant, the grouping field («Grupo familiar») now lists
   the groups of the person's locality, with who is in each, as the coordinator's portal does.
+- **Home-screen icon for installable plugin portals.** A portal sub-page's `app` may name an `icon`: a PNG in the
+  plugin's `public/` folder. "Add to home screen" then shows it, from the web app manifest and the page's
+  `apple-touch-icon`. Portals without one are unchanged.
 
 ## [2.11.18] - 2026-10-27
 

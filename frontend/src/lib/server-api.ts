@@ -531,6 +531,8 @@ export interface PortalAppInfo {
     description?: string;
     backgroundColor?: string;
     themeColor?: string;
+    /** Public URL of the home-screen icon (a PNG under the plugin's public/ folder, 512x512). */
+    icon?: string;
 }
 export interface PortalSubPageInfo {
     title?: string;

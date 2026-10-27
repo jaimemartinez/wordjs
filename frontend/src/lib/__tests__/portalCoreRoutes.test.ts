@@ -110,6 +110,21 @@ describe("/portal/<slug>/app.webmanifest", () => {
             expect(r.status, page).toBe(404);
         }
     });
+
+    it("lists the app's icon at both home-screen sizes; without one the manifest is unchanged", async () => {
+        const app = { name: "Red de cuidado", themeColor: "#111827" };
+        portals.red = { slug: "red", pages: { yo: { app }, mi: { app: { ...app, icon: "/plugins/red-de-cuidado/public/icon-512.png" } } } };
+        const { GET } = await import("../../app/portal/[slug]/app.webmanifest/route");
+        const plain = await GET(new Request("http://site/portal/red/app.webmanifest?page=yo"), params("red"));
+        expect(await plain.text()).toBe(
+            '{"name":"Red de cuidado","short_name":"Red de cuidado","scope":"/portal/red/yo","start_url":"/portal/red/yo","display":"standalone","theme_color":"#111827"}',
+        );
+        const withIcon = await (await GET(new Request("http://site/portal/red/app.webmanifest?page=mi"), params("red"))).json();
+        expect(withIcon.icons).toEqual([
+            { src: "/plugins/red-de-cuidado/public/icon-512.png", sizes: "192x192", type: "image/png", purpose: "any maskable" },
+            { src: "/plugins/red-de-cuidado/public/icon-512.png", sizes: "512x512", type: "image/png", purpose: "any maskable" },
+        ]);
+    });
 });
 
 describe("the <head> of a portal sub-page", () => {
@@ -132,10 +147,21 @@ describe("the <head> of a portal sub-page", () => {
         expect(yo.robots).toMatchObject({ index: false, follow: false, nocache: true });
         expect(yo.manifest).toBe("/portal/conference/app.webmanifest?page=yo");
         expect(yo.appleWebApp).toMatchObject({ capable: true, title: "Yo" });
+        expect(yo.icons).toBeUndefined();
         const badge = await meta(["badge"]);
         expect(badge.title).toBe("Escarapela");
         expect(badge.manifest).toBeUndefined();
         expect((await meta(["constructor"])).title).toBe("Portal de coordinadores");
+        vi.doUnmock("../../app/portal/[slug]/[[...path]]/PluginPortal");
+    });
+
+    it("an installable sub-page with an icon links it as apple-touch-icon", async () => {
+        vi.doMock("../../app/portal/[slug]/[[...path]]/PluginPortal", () => ({ default: () => null }));
+        portals.red = { slug: "red", pages: { yo: { app: { name: "Red de cuidado", icon: "/plugins/red-de-cuidado/public/icon-512.png" } } } };
+        const { generateMetadata } = await import("../../app/portal/[slug]/[[...path]]/page");
+        const yo = await generateMetadata({ params: Promise.resolve({ slug: "red", path: ["yo"] }) });
+        expect(yo.icons).toEqual({ apple: "/plugins/red-de-cuidado/public/icon-512.png" });
+        expect((await generateMetadata({ params: Promise.resolve({ slug: "red", path: undefined }) })).icons).toBeUndefined();
         vi.doUnmock("../../app/portal/[slug]/[[...path]]/PluginPortal");
     });
 });
