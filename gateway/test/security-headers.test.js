@@ -48,7 +48,7 @@ test('gateway CSP mirrors the backend policy shape (Next-tolerant, no unsafe-eva
 
     // The exact directives the backend sets (backend/src/index.ts). If these drift the admin breaks.
     assert.match(csp, /default-src 'self'/, 'default-src self');
-    assert.match(csp, /script-src 'self' 'unsafe-inline'/, "script-src allows unsafe-inline for the Next bootstrap");
+    assert.match(csp, /script-src 'self'(;|$)/, "script-src is 'self' alone: the gateway's own pages carry no script");
     assert.match(csp, /style-src 'self' 'unsafe-inline' https:\/\/fonts\.googleapis\.com/, 'style-src');
     assert.match(csp, /font-src 'self' https:\/\/fonts\.gstatic\.com data:/, 'font-src');
     assert.match(csp, /object-src 'none'/, 'object-src none');
@@ -76,9 +76,11 @@ test("script-src does NOT allow 'unsafe-eval' (removed; must not creep back)", a
     assert.ok(scriptSrc, 'script-src must be present (it must not fall back to default-src)');
     assert.ok(!scriptSrc.includes("'unsafe-eval'"), `script-src must not allow 'unsafe-eval': ${scriptSrc.join(' ')}`);
 
-    // …and the reason it is safe to be absent: nothing here needed it once Puck was retired. The value
-    // that DOES have to stay is 'unsafe-inline' (Next bootstrap) — assert it so this test cannot be
-    // "fixed" by emptying script-src altogether.
-    assert.ok(scriptSrc.includes("'unsafe-inline'"), "script-src must still allow 'unsafe-inline' for the Next bootstrap");
+    // No inline script either: the pages the gateway writes itself carry none (asserted below), and a
+    // proxied page writes its own policy last. 'self' stays, so this cannot be "fixed" by emptying it.
+    assert.ok(!scriptSrc.includes("'unsafe-inline'"), "script-src must not allow 'unsafe-inline'");
     assert.ok(scriptSrc.includes("'self'"), "script-src must still allow 'self'");
+    const src = ['upstream-down.js', 'host-edge.js', 'index.js']
+        .map((f) => require('node:fs').readFileSync(require('node:path').join(__dirname, '..', 'src', f), 'utf8')).join('\n');
+    assert.doesNotMatch(src, /<script[\s>]/i, 'a page the gateway writes itself carries no <script>');
 });

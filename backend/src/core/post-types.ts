@@ -288,13 +288,13 @@ function registerTaxonomy(name: string, args: Record<string, any> = {}) {
             ...args.labels
         },
         description: args.description || '',
-        public: args.public !== false,
-        showInMenu: args.showInMenu !== false,
-        showInRest: args.showInRest !== false,
         rewrite: args.rewrite || { slug: name },
         ...args,
         // Re-applied after the spread so normalization always wins (a caller cannot smuggle a
-        // non-boolean hierarchical or a non-array postTypes through the trailing ...args spread).
+        // non-boolean flag or a non-array postTypes through the trailing ...args spread).
+        public: args.public !== false,
+        showInMenu: args.showInMenu !== false,
+        showInRest: args.showInRest !== false,
         hierarchical: args.hierarchical === true,
         postTypes: postTypesList
     };

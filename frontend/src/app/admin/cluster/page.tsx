@@ -93,7 +93,7 @@ export default function ClusterPage() {
         finally { setBusy(null); }
     };
 
-    /** Replace the forwarded ports (password only, like revoking: nothing new is admitted to the cluster). */
+    /** Replace the forwarded ports (password, and the two-factor code of an account that has one). */
     const saveForwards = async () => {
         if (!forwardDraft) return;
         if (!password) { addToast(t("network.passwordRequired"), "error"); return; }
@@ -101,9 +101,10 @@ export default function ClusterPage() {
         try {
             const r = await apiPut<{ forwards: Forward[] }>("/system/cluster/forwards", {
                 currentPassword: password,
+                ...stepUp(),
                 forwards: forwardDraft.map((f) => ({ port: Number(f.port), targetPort: Number(f.targetPort), proxyProtocol: f.proxyProtocol })),
             });
-            setPassword("");
+            setPassword(""); setCode("");
             setForwardDraft(null);
             const failed = r.forwards.filter((f) => !f.listening);
             addToast(failed.length ? t("cluster.forwardsSavedWithErrors").replace("{n}", String(failed.length)) : t("cluster.forwardsSaved"), failed.length ? "warning" : "success");

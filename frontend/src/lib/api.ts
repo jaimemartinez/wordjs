@@ -786,8 +786,11 @@ export const usersApi = {
         return apiGetPaged<User[]>(`/users?${params.toString()}`);
     },
     get: (id: number) => apiGet<User>(`/users/${id}`),
-    create: (data: UserWrite & { password: string }) => apiPost<User>("/users", data),
-    update: (id: number, data: UserWrite & { currentPassword?: string }) => apiPut<User>(`/users/${id}`, data),
+    // `currentPassword` / `mfaCode`: the step-up the server asks for (403 rest_sudo_required, then
+    // rest_mfa_step_up_required) before it creates a privileged account, promotes one, or changes another
+    // privileged account's password or address — see components/MfaStepUp.
+    create: (data: UserWrite & { password: string; currentPassword?: string; mfaCode?: string }) => apiPost<User>("/users", data),
+    update: (id: number, data: UserWrite & { currentPassword?: string; mfaCode?: string }) => apiPut<User>(`/users/${id}`, data),
     /** What the user screen renders as plugin toggles (edit_users only). */
     accountCapabilities: () => apiGet<AccountCapabilityDeclaration[]>("/users/account-capabilities"),
     // Self-service update for the logged-in user (any role). Changing the password OR either recovery
@@ -1011,6 +1014,8 @@ export interface MarketplaceEntry {
     requiresWordjs?: string | null;
     minWordjs?: string | null;
     currentWordjs?: string;
+    /** Whether the catalog index this entry came from carried a verified Ed25519 signature. */
+    catalogSignature?: MarketplaceSignature;
 }
 
 /** What POST /marketplace/adopt answers on success: the update result plus what changed hands. */
@@ -1034,14 +1039,38 @@ export interface MarketplaceSourceStatus {
     count?: number;
     added?: number;
     error?: string;
+    /** Present on a loaded source (ok true). A refused signature is reported as ok false + error instead. */
+    signature?: MarketplaceSignature;
 }
 
-export type MarketplaceSources = { configured: string[]; default: string; usingDefault: boolean };
+export type MarketplaceSignature = 'verified' | 'unsigned';
+
+/**
+ * `keys`: the Ed25519 public key pinned per source URL (base64 or PEM). The server keys the map by the
+ * normalized URL (trailing slashes dropped, lowercased) — look a row up with marketplaceSourceKey().
+ * Optional: an older backend does not send it.
+ */
+export type MarketplaceSources = { configured: string[]; default: string; usingDefault: boolean; keys?: Record<string, string> };
+
+/** The server's normalization of a source URL (core/plugin-origins normSource). */
+export const normMarketplaceSource = (u: string) => String(u || '').replace(/\/+$/, '').toLowerCase();
+
+/** The pinned key of `url` in a GET/PUT /sources answer, or '' when none. */
+export const marketplaceSourceKey = (keys: Record<string, string> | undefined, url: string): string =>
+    (keys && keys[normMarketplaceSource(url)]) || '';
+
+/**
+ * The `keys` body of PUT /sources for the list being saved: one entry per listed URL — its trimmed key, or ''
+ * which unpins it. URLs not in the list are never sent (the server refuses a key for an unlisted source).
+ */
+export const marketplaceSourceKeysPayload = (list: string[], draft: Record<string, string>): Record<string, string> =>
+    Object.fromEntries(list.map((u) => [u, String(draft[u] || '').trim()]));
 
 export const marketplaceApi = {
     catalog: (refresh = false) =>
         apiGet<{ source: string; isLocal: boolean; sources: MarketplaceSourceStatus[]; count: number; plugins: MarketplaceEntry[] }>(`/marketplace/catalog${refresh ? '?refresh=1' : ''}`),
-    install: (id: string) => apiPost<{ success: boolean; message?: string; slug: string; updated?: boolean; newPermissions?: string[]; ungrantedPermissions?: string[] }>(`/marketplace/install`, { id }),
+    // `existingData` answers a 409 existing_plugin_data: keep (adopt) or discard what a previous uninstall left.
+    install: (id: string, existingData?: "adopt" | "discard") => apiPost<{ success: boolean; message?: string; slug: string; updated?: boolean; newPermissions?: string[]; ungrantedPermissions?: string[] }>(`/marketplace/install`, existingData ? { id, existingData } : { id }),
     // In-place update of an already-installed plugin (preserves data + tables + grants; gated to the
     // install origin server-side). /install also updates when installed, so this is the explicit alias.
     update: (id: string) => apiPost<{ success: boolean; slug: string; updated: boolean; fromVersion: string | null; toVersion: string | null; newPermissions: string[]; ungrantedPermissions: string[] }>(`/marketplace/update`, { id }),
@@ -1053,7 +1082,9 @@ export const marketplaceApi = {
     // Configurable catalog sources (managed from the Marketplace UI — no hard-coded URL).
     // Saving an EMPTY list disables the remote marketplace; resetSources returns to the official default.
     getSources: () => apiGet<MarketplaceSources>(`/marketplace/sources`),
-    setSources: (sources: string[]) => apiPut<MarketplaceSources>(`/marketplace/sources`, { sources }),
+    // `keys` (optional): { url: public key | '' } for URLs in `sources` — see marketplaceSourceKeysPayload.
+    setSources: (sources: string[], keys?: Record<string, string>) =>
+        apiPut<MarketplaceSources>(`/marketplace/sources`, keys ? { sources, keys } : { sources }),
     resetSources: () => apiPut<MarketplaceSources>(`/marketplace/sources`, { reset: true }),
 };
 
@@ -1072,6 +1103,7 @@ export interface ThemeMarketplaceEntry {
     active: boolean;
     installedVersion: string | null;
     updateAvailable: boolean;
+    catalogSignature?: MarketplaceSignature;
 }
 
 export const themesMarketplaceApi = {
@@ -1080,7 +1112,9 @@ export const themesMarketplaceApi = {
     install: (id: string) => apiPost<{ success: boolean; message: string; slug: string }>(`/marketplace/themes/install`, { id }),
     // Own source list, independent from the plugin marketplace (option marketplace_theme_sources).
     getSources: () => apiGet<MarketplaceSources>(`/marketplace/themes/sources`),
-    setSources: (sources: string[]) => apiPut<MarketplaceSources>(`/marketplace/themes/sources`, { sources }),
+    // The key map is shared with the plugin list (keyed by URL); `keys` as in marketplaceApi.setSources.
+    setSources: (sources: string[], keys?: Record<string, string>) =>
+        apiPut<MarketplaceSources>(`/marketplace/themes/sources`, keys ? { sources, keys } : { sources }),
     resetSources: () => apiPut<MarketplaceSources>(`/marketplace/themes/sources`, { reset: true }),
 };
 
@@ -1602,7 +1636,7 @@ export const importApi = {
     analyze: (file: File) => {
         const fd = new FormData();
         fd.append("file", file);
-        return api<{ success: boolean; analysis: WxrAnalysis }>("/import/wordpress/analyze", {
+        return api<{ success: boolean; analysis: WxrAnalysis; privateSourceAllowed?: boolean }>("/import/wordpress/analyze", {
             method: "POST",
             body: fd,
             headers: {}, // let the browser set the multipart boundary
@@ -1705,7 +1739,9 @@ export interface AgentPublishRequest {
 }
 export const agentsApi = {
     list: () => apiGet<{ connections: AgentConnection[]; capabilities: AgentCapability[]; canGrant: boolean; mcpUrl: string; publishConfirmation?: boolean }>("/agents"),
-    setPublishConfirmation: (publishConfirmation: boolean) => apiPut<{ publishConfirmation: boolean }>("/agents/settings", { publishConfirmation }),
+    // Turning confirmation OFF follows the agent-grant MFA rule: `mfaCode` / `currentPassword` as agentsApi.grant.
+    setPublishConfirmation: (publishConfirmation: boolean, stepUp: { mfaCode?: string; currentPassword?: string } = {}) =>
+        apiPut<{ publishConfirmation: boolean }>("/agents/settings", { publishConfirmation, ...stepUp }),
     publishQueue: () => apiGet<{ entries: AgentPublishRequest[] }>("/agents/publish-queue"),
     dismissPublishRequest: (postId: number) => apiDelete<{ dismissed: boolean; id: number }>(`/agents/publish-queue/${postId}`),
     // Creating and granting follow the API-token MFA rule: `mfaCode` / `currentPassword` exactly as tokensApi.create.
@@ -2132,5 +2168,7 @@ export const mfaApi = {
      * session-only, never on yourself, and only an administrator may reset a privileged account.
      * Clears every mfa_* key on the target, so they sign in with their password alone and can re-enrol.
      */
-    resetForUser: (userId: number) => apiPost<{ reset: boolean; id: number }>(`/users/${userId}/mfa/reset`, {}),
+    // Always asks for the caller's password (and a current code when the caller has 2FA): see components/MfaStepUp.
+    resetForUser: (userId: number, stepUp: { currentPassword?: string; mfaCode?: string } = {}) =>
+        apiPost<{ reset: boolean; id: number }>(`/users/${userId}/mfa/reset`, stepUp),
 };

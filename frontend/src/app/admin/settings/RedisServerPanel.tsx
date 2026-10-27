@@ -65,11 +65,18 @@ export default function RedisServerPanel({ cacheOn }: { cacheOn: boolean }) {
         setMessage(null);
         setBusy("test");
         try {
-            const r = await apiPost<{ ok: boolean; reason?: string }>("/system/redis/test", target());
+            // The saved password is reused only for the saved server; for another one the backend asks for
+            // the administrator's own password first (rest_sudo_required) — the field below the buttons.
+            const r = await apiPost<{ ok: boolean; reason?: string }>("/system/redis/test", { ...target(), ...(currentPassword ? { currentPassword } : {}) });
             setMessage(r.ok
                 ? { kind: "ok", text: t("settings.redisServer.testOk") }
                 : { kind: "error", text: t(`settings.redisServer.reason.${r.reason || "failed"}`) });
         } catch (e: any) {
+            if (e?.code === "rest_sudo_required") {
+                setMessage({ kind: "info", text: t("settings.redisServer.testNeedsPassword") });
+                document.getElementById("redis-current-password")?.focus();
+                return;
+            }
             setMessage({ kind: "error", text: e?.message || t("settings.redisServer.reason.failed") });
         } finally {
             setBusy("");

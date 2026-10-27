@@ -4,12 +4,14 @@
  * The update itself is the official one, `create-wordjs upgrade` (packages/create-wordjs): it downloads
  * the release bundle from the project's GitHub releases, verifies its SHA-256 against the release's
  * .sha256 asset BEFORE extracting anything, overlays the code while preserving the database, uploads,
- * backups and config, and re-syncs the runtime dependencies (`release:install`). The CLI comes from npm,
- * where it is published with provenance. This module does not reimplement any of that; it decides
- * WHETHER the panel may run it here, and runs it around a safety net:
+ * backups and config, and re-syncs the runtime dependencies (`release:install`). The panel runs the copy
+ * of that CLI the INSTALLED release shipped (packages/create-wordjs/index.js, already on this disk) with
+ * this Node binary and no shell — never a package resolved from the registry at update time. This module
+ * does not reimplement any of that; it decides WHETHER the panel may run it here, and runs it around a
+ * safety net:
  *
  *   1. a backup (core/backup), before anything changes;
- *   2. `npx --yes create-wordjs@latest upgrade <install root> --yes --version <tag>`;
+ *   2. `node <install root>/packages/create-wordjs/index.js upgrade <install root> --yes --version <tag>`;
  *   3. on success: the state is recorded as `applied` and WordJS restarts itself (core/restart);
  *      on failure: the previous version is re-applied the same way (`--version v<current> --force`);
  *   4. at boot, a process that comes up after an `applied` update marks it `done`. One that crashes
@@ -25,7 +27,8 @@
  *     `sudo npx create-wordjs@latest upgrade` on the server — it gives the files back to the site's owner;
  *   - no supervisor that would bring the new version up and roll a broken one back (core/restart mode is
  *     not `supervisor`): the screen asks for the command line instead.
- * The panel never installs a tag the official releases list does not contain, and never a downgrade.
+ * The panel never installs a tag the official releases list does not contain, never one that publishes
+ * no checksum for its bundle, and never a downgrade.
  */
 
 const fs = require('fs');
@@ -52,6 +55,11 @@ function installRoot(): string {
     return path.resolve(process.cwd(), '..');
 }
 function stateFile(): string { return path.resolve('./data/update-state.json'); }
+
+/** The upgrade CLI the installed release shipped. */
+export function cliPath(root: string): string {
+    return path.join(root, 'packages', 'create-wordjs', 'index.js');
+}
 
 function currentVersion(): string {
     try { return require('../config/product-version').resolveProductVersion(); } catch { return '0.0.0'; }
@@ -114,7 +122,7 @@ function environment(): Environment {
     if (!probe.embedded()) {
         return { canUpdate: false, reason: 'split_mode', how: `This install runs the gateway, backend and frontend as separate processes. Update each machine from a terminal: ${sudoCmd}, then restart its services.`, root };
     }
-    if (!probe.exists(path.join(root, 'package.json')) || !probe.exists(path.join(root, 'backend', 'package.json'))) {
+    if (!probe.exists(path.join(root, 'package.json')) || !probe.exists(path.join(root, 'backend', 'package.json')) || !probe.exists(cliPath(root))) {
         return { canUpdate: false, reason: 'not_a_release', how: `The install root (${root}) does not look like a WordJS release. Update it from a terminal: ${sudoCmd}`, root };
     }
     const mustWrite = [root, path.join(root, 'package.json'), path.join(root, 'backend'), path.join(root, 'frontend')].filter((p) => probe.exists(p));
@@ -141,6 +149,11 @@ let fetchJson = async (url: string): Promise<any> => {
         });
         req.on('timeout', () => req.destroy(new Error('timed out')));
         req.on('error', reject);
+        // `timeout` is an idle timer; the whole read ends at 10 seconds whatever pace GitHub keeps, and
+        // the socket goes with it (the caller's own 10-second race only stops waiting).
+        const overall = setTimeout(() => req.destroy(new Error('GitHub did not answer within 10 seconds')), 10000);
+        overall.unref?.();
+        req.on('error', () => clearTimeout(overall));
     });
 };
 
@@ -208,20 +221,27 @@ function note(line: string) {
     }
 }
 
-/** The command line the update runs; the rollback is the same with the previous tag and --force. */
+/**
+ * The arguments `node` runs for the update; the rollback is the same with the previous tag and --force.
+ * An argument vector, never a command string: the install root may contain spaces or shell syntax.
+ */
 function upgradeArgs(root: string, tag: string, force = false): string[] {
-    return ['--yes', 'create-wordjs@latest', 'upgrade', root, '--yes', '--version', tag, ...(force ? ['--force'] : [])];
+    return [cliPath(root), 'upgrade', root, '--yes', '--version', tag, ...(force ? ['--force'] : [])];
 }
 
 let runner = (args: string[], cwd: string, onLine: (l: string) => void): Promise<number> => new Promise((resolve) => {
     const { spawn } = require('child_process');
-    const npx = process.platform === 'win32' ? 'npx.cmd' : 'npx';
-    const child = spawn(npx, args, { cwd, env: { ...process.env, npm_config_update_notifier: 'false' }, shell: process.platform === 'win32', stdio: ['ignore', 'pipe', 'pipe'] });
+    // This Node binary, no shell. The shipped CLI's one dependency (adm-zip) is the backend's own.
+    const env = { ...process.env, NODE_PATH: path.join(cwd, 'backend', 'node_modules'), npm_config_update_notifier: 'false' };
+    const child = spawn(process.execPath, args, { cwd, env, shell: false, windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] });
     child.stdout.on('data', (b: Buffer) => onLine(b.toString('utf8')));
     child.stderr.on('data', (b: Buffer) => onLine(b.toString('utf8')));
-    child.on('error', (e: any) => { onLine(`could not start npx: ${e && e.message}`); resolve(127); });
+    child.on('error', (e: any) => { onLine(`could not start the upgrade: ${e && e.message}`); resolve(127); });
     child.on('close', (code: number) => resolve(code === null ? 1 : code));
 });
+
+/** The real runner, kept for tests after `_setForTests` swaps `runner`. */
+const defaultRunner = runner;
 
 let running = false;
 
@@ -239,6 +259,7 @@ async function startUpdate(input: { tag: unknown; actorUserId: number | null; re
     const release = (await releases()).find((r) => r.tag === tag);
     if (!release || !release.hasBundle) throw Object.assign(new Error('That release is not one the WordJS project published with a bundle.'), { code: 'update_unknown_release', status: 400 });
     if (compareVersions(release.version, current) <= 0) throw Object.assign(new Error(`WordJS is already on ${current}; the panel does not install older versions.`), { code: 'update_not_newer', status: 409 });
+    if (!release.hasChecksum) throw Object.assign(new Error(`Release ${tag} publishes no checksum for its bundle, so its download cannot be verified; the panel does not install it.`), { code: 'update_unverified_release', status: 409 });
 
     running = true;
     output.length = 0;
@@ -306,4 +327,4 @@ function _setForTests(o: { fetchJson?: typeof fetchJson; runner?: typeof runner;
     cache = null;
 }
 
-module.exports = { REPO, compareVersions, containerKind, environment, releases, overview, startUpdate, markBootCompleted, status, upgradeArgs, readState, _setForTests };
+module.exports = { REPO, compareVersions, containerKind, environment, releases, overview, startUpdate, markBootCompleted, status, upgradeArgs, cliPath, readState, _setForTests, _defaultRunner: defaultRunner };

@@ -158,7 +158,9 @@ router.use('/health/site', multisiteGuards.mainSiteOnly);
 router.use('/hooks', multisiteGuards.mainSiteOnly);
 // On the main site of a network the same network-wide subtrees take a NETWORK administrator, not just an
 // administrator of the main site (the plugin and theme guards above apply the same rule to code changes).
-for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/system/server', '/system/redis', '/system/cluster', '/system/update', '/hooks']) {
+// The process health report (/health/details) and the network's per-site health (/health/site) are
+// network-wide too.
+for (const subtree of ['/site-address', '/marketplace', '/system/certs', '/system/server', '/system/redis', '/system/cluster', '/system/update', '/hooks', '/health/details', '/health/site']) {
     router.use(subtree, multisiteGuards.networkAdminOnMainSite);
 }
 // The network itself: its sites and administrators (main site, network administrators only).

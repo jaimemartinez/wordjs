@@ -65,6 +65,8 @@ Options:
   --sha256 <hex>        Require the ZIP to have this SHA-256 (pin a checksum for --zip; also checked
                         on top of the release's own .sha256 asset).
   --version <tag>       Install/upgrade to a specific release tag (e.g. vX.Y.Z) instead of the latest.
+  --allow-unverified    Install a GitHub release that publishes no .sha256 for its bundle (only very old
+                        releases). Without it such a release is refused: nothing would be verified.
   --http                Serve plain HTTP instead of self-signed HTTPS (sets WORDJS_HTTP=1). (create)
   --no-start            Scaffold + install dependencies only; don't start the server.
   --yes, -y             Skip the confirmation prompt (required when upgrading non-interactively).
@@ -132,7 +134,7 @@ function parseArgs(argv) {
         mode: 'create', dir: null, zip: null, version: null, http: false, start: true, yes: false, force: false, install: true,
         role: null, gateway: null, token: null, caHash: null, advertise: null, enrollPort: null, host: null,
         systemd: false, port: null, serviceUser: null, mail: false,
-        sha256: null,
+        sha256: null, allowUnverified: false,
     };
     // A leading subcommand selects the mode (default is the monolith create flow).
     if (['upgrade', 'gateway', 'join'].includes(argv[0])) { opts.mode = argv[0]; argv = argv.slice(1); }
@@ -150,6 +152,7 @@ function parseArgs(argv) {
         }
         else if (a === '--version') { opts.version = argv[++i] || fail('--version needs a value (a release tag, e.g. vX.Y.Z).'); }
         else if (a === '--http') opts.http = true;
+        else if (a === '--allow-unverified') opts.allowUnverified = true;
         else if (a === '--no-start') opts.start = false;
         else if (a === '--yes' || a === '-y') opts.yes = true;
         else if (a === '--force') opts.force = true;
@@ -236,9 +239,62 @@ function readBody(res) {
 // The bundle we download becomes the site's code, so it is verified before a single entry is
 // extracted. release.yml publishes `wordjs-<tag>.zip.sha256` (sha256sum format: `<hex>  <name>`) next
 // to every tag-named bundle; the GitHub flow downloads it and refuses a ZIP whose digest differs.
-// Releases published before that asset existed have no checksum to check against — those install
-// with a loud warning rather than not at all. `--sha256 <hex>` pins a digest the user obtained out of
-// band, for `--zip` sources (and on top of the release checksum when both are present).
+// A release that publishes no checksum (only those from before that asset existed) is refused unless
+// the operator passes --allow-unverified, which says out loud that nothing was checked. `--sha256 <hex>`
+// pins a digest the user obtained out of band, for `--zip` sources (and on top of the release checksum
+// when both are present).
+//
+// WHO PUBLISHED IT. The checksum comes from the same release as the ZIP, so it proves the download is
+// intact, not who made it. release.yml therefore signs the checksum file with the project's Ed25519
+// release key (`<bundle>.sha256.sig`, base64), and this CLI verifies that signature against the public
+// keys embedded below — keys that travel inside the npm package, not inside the release. A published
+// signature that no embedded key verifies is fatal. Once SIGNATURE_REQUIRED_SINCE is set, a release at
+// or above that version that publishes no signature is refused as well.
+
+/** The project's release-signing public keys (PEM, Ed25519 SPKI). Several, so a key can be rotated. */
+const RELEASE_SIGNING_KEYS = [];
+/** The first release tag every later release must be signed from (e.g. 'v2.12.0'), or null. */
+const SIGNATURE_REQUIRED_SINCE = null;
+
+/** Numeric x.y.z compare of two tags (pre-release suffixes ignored); <0, 0 or >0. */
+function compareTags(a, b) {
+    const nums = (t) => String(t || '').replace(/^v/, '').split('-')[0].split('.').map((n) => Number(n) || 0);
+    const x = nums(a); const y = nums(b);
+    for (let i = 0; i < 3; i++) if ((x[i] || 0) !== (y[i] || 0)) return (x[i] || 0) - (y[i] || 0);
+    return 0;
+}
+
+/**
+ * Does `signatureText` (base64 Ed25519) sign exactly `checksumText` under one of `keys`? Never throws:
+ * an unusable key or a malformed signature is simply not a match.
+ */
+function verifyChecksumSignature(checksumText, signatureText, keys = RELEASE_SIGNING_KEYS) {
+    const b64 = String(signatureText == null ? '' : signatureText).trim();
+    if (!/^[A-Za-z0-9+/]+={0,2}$/.test(b64)) return false;
+    const signature = Buffer.from(b64, 'base64');
+    const data = Buffer.from(String(checksumText == null ? '' : checksumText), 'utf8');
+    return (Array.isArray(keys) ? keys : []).some((pem) => {
+        try { return crypto.verify(null, data, crypto.createPublicKey(pem), signature); } catch { return false; }
+    });
+}
+
+/**
+ * The signature rule for one release, as a verdict: 'verified', 'unsigned' (allowed), or a reason to
+ * refuse. `keys` and `requiredSince` are parameters so the rule can be tested with a throwaway key.
+ */
+function signatureVerdict({ tag, checksumText, signatureText, keys = RELEASE_SIGNING_KEYS, requiredSince = SIGNATURE_REQUIRED_SINCE }) {
+    const haveKeys = Array.isArray(keys) && keys.length > 0;
+    if (signatureText != null) {
+        if (!haveKeys) return { ok: true, state: 'unchecked' };
+        return verifyChecksumSignature(checksumText, signatureText, keys)
+            ? { ok: true, state: 'verified' }
+            : { ok: false, reason: `the release's checksum signature does not match the WordJS release key` };
+    }
+    if (haveKeys && requiredSince && compareTags(tag, requiredSince) >= 0) {
+        return { ok: false, reason: `release ${tag} publishes no checksum signature, and every release since ${requiredSince} must` };
+    }
+    return { ok: true, state: 'unsigned' };
+}
 
 /** Lower-case 64-char hex, or null. Accepts the `AA:BB:…` colon form some tools print. */
 function normalizeSha256(value) {
@@ -343,6 +399,12 @@ function pickChecksumAsset(assets, bundleName) {
     return (Array.isArray(assets) ? assets : []).find((a) => String(a && a.name || '').toLowerCase() === wanted) || null;
 }
 
+/** The `<bundle>.sha256.sig` asset (the release key's signature over the checksum file), by exact name. */
+function pickSignatureAsset(assets, bundleName) {
+    const wanted = `${bundleName}.sha256.sig`.toLowerCase();
+    return (Array.isArray(assets) ? assets : []).find((a) => String(a && a.name || '').toLowerCase() === wanted) || null;
+}
+
 /** Every asset matching the loose `wordjs-*.zip` shape — used to explain an ambiguous refusal. */
 function looseBundleCandidates(assets) {
     const list = Array.isArray(assets) ? assets : [];
@@ -370,9 +432,11 @@ async function resolveReleaseAsset(tag) {
         fail(`Release ${release.tag_name} has no wordjs-*.zip asset.`, 'Pass --zip <path-or-url> instead.');
     }
     const sum = pickChecksumAsset(release.assets, asset.name);
+    const sig = pickSignatureAsset(release.assets, asset.name);
     return {
         name: asset.name, url: asset.browser_download_url, tag: release.tag_name,
         checksumName: sum ? sum.name : null, checksumUrl: sum ? sum.browser_download_url : null,
+        signatureName: sig ? sig.name : null, signatureUrl: sig ? sig.browser_download_url : null,
     };
 }
 
@@ -554,21 +618,34 @@ async function obtainBundleZip(opts) {
         const asset = await resolveReleaseAsset(opts.version);
         tag = asset.tag;
         console.log(`  Found ${asset.tag} → ${asset.name}`);
+        if (!asset.checksumUrl && !opts.allowUnverified) {
+            fail(`Release ${asset.tag} publishes no ${asset.name}.sha256, so its download cannot be verified.`,
+                'Refusing to install it. Pick a release that publishes a checksum, or pass --allow-unverified if you accept installing it unchecked.');
+        }
         tmpDir = fs.mkdtempSync(path.join(os.tmpdir(), 'create-wordjs-'));
         zipPath = path.join(tmpDir, asset.name);
         await download(asset.url, zipPath, asset.name);
         if (asset.checksumUrl) {
-            const expected = parseChecksumFile(await downloadText(asset.checksumUrl), asset.name);
+            const checksumText = await downloadText(asset.checksumUrl);
+            const signed = signatureVerdict({
+                tag: asset.tag, checksumText,
+                signatureText: asset.signatureUrl ? await downloadText(asset.signatureUrl) : null,
+            });
+            if (!signed.ok) {
+                cleanup();
+                fail(`Refusing to install ${asset.name}: ${signed.reason}.`, 'The download may not come from the WordJS project.');
+            }
+            if (signed.state === 'verified') console.log(`  ✓ Release signature verified (${asset.signatureName})`);
+            const expected = parseChecksumFile(checksumText, asset.name);
             if (!expected) {
                 cleanup();
                 fail(`${asset.checksumName} does not contain a SHA-256 for ${asset.name}.`, 'Refusing to install a bundle that cannot be verified.');
             }
             checks.push({ expected, source: asset.checksumName });
         } else {
-            // Releases published before the checksum asset existed. Installing them still works (so
-            // `--version <old-tag>` rollbacks keep working), but say plainly that nothing was verified.
+            // Only reachable with --allow-unverified: say plainly that nothing was verified.
             console.warn(`  ⚠️  Release ${asset.tag} publishes no ${asset.name}.sha256 — the download's integrity`);
-            console.warn('     could NOT be verified (releases before the checksum asset was introduced).');
+            console.warn('     could NOT be verified (--allow-unverified).');
             console.warn('     Pin one with --sha256 <hex> if you have it from a trusted source.');
         }
     }
@@ -1596,7 +1673,7 @@ if (require.main === module) {
 }
 
 module.exports = {
-    pickBundleAsset, pickChecksumAsset, extractZip, normalizeSha256, parseChecksumFile, classifyZipSource, sha256File,
+    pickBundleAsset, pickChecksumAsset, pickSignatureAsset, verifyChecksumSignature, signatureVerdict, compareTags, extractZip, normalizeSha256, parseChecksumFile, classifyZipSource, sha256File,
     parseArgs, buildSystemdFiles, systemdInstallSteps, writeSystemdFiles,
     copyMerge, PRESERVE_ON_UPGRADE,
     sysctlDropIn, serviceUserProblem, systemdPreflight, createSystemdStagingDir, LOW_PORT_ADVICE, HELP, installedFileMode,

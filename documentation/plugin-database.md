@@ -77,9 +77,17 @@ principal**, with permissions only over its prefix — a `NOLOGIN` `ROLE` per pl
 `SET ROLE` on a pinned client) and a per-plugin login user on MySQL/MariaDB (password generated on each
 boot and held only in memory) — so the engine denies cross access **even if `assertSqlAllowed` were
 bypassed**. It degrades gracefully: under SQLite, or if the pool user cannot provision the principal,
-nothing is provisioned and only the text guard remains. **DDL** always runs as the admin user (a
-restricted principal has no `CREATE`), scoped to the prefix by the text guard, and each new table is
-granted to the principal afterwards.
+nothing is provisioned and only the text guard remains — **Admin → Site Health** then lists the plugins
+running without their own principal. **DDL runs under the same principal**: on PostgreSQL the plugin's
+role holds `CREATE` on the schema and **owns** its tables (existing ones are handed to it when it is
+provisioned; dropping the role hands them back rather than dropping them), and on MySQL/MariaDB the
+plugin's user is granted `ALL` on exactly the objects the statement names — the ones the text guard
+proved the plugin owns — just before it runs. The database therefore judges a plugin's `CREATE`/`ALTER`/
+`DROP` by the plugin's rights: a view or a `CREATE TABLE … AS SELECT` over a table it cannot read fails,
+and a view or trigger it creates runs as the plugin (MySQL: its `DEFINER` is the plugin's user). A
+statement the database refuses under the principal fails; it is never retried with the admin's rights.
+On MySQL with binary logging on, creating a trigger as a non-`SUPER` user also needs
+`log_bin_trust_function_creators=1` on the server.
 
 | Plugin type                       | Database access                                                             |
 | :-------------------------------- | :-------------------------------------------------------------------------- |
@@ -172,22 +180,28 @@ Beyond the prefix default-deny, `assertSqlAllowed` rejects the following (defenc
   and the **longest claimed-prefix match** across all claimed prefixes: if a sibling plugin with a
   longer prefix owns it, access is denied even though yours also matches (defence against prefix-extension
   squatting, e.g. the slug `events-ticket` over `events`'s tables).
-- **Index DDL** (`CREATE [UNIQUE] INDEX … ON <table>` / `DROP INDEX <name>`): both the `ON` target
-  table **and the index name** must start with the plugin's `wjp_<slug>_` prefix; otherwise the query is
-  denied (the generic table matcher sees neither the `ON` target nor the index name, so they are scoped
-  separately).
-- **View/trigger DDL** (`CREATE [TEMP] VIEW/TRIGGER <name>` / `DROP VIEW/TRIGGER <name>`): the
-  **object name** must start with the plugin's `wjp_<slug>_` prefix too (the generic table matcher does
-  not see it), or the statement is denied — the same rule as for indexes, so a plugin cannot squat or
-  shadow an object in the shared namespace.
+- **Every target of a statement**: after `TABLE`, `UPDATE` and `DELETE` a comma opens the next target, so
+  every name in `DROP TABLE a, b` or MySQL's multi-table `UPDATE a, b SET …` / `DELETE a, b FROM …` is
+  owned-checked; so are the tables a `CREATE TABLE` takes from elsewhere (`LIKE src`, `(LIKE src …)`,
+  `INHERITS (a, b)`, `PARTITION OF parent`) and every spelling of a rename's destination (`RENAME TO x`,
+  `RENAME AS x`, `RENAME x`).
+- **Index and trigger DDL** (`CREATE [UNIQUE] INDEX <name> ON <table>`, `DROP INDEX <name> [ON <table>]`,
+  `CREATE TRIGGER <name> … ON <table>`, `DROP TRIGGER <name> ON <table>`): the `ON` table **and the object
+  name** must be the plugin's own (`wjp_<slug>_`).
+- **View/trigger/index names** (`CREATE [OR REPLACE] [TEMP] VIEW/TRIGGER/INDEX <name>`, `ALTER …`,
+  `DROP …`): the **object name** must start with the plugin's `wjp_<slug>_` prefix too, so a plugin cannot
+  squat or shadow an object in the shared namespace.
+- **One object per `DROP`, no `CASCADE`**, and no clause that gives an object to another identity or puts
+  it elsewhere: `DEFINER`, `SQL SECURITY`, `SECURITY DEFINER/INVOKER`, `OWNER TO`, `SET SCHEMA`,
+  `TABLESPACE`, `DATA/INDEX DIRECTORY`, `CONNECTION=`, `UNION=`, a storage engine other than InnoDB, or a
+  trigger's `EXECUTE FUNCTION/PROCEDURE`.
 
 All of this is decided over the output of **a single lexer** (`lexSql`), which walks the string **once**
-recognising comments, string literals and quoted identifiers **in context** — a `/*` inside a literal is
-text, a `'` inside a comment is a comment — so that the contents of neither can ever be read as
-structure. SQL comments (`/* */` and `--`) are blanked **before** evaluation so they cannot serve as
-whitespace that evades the checks (`--` opens a comment only when followed by whitespace or end of line,
-the stricter rule — MySQL's — and closes on both `\n` and a lone `\r`, PostgreSQL's: so text any engine
-would execute stays visible to the guard). Quoted identifiers (`"quotes"`, `` `backticks` ``) are
+recognising string literals and quoted identifiers **in context** — a `/*`, `--` or `#` inside a literal
+is text — so that their contents can never be read as structure. **SQL comments are refused**: the first
+`--`, `/*` or `#` outside a literal or quoted identifier denies the statement, because every engine reads
+comments differently (MySQL needs whitespace after `--` and treats `#` as a comment, PostgreSQL nests
+`/* */` and ends `--` at a lone `\r`) and plugin SQL has no use for them. Quoted identifiers (`"quotes"`, `` `backticks` ``) are
 emitted as **a single opaque token marked as a name**, so an alias like `AS "order"` is not confused
 with the `ORDER` keyword and does not inject a phantom parenthesis; `[brackets]` are not normalised —
 they are **denied** (see above). `createTable` applies the same principle: a plugin can only create

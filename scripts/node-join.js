@@ -217,6 +217,8 @@ async function main() {
     // authenticates purge requests with it (from this file, on this machine — never from the backend's
     // config, which lives on another host); a co-located backend signs its direct purges with it.
     if (boot.revalidateSecret) cfg.revalidateSecret = boot.revalidateSecret;
+    // The gateway hands its management secret to a backend node only; a frontend keeps none.
+    if (!boot.gatewaySecret) delete cfg.gatewaySecret;
     if (role === 'backend') {
         cfg.host = '0.0.0.0';                 // accept the gateway from another machine
         cfg.port = svcPort;

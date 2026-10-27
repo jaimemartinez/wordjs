@@ -85,6 +85,14 @@ describe('the real gateway: a stored certificate with the switch OFF serves HTTP
         assert.strictEqual(info.serving, 'http');
     });
 
+    it('a switch that is not a boolean is refused and changes nothing', async () => {
+        for (const sslEnabled of ['false', 'true', 1, 0]) {
+            const r = await internal(gw, ca, backendId, 'POST', '/config-update', { sslEnabled });
+            assert.strictEqual(r.status, 400, `${JSON.stringify(sslEnabled)}: ${r.body}`);
+        }
+        assert.strictEqual(JSON.parse((await internal(gw, ca, backendId, 'GET', '/info')).body).sslEnabled, false);
+    });
+
     it('turning HTTPS on serves the stored certificate, and the tunnel address is left alone', async () => {
         const r = await internal(gw, ca, backendId, 'POST', '/config-update', { sslEnabled: true });
         assert.strictEqual(r.status, 200, r.body);

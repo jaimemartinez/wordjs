@@ -133,6 +133,21 @@ class ApiToken {
      * Mint a new token for a user. Returns the PLAINTEXT token exactly once (never stored/recoverable),
      * plus display metadata. `expiresInDays` is optional (null = never expires until revoked).
      */
+    /**
+     * The lifetime a machine credential (API token, agent connection) may be given: a whole number of days
+     * from 1 to MAX_EXPIRY_DAYS, or none (null/undefined = until revoked). A fraction minted a token that had
+     * already expired, and a huge number overflowed the date. Returns the 400 message, or null when fine.
+     */
+    static MAX_EXPIRY_DAYS = 3650;
+    static expiryDaysProblem(value: unknown): string | null {
+        if (value === null || value === undefined) return null;
+        const s = typeof value === 'number' ? String(value) : (typeof value === 'string' ? value.trim() : '');
+        if (!/^[0-9]{1,4}$/.test(s) || Number(s) < 1 || Number(s) > ApiToken.MAX_EXPIRY_DAYS) {
+            return `expiresInDays must be a whole number of days from 1 to ${ApiToken.MAX_EXPIRY_DAYS}.`;
+        }
+        return null;
+    }
+
     static async generate(opts: { userId: number; name?: string; scopes?: any; expiresInDays?: number | null }) {
         const { userId } = opts;
         const name = String(opts.name || '').slice(0, 200).trim() || 'API token';
@@ -286,6 +301,8 @@ class ApiToken {
         if (revoked && options && options.compromised === true) {
             await ApiToken.stampSecurityEpoch(userId);
         }
+        // A live stream the token opened (the notification SSE) re-checks its credential now.
+        if (revoked) { try { require('../core/collab-rooms').recheckUser(Number(userId)); } catch { /* periodic re-check still applies */ } }
         return revoked;
     }
 

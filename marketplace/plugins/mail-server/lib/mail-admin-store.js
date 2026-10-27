@@ -335,14 +335,18 @@ module.exports = function createAdminStore(db) {
 
         // --- Outbound queue --------------------------------------------------------------------
 
-        /** Everything not yet delivered: undo-window/scheduled sends, retries and final failures. */
+        /**
+         * What is still waiting to go out: undo-window/scheduled sends and retries. A FINAL failure is not
+         * waiting for anything, so it is not queued: it stays on its Sent copy and in the system log,
+         * which is where it is retried from.
+         */
         async listQueue(limit = 200) {
             return await db.all(`
                 SELECT id, user_id, from_address, from_name, to_address, cc_address, subject, date_received,
                        scheduled_at, is_sent, delivery_status, delivery_attempts, next_attempt_at, last_error, paced
                 FROM ${T_EMAILS}
                 WHERE is_trash = 0 AND (
-                    delivery_status IN ('retry', 'failed')
+                    delivery_status = 'retry'
                     OR (is_sent = 0 AND is_draft = 0 AND scheduled_at IS NOT NULL)
                 )
                 ORDER BY id DESC
@@ -423,6 +427,41 @@ module.exports = function createAdminStore(db) {
             const status = systemStatusOf(deliveryStatus, paced);
             await db.run(`UPDATE ${T_SYSTEM_SENT} SET status = ?, last_error = ? WHERE email_id = ?`,
                 [status, status === 'delivered' || !lastError ? null : String(lastError).slice(0, 1000), id]);
+        },
+
+        /**
+         * Put back in the retry queue the logged system messages whose FIRST delivery never wrote an
+         * outcome — the worker was stopped mid-SMTP (a restart, or the host's RPC timeout before every
+         * hand-off was bounded): the log says "queued", the row has no delivery state, and nothing would
+         * ever retry it. Only rows `staleMs` to `maxAgeMs` old (a first delivery still running is younger;
+         * older ones are left alone rather than sent days late), and never the ids in `skipIds` (still
+         * being delivered by this worker). Returns the ids it re-queued.
+         */
+        async requeueInterruptedSystemMail(staleMs, maxAgeMs, skipIds = new Set()) {
+            const now = Date.now();
+            const rows = await db.all(`
+                SELECT e.id AS id, e.delivery_attempts AS attempts
+                FROM ${T_SYSTEM_SENT} s
+                JOIN ${T_EMAILS} e ON e.id = s.email_id
+                WHERE s.status = 'queued' AND s.email_id > 0
+                  AND s.created_at < ? AND s.created_at > ?
+                  AND e.delivery_status IS NULL AND e.is_sent = 1 AND e.is_draft = 0 AND e.is_trash = 0
+                ORDER BY e.id
+                LIMIT 50`, [sqlDate(new Date(now - staleMs)), sqlDate(new Date(now - maxAgeMs))]);
+            const ids = [];
+            for (const r of rows || []) {
+                const id = Number(r.id) || 0;
+                if (!(id > 0) || skipIds.has(id)) continue;
+                const note = 'The first delivery was interrupted before it finished; retrying automatically.';
+                await db.run(`
+                    UPDATE ${T_EMAILS}
+                    SET delivery_status = 'retry', paced = 0, delivery_attempts = ?, next_attempt_at = ?, last_error = ?
+                    WHERE id = ? AND delivery_status IS NULL`,
+                    [Number(r.attempts) || 0, new Date(now).toISOString(), note, id]);
+                await this.syncSystemSent(id, 'retry', note, 0);
+                ids.push(id);
+            }
+            return ids;
         },
 
         /** Set the state of one log row directly (a message that has no queue row to follow). */

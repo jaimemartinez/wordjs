@@ -62,7 +62,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `wordjs` member | Bridge method | Notes |
 | --- | --- | --- |
 | `options.get(key, default)` | `options.get` | `settings:read` grant. Secret-named/protected options are scrubbed for **every** plugin. |
-| `options.set(key, value)` | `options.set` | `settings:write` grant. Protected/secret-named options are write-blocked for **every** plugin. |
+| `options.set(key, value)` | `options.set` | `settings:write` grant. **Allowlist:** a plugin writes only options named after its slug (`<slug>_…`, normalized like the table prefix: `photo-carousel` → `photo_carousel_…`); `mail_domain` / `mail_delivery_ready` only with `email:provider`. Secret-named options stay write-blocked. |
 | `db.all(sql, params)` | `db.all` | `database:read` grant. Always confined to `wjp_<slug>_` tables — EVERY table token the statement references is prefix-checked (comma-joins, `USING`, subqueries and CTEs included, at any depth). ATTACH/DETACH/PRAGMA/VACUUM, schema catalogs, the file/extension SQL functions, the Postgres `*_to_xml` family, stacked statements and `RETURNING` are rejected outright. A data-modifying CTE (a `WITH` containing insert/update/delete/replace/merge) is treated as a write and demands `database:write`. |
 | `db.get(sql, params)` | `db.get` | Same scoping as `db.all`. |
 | `db.run(sql, params)` | `db.run` | `database:write` grant. Same scoping. DDL is limited by a positive OBJECT-CLASS allowlist — a plugin may only create/alter/drop its own `TABLE`, `INDEX`, `VIEW` or `TRIGGER` (SCHEMA/DATABASE/ROLE/FUNCTION/EXTENSION/… are denied), and an `ALTER … RENAME TO` destination must itself carry the `wjp_<slug>_` prefix. |

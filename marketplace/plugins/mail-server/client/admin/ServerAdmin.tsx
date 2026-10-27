@@ -91,7 +91,8 @@ function TrafficChart({ series, t, locale }: any) {
 function Overview({ t, locale, data, settings, go, reload }: any) {
     if (!data) return <div className="py-20 text-center"><Spinner className="text-2xl" /></div>;
     const sum = (k: string) => data.series.reduce((a: number, d: any) => a + (d[k] || 0), 0);
-    const queueCount = data.totals.retrying + data.totals.failed + data.totals.scheduled;
+    // Final failures are not waiting for anything: they stay on their Sent copy and in the system log.
+    const queueCount = data.totals.retrying + data.totals.scheduled;
     const dkim = settings?.mail_security_dkim_enabled === '1';
     // Where inbound SMTP actually listens: this node's addresses (a multi-machine install runs the plugin
     // on the backend node, which is NOT the address visitors reach the site on).
@@ -125,7 +126,7 @@ function Overview({ t, locale, data, settings, go, reload }: any) {
             <div className="grid grid-cols-2 gap-3 sm:gap-4 lg:grid-cols-4">
                 <Kpi icon="fa-solid fa-inbox" label={`${t('srv.received')} · ${t('srv.last14')}`} value={sum('received')} />
                 <Kpi icon="fa-solid fa-paper-plane" label={`${t('srv.sent')} · ${t('srv.last14')}`} value={sum('sent')} tone="blue" />
-                <Kpi icon="fa-solid fa-clock-rotate-left" label={t('srv.queue')} value={queueCount} sub={`${data.totals.failed} ${t('srv.failed').toLowerCase()} · ${data.totals.retrying} ${t('srv.retrying').toLowerCase()}`} tone={data.totals.failed ? 'red' : 'slate'} onClick={() => go('queue')} />
+                <Kpi icon="fa-solid fa-clock-rotate-left" label={t('srv.queue')} value={queueCount} sub={`${data.totals.retrying} ${t('srv.retrying').toLowerCase()} · ${data.totals.scheduled} ${t('srv.scheduledShort')}`} tone={data.totals.retrying ? 'orange' : 'slate'} onClick={() => go('queue')} />
                 <Kpi icon="fa-solid fa-hard-drive" label={t('srv.storage')} value={formatBytes(data.totals.bytes)} sub={`${data.totals.messages} ${t('srv.messages').toLowerCase()} · ${t('srv.attachments', { n: data.totals.attachments })}`} tone="green" />
             </div>
             <div className="grid gap-4 sm:gap-6 xl:grid-cols-3">
@@ -504,7 +505,9 @@ function Queue({ t, locale, toast, confirm }: any) {
         setBusy(it.id);
         try {
             const r = await api(`/plugin/mail-server/admin/queue/${it.id}/retry`, { method: 'POST' }) as any;
-            if (r && r.success) toast('success', t('read.delivered')); else toast('error', r?.message || t('read.stillFailing'));
+            if (r && r.waiting) toast('progress', t('read.retryWaiting'));
+            else if (r && r.pending) toast('progress', t('read.retryPending'));
+            else if (r && r.success) toast('success', t('read.delivered')); else toast('error', r?.message || t('read.stillFailing'));
             load();
         } catch (e: any) { toast('error', errorText(e, t)); }
         finally { setBusy(null); }
@@ -522,21 +525,23 @@ function Queue({ t, locale, toast, confirm }: any) {
         : it.delivery_status === 'retry' ? ['amber', t('badge.retrying'), 'fa-solid fa-rotate']
             : ['violet', t('badge.scheduled'), 'fa-regular fa-clock'];
 
+    // One column whose children may shrink below their content: a long unbroken token (an address glued to
+    // a colon in a delivery error) must wrap inside the card, not widen the page on a phone.
     return (
-        <div className="grid gap-4">
+        <div className="grid min-w-0 grid-cols-1 gap-4">
             <div className="flex flex-wrap items-center justify-between gap-3">
-                <p className="max-w-xl text-sm text-slate-500">{t('srv.queue.hint')}</p>
+                <p className="min-w-0 max-w-xl text-sm text-slate-500">{t('srv.queue.hint')}</p>
                 <IconBtn icon="fa-solid fa-rotate-right" label={t('common.refresh')} onClick={load} />
             </div>
             <SendRateCard t={t} toast={toast} pacing={pacing} onSaved={load} />
             {!items ? <div className="py-16 text-center"><Spinner className="text-2xl" /></div> : items.length === 0 ? (
                 <Card><EmptyState icon="fa-solid fa-circle-check" title={t('srv.queue.empty')} /></Card>
             ) : (
-                <ul className="grid gap-3">
+                <ul className="grid grid-cols-1 gap-3">
                     {items.map(it => {
                         const [tone, label, icon] = status(it);
                         return (
-                            <li key={it.id} className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
+                            <li key={it.id} className="min-w-0 rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
                                 <div className="flex flex-wrap items-start gap-3">
                                     <Pill tone={tone}><i className={icon}></i>{label}</Pill>
                                     <div className="min-w-0 flex-1 basis-60">
@@ -549,12 +554,12 @@ function Queue({ t, locale, toast, confirm }: any) {
                                             {!it.delivery_status && it.scheduled_at && <span>{t('srv.queue.at', { when: relativeTime(it.scheduled_at, locale) })}</span>}
                                         </div>
                                     </div>
-                                    <div className="flex gap-1.5">
+                                    <div className="flex flex-wrap gap-1.5">
                                         {(it.delivery_status === 'failed' || it.delivery_status === 'retry') && <Button size="sm" icon="fa-solid fa-paper-plane" loading={busy === it.id} onClick={() => retry(it)}>{t('srv.queue.retryNow')}</Button>}
                                         {it.delivery_status !== 'failed' && <Button size="sm" variant="dangerGhost" icon="fa-solid fa-ban" disabled={busy === it.id} onClick={() => cancel(it)}>{t('srv.queue.cancel')}</Button>}
                                     </div>
                                 </div>
-                                {it.last_error && Number(it.paced) !== 1 && <pre className="mt-3 whitespace-pre-wrap break-words rounded-lg bg-slate-50 p-2.5 font-mono text-[11px] text-slate-600">{it.last_error}</pre>}
+                                {it.last_error && Number(it.paced) !== 1 && <pre className="mt-3 whitespace-pre-wrap wrap-anywhere rounded-lg bg-slate-50 p-2.5 font-mono text-[11px] text-slate-600">{it.last_error}</pre>}
                             </li>
                         );
                     })}
@@ -723,7 +728,7 @@ function RelayStatus({ t, settings }: any) {
     return (
         <div className="mt-4 grid gap-2 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800">
             <span className="flex items-start gap-3 font-semibold"><i className="fa-solid fa-circle-exclamation mt-0.5 text-red-500"></i>{t('srv.cfg.relayUnavailable', { reason: st.error || '—' })}</span>
-            <span className="text-xs text-red-700">{t('srv.cfg.relayQueued')}</span>
+            <span className="text-xs text-red-700">{t(settings.mail_relay_mode === 'fallback' ? 'srv.cfg.relayDownFallback' : 'srv.cfg.relayQueued')}</span>
         </div>
     );
 }
@@ -824,7 +829,19 @@ function Config({ t, settings, set, setSettings, dnsInfo, onGenerateDkim, genera
                             <option value="1">{t('common.yes')}</option><option value="0">{t('common.no')} — {t('srv.cfg.noTlsRelay')}</option>
                         </select>
                     </Field>
+                    <Field label={t('srv.cfg.relayMode')} hint={settings.mail_relay_mode === 'fallback' ? t('srv.cfg.relayModeFallbackHint') : t('srv.cfg.relayModeAlwaysHint')} className="md:col-span-2">
+                        <select className={inputCls} value={settings.mail_relay_mode || 'always'} onChange={(e) => set({ mail_relay_mode: e.target.value })}>
+                            <option value="always">{t('srv.cfg.relayModeAlways')}</option>
+                            <option value="fallback">{t('srv.cfg.relayModeFallback')}</option>
+                        </select>
+                    </Field>
                 </div>
+                {settings.direct_paused_until && (
+                    <p className="mt-4 flex items-start gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-800">
+                        <i className="fa-solid fa-pause mt-0.5"></i>
+                        <span>{t('srv.cfg.directPaused', { until: new Date(settings.direct_paused_until).toLocaleTimeString() })}</span>
+                    </p>
+                )}
                 <RelayStatus t={t} settings={settings} />
                 <SandboxAccess t={t} settings={settings} onChanged={reloadSettings} />
             </Card>
@@ -904,6 +921,57 @@ function DnsRow({ step, title, record, check, note, t }: any) {
     );
 }
 
+/**
+ * Every public address mail can leave from (IPv4 and IPv6): what the last check found for each, and the
+ * reverse-DNS value to ask the provider for — WordJS cannot look a PTR up, so that one is an instruction.
+ */
+function SenderAddresses({ t, dnsInfo, check }: any) {
+    const ptr = dnsInfo?.records?.ptr;
+    const addresses: string[] = ptr?.addresses || [];
+    if (!addresses.length) return null;
+    const found = new Map<string, any>((check?.results?.senders || []).map((x: any) => [x.ip, x]));
+    const line = (ok: boolean | null, text: string) => (
+        <li className="flex items-start gap-2">
+            <i className={cx('fa-solid mt-0.5', ok === null ? 'fa-circle text-slate-300' : ok ? 'fa-circle-check text-emerald-500' : 'fa-triangle-exclamation text-amber-500')}></i>
+            <span className="min-w-0 break-words">{text}</span>
+        </li>
+    );
+    return (
+        <div className="rounded-xl border border-slate-200 bg-white p-4">
+            <div className="mb-1 flex flex-wrap items-center gap-2">
+                <i className="fa-solid fa-network-wired text-violet-500"></i>
+                <span className="text-sm font-bold text-slate-800">{t('srv.dnsx.senders')}</span>
+            </div>
+            <p className="mb-3 text-[11px] leading-relaxed text-slate-500">{t('srv.dnsx.sendersHint')}</p>
+            <div className="grid gap-3">
+                {addresses.map((ip) => {
+                    const r = found.get(ip);
+                    const v6 = ip.includes(':');
+                    const helo = r?.heloHost || dnsInfo?.heloHost || ptr?.value;
+                    return (
+                        <div key={ip} className="rounded-lg border border-slate-100 bg-slate-50 p-3">
+                            <div className="mb-2 flex flex-wrap items-center gap-2">
+                                <Pill tone="slate">{v6 ? 'IPv6' : 'IPv4'}</Pill>
+                                <code className="min-w-0 break-all font-mono text-xs text-slate-800">{ip}</code>
+                            </div>
+                            <ul className="grid gap-1.5 text-xs text-slate-600">
+                                {line(r ? r.host === 'ok' : null, t('srv.dnsx.chk.host', { type: v6 ? 'AAAA' : 'A', host: dnsInfo?.records?.mx?.value || '' }))}
+                                {line(r ? r.spf === 'pass' : null, r && r.spf !== 'pass' ? t('srv.dnsx.chk.spfNot', { result: r.spf }) : t('srv.dnsx.chk.spf'))}
+                                {line(r ? r.helo === 'ok' : null, t('srv.dnsx.chk.helo', { helo }))}
+                            </ul>
+                            <div className="mt-2 flex flex-wrap items-center gap-2 text-xs text-slate-600 sm:flex-nowrap">
+                                <span className="min-w-0 flex-1 break-words">{t('srv.dnsx.chk.ptr')} <code className="break-all font-mono text-slate-800">{ip} → {helo}</code></span>
+                                <CopyBtn value={helo} t={t} />
+                            </div>
+                        </div>
+                    );
+                })}
+            </div>
+            {!check?.results?.senders && <p className="mt-3 text-[11px] text-slate-500">{t('srv.dnsx.sendersVerify')}</p>}
+        </div>
+    );
+}
+
 function Dns({ t, locale, dnsInfo, loading, reload }: any) {
     const [provider, setProvider] = useState('generic');
     const [check, setCheck] = useState<any>(null);
@@ -931,12 +999,20 @@ function Dns({ t, locale, dnsInfo, loading, reload }: any) {
                 {check?.checkedAt && <p className="text-xs text-slate-500">{fullDate(check.checkedAt, locale)}</p>}
                 {!dnsInfo ? <div className="py-16 text-center"><Spinner className="text-2xl" /></div> : (
                     <>
-                        <DnsRow step={1} title="MX" record={dnsInfo.records?.mx} note={note('mx')} check={check?.results?.mx} t={t} />
-                        <DnsRow step={2} title="A" record={dnsInfo.records?.a} note={note('a')} check={check?.results?.a} t={t} />
-                        <DnsRow step={3} title="SPF" record={dnsInfo.records?.spf} note={note('spf')} check={check?.results?.spf} t={t} />
-                        <DnsRow step={4} title="DKIM" record={dnsInfo.records?.dkim} note={note('dkim')} check={check?.results?.dkim} t={t} />
-                        <DnsRow step={5} title="DMARC" record={dnsInfo.records?.dmarc} check={check?.results?.dmarc} t={t} />
-                        <DnsRow step={6} title="PTR" record={dnsInfo.records?.ptr} note={note('ptr')} t={t} />
+                        {(() => {
+                            // AAAA only when this server has a public IPv6; the steps number what is shown.
+                            const rows = [
+                                { title: 'MX', record: dnsInfo.records?.mx, note: note('mx'), check: check?.results?.mx },
+                                { title: 'A', record: dnsInfo.records?.a, note: note('a'), check: check?.results?.a },
+                                { title: 'AAAA', record: dnsInfo.records?.aaaa, note: note('aaaa'), check: check?.results?.aaaa },
+                                { title: 'SPF', record: dnsInfo.records?.spf, note: note('spf'), check: check?.results?.spf },
+                                { title: 'DKIM', record: dnsInfo.records?.dkim, note: note('dkim'), check: check?.results?.dkim },
+                                { title: 'DMARC', record: dnsInfo.records?.dmarc, check: check?.results?.dmarc },
+                                { title: 'PTR', record: dnsInfo.records?.ptr, note: note('ptr') },
+                            ].filter(r => r.record);
+                            return rows.map((r, i) => <DnsRow key={r.title} step={i + 1} title={r.title} record={r.record} note={r.note} check={r.check} t={t} />);
+                        })()}
+                        <SenderAddresses t={t} dnsInfo={dnsInfo} check={check} />
                     </>
                 )}
             </div>
@@ -996,7 +1072,7 @@ function TestDelivery({ t }: any) {
 
 const SETTINGS_KEYS_EDITABLE = [
     'mail_from_email', 'mail_from_name', 'smtp_listen_port', 'smtp_proxy_ips', 'smtp_catch_all', 'mail_helo_host',
-    'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls',
+    'mail_server', 'mail_port', 'mail_secure', 'mail_user', 'mail_pass', 'mail_relay_require_tls', 'mail_relay_mode',
     'mail_security_dkim_domain', 'mail_security_dkim_selector', 'mail_security_dnsbl_enabled', 'mail_security_spf_enabled',
     'mail_security_spf_reject', 'mail_security_dmarc_enabled', 'mail_undo_send_seconds', 'mail_blocked_senders', 'mail_allowed_senders',
     'mail_quota_default_mb', 'mail_forwarding_allowed',
@@ -1076,8 +1152,8 @@ export default function ServerAdmin({ t, locale, toasts, confirm, canUseMail, on
                         <button key={id} type="button" role="tab" aria-selected={tab === id} onClick={() => setTab(id)}
                             className={cx('flex shrink-0 items-center gap-2 border-b-2 px-3 pb-2.5 pt-1 text-sm transition-colors', tab === id ? 'border-violet-600 font-semibold text-violet-700' : 'border-transparent text-slate-500 hover:text-slate-800')}>
                             <i className={cx(icon, 'text-xs')}></i>{t(`srv.${id}`)}
-                            {id === 'queue' && overview && (overview.totals.failed + overview.totals.retrying) > 0 && (
-                                <span className="rounded-full bg-red-100 px-1.5 text-[10px] font-bold text-red-700">{overview.totals.failed + overview.totals.retrying}</span>
+                            {id === 'queue' && overview && overview.totals.retrying > 0 && (
+                                <span className="rounded-full bg-amber-100 px-1.5 text-[10px] font-bold text-amber-800">{overview.totals.retrying}</span>
                             )}
                         </button>
                     ))}

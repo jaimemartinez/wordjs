@@ -210,3 +210,102 @@ test('the GC asks the ledger, the host and the other plugins before uninstalling
     assert.doesNotMatch(prune, /isLikelyCore/, 'the hard-coded shield list is gone');
     assert.match(src, /recordPluginInstalledDeps\(slug,/, 'installs are recorded');
 });
+
+// ---------------------------------------------------------------------------------------------------------
+// The host parses a plugin's multipart route — every part bounded, not only the file
+// ---------------------------------------------------------------------------------------------------------
+test('a plugin multipart route bounds its text fields as well as its file', async () => {
+    const fs = require('fs');
+    const os = require('os');
+    const express = require('express');
+    const request = require('supertest');
+    const multer = require('multer');
+    const { MULTIPART_LIMITS } = require('../core/plugin-isolate');
+    const src = fs.readFileSync(path.join(__dirname, '..', 'core', 'plugin-isolate.ts'), 'utf8');
+    assert.match(src, /multer\(\{ dest: stagingDir, limits: MULTIPART_LIMITS\(maxFileSize\) \}\)/, 'the route uses the shared limits');
+    const L = MULTIPART_LIMITS(1024 * 1024);
+    for (const k of ['fields', 'fieldSize', 'parts', 'fieldNameSize', 'headerPairs']) assert.ok(Number.isFinite(L[k]) && L[k] > 0, k);
+
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'wjs-mp-'));
+    const app = express();
+    app.post('/up', multer({ dest: dir, limits: L }).single('file'), (req: any, res: any) => res.json({ ok: true, fields: Object.keys(req.body).length }));
+    app.use((err: any, _req: any, res: any, _next: any) => res.status(413).json({ code: err && err.code }));
+    try {
+        const ok = await request(app).post('/up').field('subject', 'hi').attach('file', Buffer.from('x'), 'a.txt');
+        assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
+
+        let many = request(app).post('/up');
+        for (let i = 0; i < 30; i++) many = many.field(`f${i}`, 'v');
+        const r1 = await many;
+        assert.strictEqual(r1.status, 413);
+        assert.match(String(r1.body.code), /LIMIT_(FIELD_COUNT|PART_COUNT)/);
+
+        const r2 = await request(app).post('/up').field('big', 'x'.repeat(65 * 1024));
+        assert.strictEqual(r2.status, 413);
+        assert.strictEqual(r2.body.code, 'LIMIT_FIELD_VALUE');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+});
+
+// ---------------------------------------------------------------------------------------------------------
+// Plugin DDL runs under the plugin's principal; a plugin left without one is reported (Site Health)
+// ---------------------------------------------------------------------------------------------------------
+async function withFakeDb(fakeDb: any, fn: (iso: any) => Promise<void>) {
+    const dbPath = require.resolve('../config/database');
+    const prev = require.cache[dbPath];
+    const m = new Module(dbPath); m.filename = dbPath; m.loaded = true; m.exports = fakeDb;
+    require.cache[dbPath] = m;
+    const isoPath = require.resolve('../core/plugin-db-isolation');
+    delete require.cache[isoPath];
+    try { await fn(require('../core/plugin-db-isolation')); } finally {
+        if (prev) require.cache[dbPath] = prev; else delete require.cache[dbPath];
+        delete require.cache[isoPath];
+    }
+}
+
+test('Postgres: plugin DDL runs AS the role, never on the admin connection; a failed hand-over is reported', async () => {
+    const calls: string[] = [];
+    const pg: any = {
+        runAsRole: async () => ({}), ensurePluginRole: async () => { calls.push('role'); },
+        grantPluginPrefix: async () => { calls.push('grant'); }, enablePluginDdl: async () => { calls.push('ddl-on'); },
+        runDdlAsRole: async (role: string, sql: string) => { calls.push(`ddl-as:${role}:${sql}`); return { changes: 0 }; },
+        grantPluginTable: async () => { }, ownPluginTable: async () => { calls.push('own'); },
+    };
+    const admin: string[] = [];
+    await withFakeDb({ getDbType: () => ({ isPostgres: true }), getDbAsync: () => pg, dbAsync: { run: async (s: string) => { admin.push(s); return {}; } } }, async (iso) => {
+        await iso.provision('faq');
+        await iso.runDdl('faq', 'CREATE TABLE wjp_faq_x (id INT)', [], ['wjp_faq_x']);
+        assert.ok(calls.includes('ddl-as:wjp_role_faq:CREATE TABLE wjp_faq_x (id INT)'), calls.join(','));
+        assert.deepStrictEqual(admin, [], 'no plugin DDL on the admin connection');
+        await iso.grantNewTable('faq', 'wjp_faq_x');
+        assert.ok(calls.includes('own'), 'a table created through the host is handed to the role');
+        assert.deepStrictEqual(iso.degradedPrincipals(), []);
+    });
+    pg.enablePluginDdl = async () => { throw new Error('must be member of role'); };
+    await withFakeDb({ getDbType: () => ({ isPostgres: true }), getDbAsync: () => pg, dbAsync: { run: async (s: string) => { admin.push(s); return {}; } } }, async (iso) => {
+        await iso.provision('faq');
+        assert.deepStrictEqual(iso.degradedPrincipals().map((d: any) => d.slug), ['faq'], 'Site Health names the plugin');
+    });
+});
+
+test('MySQL: plugin DDL grants exactly the owned objects and runs AS the user; a provisioning failure is reported', async () => {
+    const calls: string[] = [];
+    const my: any = {
+        runAsUser: async () => ({}), ensurePluginUser: async () => { }, grantPluginPrefixToUser: async () => { },
+        grantPluginDdlToUser: async (u: string, names: string[]) => { calls.push(`grant:${u}:${names.join('+')}`); },
+        runDdlAsUser: async (u: string, _pw: string, sql: string) => { calls.push(`ddl-as:${u}:${sql}`); return {}; },
+    };
+    await withFakeDb({ getDbType: () => ({ isMySQL: true }), getDbAsync: () => my, dbAsync: { run: async () => { calls.push('admin'); return {}; } } }, async (iso) => {
+        await iso.provision('faq');
+        await iso.runDdl('faq', 'ALTER TABLE wjp_faq_a RENAME TO wjp_faq_b', [], ['wjp_faq_a', 'wjp_faq_b']);
+        assert.deepStrictEqual(calls, ['grant:wjp_faq:wjp_faq_a+wjp_faq_b', 'ddl-as:wjp_faq:ALTER TABLE wjp_faq_a RENAME TO wjp_faq_b']);
+    });
+    my.ensurePluginUser = async () => { throw new Error('CREATE USER command denied'); };
+    await withFakeDb({ getDbType: () => ({ isMySQL: true }), getDbAsync: () => my, dbAsync: { run: async () => ({}) } }, async (iso) => {
+        await iso.provision('faq');
+        const d = iso.degradedPrincipals();
+        assert.deepStrictEqual(d.map((x: any) => x.slug), ['faq']);
+        assert.match(d[0].reason, /CREATE USER/);
+    });
+});

@@ -31,7 +31,9 @@ const { purgeFrontend } = require('../core/frontend-purge');
 // threw out of MenuItem.create's `if (!menuId)` as a bare 500, and `/menus/abc/location` answered 200
 // after writing `{"primary": null}` into the nav_menu_locations option — a silent success that
 // unassigned the location. Both are covered by the same declaration.
-const { requireRouteId } = require('../core/query-params');
+const { requireRouteId, bodyId, MAX_ID } = require('../core/query-params');
+/** The longest title or class list a menu item takes. */
+const MAX_MENU_ITEM_TEXT = 500;
 router.param('id', requireRouteId({ code: 'rest_menu_invalid', message: 'Menu not found.' }));
 router.param('itemId', requireRouteId({ code: 'rest_menu_item_invalid', message: 'Menu item not found.' }));
 
@@ -365,6 +367,11 @@ router.post('/:id/location', authenticate, isAdmin, asyncHandler(async (req: Req
             data: { status: 400 }
         });
     }
+    // A location is a name, the key of the stored map: an array or object would become a key like
+    // "a,b" or "[object Object]" (models/Menu setLocation).
+    if (typeof location !== 'string' || location.length > 100) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'location is a location name.', data: { status: 400 } });
+    }
 
     await Menu.setLocation(location, menuId);
     // Also purged by the updated_option('nav_menu_locations') hook once wired; the explicit call keeps
@@ -444,8 +451,9 @@ async function menuItemProblem(menuId: number, itemId: number | null, data: { pa
         return 'target must be "_self" or "_blank".';
     }
     if (data.parent === undefined || data.parent === null || data.parent === '' || Number(data.parent) === 0) return null;
-    const parentId = Number(data.parent);
-    if (!Number.isSafeInteger(parentId) || parentId < 0) return 'parent must be a menu item id (0 for the top level).';
+    // An id an id column can hold (core/query-params bodyId).
+    const parentId = bodyId(data.parent);
+    if (parentId === null) return 'parent must be a menu item id (0 for the top level).';
     if (itemId !== null && parentId === itemId) return 'A menu item cannot be its own parent.';
     const items = await MenuItem.findByMenu(menuId);
     const byId = new Map<number, any>(items.map((i: any) => [Number(i.id), i]));
@@ -556,12 +564,36 @@ router.put('/items/:itemId', authenticate, isAdmin, asyncHandler(async (req: Req
     const problem = await menuItemProblem(existing.menuId, itemId, { parent: (req.body || {}).parent, target: (req.body || {}).target });
     if (problem) return res.status(400).json({ code: 'rest_invalid_param', message: problem, data: { status: 400 } });
 
+    // ONLY THE FIELDS AN ITEM HAS, EACH CHECKED: the body used to reach the model whole, so any value
+    // shape — an object as the title, a float or a 20-digit number as the order — went to the columns.
+    // Fields the editor echoes back that are not writable (id, type, objectId…) are ignored, as before.
+    const body = req.body && typeof req.body === 'object' && !Array.isArray(req.body) ? req.body : {};
+    const updateData: Record<string, unknown> = {};
+    const invalid = (message: string) => res.status(400).json({ code: 'rest_invalid_param', message, data: { status: 400 } });
+    if (body.title !== undefined) {
+        if (typeof body.title !== 'string' || !body.title.trim() || body.title.length > MAX_MENU_ITEM_TEXT) return invalid(`title is text of 1 to ${MAX_MENU_ITEM_TEXT} characters.`);
+        updateData.title = body.title;
+    }
+    if (body.order !== undefined) {
+        const order = typeof body.order === 'string' && /^-?[0-9]{1,10}$/.test(body.order.trim()) ? Number(body.order) : body.order;
+        if (typeof order !== 'number' || !Number.isInteger(order) || Math.abs(order) > MAX_ID) return invalid('order is a whole number.');
+        updateData.order = order;
+    }
+    if (body.parent !== undefined) {
+        // menuItemProblem above accepted it: 0/''/null for the top level, or an item id of this menu.
+        updateData.parent = body.parent === null || body.parent === '' || Number(body.parent) === 0 ? 0 : bodyId(body.parent);
+    }
+    if (body.target !== undefined) updateData.target = body.target === null ? '' : body.target;
+    if (body.classes !== undefined) {
+        if (typeof body.classes !== 'string' || body.classes.length > MAX_MENU_ITEM_TEXT) return invalid(`classes is text of at most ${MAX_MENU_ITEM_TEXT} characters.`);
+        updateData.classes = body.classes;
+    }
     // SECURITY (XSS-03): sanitize the url before persisting. Only sanitize when a url is actually being
     // updated so the model's "update only provided fields" contract is preserved; an explicitly-cleared
     // url becomes '#' rather than being dropped.
-    const updateData = req.body;
-    if (updateData && updateData.url !== undefined) {
-        updateData.url = safeMenuUrl(updateData.url) || '#';
+    if (body.url !== undefined) {
+        if (body.url !== null && typeof body.url !== 'string') return invalid('url is text.');
+        updateData.url = safeMenuUrl(body.url) || '#';
     }
 
     const item = await MenuItem.update(itemId, updateData);

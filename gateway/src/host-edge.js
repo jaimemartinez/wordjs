@@ -72,8 +72,13 @@ const SITE = Symbol('wordjs.hostEdge.site');
  * first, so it never reaches an upstream; the main site's requests carry none.
  */
 const SITE_HOST_HEADER = 'x-wordjs-site-host';
+// Set by the frontend's own proxy function (frontend/src/proxy.ts) on a network site's page requests, and
+// read by Next's internal multisite rewrite. Only Next may set it: a client's copy is dropped here too,
+// since that function does not run on every path (Next's static assets).
+const SITE_ROUTE_HEADER = 'x-wordjs-site-route';
 function pinSiteHeader(req) {
     delete req.headers[SITE_HOST_HEADER];
+    delete req.headers[SITE_ROUTE_HEADER];
     const site = req && req[SITE];
     if (site && site.host) req.headers[SITE_HOST_HEADER] = site.host;
 }
@@ -115,6 +120,55 @@ function frontendRelayPeers(registry, prefixOwner, ownAddresses) {
     return out;
 }
 
+/**
+ * The header a frontend node's server-side reads carry to prove they ARE the frontend node, and the
+ * value it must hold: an HMAC of a fixed label under the cluster's revalidate secret, which enrollment
+ * hands to every node and nothing outside the cluster holds. A peer ADDRESS is not an identity — every
+ * process on a frontend's machine shares it, a local reverse proxy in front of this listener included,
+ * and such a proxy passes its clients' X-Forwarded-Host through — so relayAuthority believes the header
+ * only next to this proof. The value is derived rather than the secret itself, so a proof that leaks
+ * does not leak the purge secret. frontend/src/lib/server-api.ts computes the same value.
+ */
+const RELAY_PROOF_HEADER = 'x-wordjs-relay';
+const RELAY_PROOF_LABEL = 'wordjs-frontend-relay-v1';
+function relayProof(secret) {
+    if (typeof secret !== 'string' || secret.length < 16) return null;
+    return require('crypto').createHmac('sha256', secret).update(RELAY_PROOF_LABEL).digest('hex');
+}
+function relayProofMatches(presented, expected) {
+    if (typeof presented !== 'string' || typeof expected !== 'string' || presented.length !== expected.length) return false;
+    return require('crypto').timingSafeEqual(Buffer.from(presented), Buffer.from(expected));
+}
+
+/**
+ * HOP-BY-HOP request headers (RFC 9110 §7.6.1) belong to the client's connection to THIS listener and are
+ * not forwarded: the fixed set, and every header the client's own `Connection` names (a client could
+ * otherwise name a header the upstream relies on and have the next hop act on it, or smuggle
+ * Proxy-Authorization through). http-proxy forwards them all as received. An upgrade keeps exactly what
+ * makes it one — `Connection: upgrade` and `Upgrade`; every other request drops both. Host and the
+ * body framing headers are never removed this way.
+ */
+const HOP_BY_HOP = ['keep-alive', 'proxy-connection', 'proxy-authorization', 'proxy-authenticate', 'te', 'trailer'];
+const NEVER_HOP = new Set(['host', 'content-length', 'transfer-encoding']);
+// An RFC 9110 field-name token. Anything else in `Connection` names no header and is ignored.
+const HEADER_TOKEN = /^[!#$%&'*+.^_`|~0-9a-z-]{1,64}$/;
+function stripHopByHop(req, upgrade) {
+    const headers = req.headers || {};
+    const named = new Set(String(headers.connection || '').split(',').map((t) => t.trim().toLowerCase())
+        .filter((t) => HEADER_TOKEN.test(t) && !NEVER_HOP.has(t) && !(upgrade && t === 'upgrade')));
+    // The keys removed are the request's OWN header keys that the client named — never a key taken from
+    // the client's value itself, so no name it chooses can reach an inherited property.
+    for (const key of Object.keys(headers)) {
+        if (named.has(key)) delete headers[key];
+    }
+    for (const name of HOP_BY_HOP) delete headers[name];
+    if (upgrade) headers.connection = 'upgrade';
+    else {
+        delete headers.connection;
+        delete headers.upgrade;
+    }
+}
+
 /** X-Forwarded-Host for the upstream: the address the edge judged, else (no edge) the Host received. */
 function forwardedHost(req) {
     const judged = judgedAddress(req);
@@ -142,7 +196,9 @@ function forwardedHost(req) {
  * believed on, which is how a cleartext request posed as TLS (the Secure-cookie and sign-in rules read it).
  */
 function pinForwardedHeaders(req) {
+    stripHopByHop(req, false);
     pinSiteHeader(req);
+    delete req.headers[RELAY_PROOF_HEADER]; // judged here; never relayed further
     const value = forwardedHost(req);
     req.headers['x-forwarded-host'] = value;
     if (value === '') delete req.headers.host;
@@ -160,7 +216,9 @@ function pinForwardedHeaders(req) {
  * hop is read by — is the real scheme.
  */
 function pinUpgradeHeaders(req) {
+    stripHopByHop(req, true);
     pinSiteHeader(req);
+    delete req.headers[RELAY_PROOF_HEADER];
     req.headers['x-forwarded-host'] = forwardedHost(req);
     delete req.headers['x-forwarded-server'];
     delete req.headers['x-forwarded-port'];
@@ -267,6 +325,9 @@ function safeLocation(origin, rawUrl) {
  *                    Settings → Site address lists page refusals too; a gateway worker passes
  *                    createReportingRefusals, whose lists reach the backend through the primary.
  *   now()            clock for alias expiry.
+ *   relayPeers(), relayKey()
+ *                    multisite relays (relayAuthority): the registered frontend nodes' addresses, and
+ *                    the relay proof they must present (relayProof). Without both, nobody relays.
  *
  * Returns { decide(req), handle(req, res), handleUpgrade(req, socket) }. `handle` and `handleUpgrade`
  * return true when they answered the request (the caller must stop) and false to let it through. Both
@@ -336,7 +397,9 @@ function createHostEdge(opts) {
      * the main site's address (an IP literal in separate mode, often a domain), and name the site they
      * render in X-Forwarded-Host. host-policy believes that header only from a trusted hop, and a frontend
      * node on another machine is none — so every other site's pages were rendered with the MAIN site's
-     * data. A peer this gateway registered as a frontend node (`relayPeers`, from the registry) is a relay:
+     * data. A peer this gateway registered as a frontend node (`relayPeers`, from the registry) that
+     * carries the frontend's relay proof (`relayKey`, see relayProof) is a relay — the address alone is not
+     * enough, since a reverse proxy on that machine shares it:
      * its X-Forwarded-Host names the address, but only when the address it connected to is one this
      * network answers AND the address it names is one too. A DNS-rebinding page cannot satisfy the first
      * (its Host is the attacker's name), and nothing outside the network's declared addresses can be named.
@@ -349,6 +412,9 @@ function createHostEdge(opts) {
         try { peers = o.relayPeers(); } catch { return null; }
         const peer = normalizePeer(req.socket && req.socket.remoteAddress);
         if (!peers || !peer || !peers.has(peer)) return null;
+        let expected = null;
+        try { expected = typeof o.relayKey === 'function' ? o.relayKey() : null; } catch { expected = null; }
+        if (!relayProofMatches(req.headers[RELAY_PROOF_HEADER], expected)) return null;
         const t = now();
         if (hp.classify(authority.parsed, pol, { now: t }).cls === 'unknown') return null;
         const raw = xfh.split(',')[0].trim();
@@ -1028,7 +1094,11 @@ module.exports = {
     pinUpgradeHeaders,
     pinSiteHeader,
     SITE_HOST_HEADER,
+    SITE_ROUTE_HEADER,
+    stripHopByHop,
     frontendRelayPeers,
+    relayProof,
+    RELAY_PROOF_HEADER,
     // the edge
     EDGE_PROBE_PATHS,
     ACME_CHALLENGE_PATH,

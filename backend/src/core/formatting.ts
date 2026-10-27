@@ -14,7 +14,7 @@ const slugifyLib = require('slugify');
 // dangerouslySetInnerHTML, and `class="fixed inset-0 z-50 w-full h-full bg-white"` around an
 // attacker-chosen <a href> is a full-screen credential-phishing overlay inside /admin.
 // sanitize-meta.ts requires nothing from this module, so there is no cycle.
-const { withClassBound } = require('./sanitize-meta');
+const { withClassBound, withNamedPropsBound } = require('./sanitize-meta');
 
 /**
  * The longest slug this function will produce.
@@ -68,8 +68,8 @@ function boundSlug(slug: string, maxLength: number = MAX_SLUG_LENGTH) {
  * Sanitize HTML content
  * Equivalent to wp_kses()
  */
-function sanitizeContent(content: string, allowedTags: any = null) {
-    const defaultAllowed = {
+function defaultContentConfig(): any {
+    return {
         allowedTags: [
             'h1', 'h2', 'h3', 'h4', 'h5', 'h6',
             'p', 'br', 'hr',
@@ -126,12 +126,34 @@ function sanitizeContent(content: string, allowedTags: any = null) {
         },
         allowedSchemes: ['http', 'https', 'mailto', 'tel']
     };
+}
+
+function sanitizeContent(content: string, allowedTags: any = null) {
+    const defaultAllowed = defaultContentConfig();
 
     // The bound is applied to the config that is actually USED, not only to the default one: the
     // `allowedTags` parameter replaces the whole configuration, so a caller that passes its own would
     // otherwise re-open the channel this function exists to close. withClassBound preserves whatever
     // transformTags that config declares.
-    return sanitizeHtml(content, withClassBound(allowedTags || defaultAllowed));
+    // The same holds for ids (DOM clobbering): every author id is namespaced, whichever config is used.
+    return sanitizeHtml(content, withNamedPropsBound(withClassBound(allowedTags || defaultAllowed)));
+}
+
+/**
+ * Sanitize the HTML a PLUGIN or THEME shortcode returned, before it is spliced into a post.
+ *
+ * The same allow-list as sanitizeContent (the one plugin widgets go through), plus only inert
+ * accessibility and loading attributes a rendered component legitimately carries — `role`,
+ * `aria-*`, `tabindex`, and `loading`/`decoding` on <img> (the bundled photo-carousel's slides).
+ * None of them is an event handler, a URL or a style, so the allowance adds no script channel.
+ * Scripts, event handlers, forms, iframes, <style> and javascript: URLs are removed as everywhere.
+ */
+function sanitizeShortcodeOutput(html: string) {
+    const config = defaultContentConfig();
+    // sanitize-html merges the '*' list into every tag's own list.
+    config.allowedAttributes['*'] = [...config.allowedAttributes['*'], 'role', 'aria-*', 'tabindex'];
+    config.allowedAttributes.img = [...config.allowedAttributes.img, 'loading', 'decoding'];
+    return sanitizeHtml(String(html), withClassBound(config));
 }
 
 /**
@@ -160,18 +182,27 @@ function escAttr(text: any) {
  * Escape URL
  * Equivalent to esc_url()
  */
-function escUrl(url: string) {
+function escUrl(url: string, allowedProtocols: readonly string[] = ['http:', 'https:', 'mailto:', 'tel:']) {
     if (!url) return '';
     try {
         const parsed = new URL(url);
-        const allowedProtocols = ['http:', 'https:', 'mailto:', 'tel:'];
         if (!allowedProtocols.includes(parsed.protocol)) {
             return '';
         }
-        return parsed.href;
+        // WHATWG URL serialisation leaves quotes, angle brackets and backticks raw in opaque paths
+        // (mailto:, tel:) and in some components of http(s) URLs. Percent-encode them so the result
+        // can never close or open an HTML attribute, whatever sink it lands in.
+        return parsed.href.replace(/["'<>`\s]/g, (c) => '%' + c.charCodeAt(0).toString(16).toUpperCase().padStart(2, '0'));
     } catch {
         return '';
     }
+}
+
+/**
+ * Escape a URL used as a media source (img/audio/video src, poster): only http(s), never mailto:/tel:.
+ */
+function escMediaUrl(url: string) {
+    return escUrl(url, ['http:', 'https:']);
 }
 
 /**
@@ -292,9 +323,11 @@ module.exports = {
     boundSlug,
     MAX_SLUG_LENGTH,
     sanitizeContent,
+    sanitizeShortcodeOutput,
     escHtml,
     escAttr,
     escUrl,
+    escMediaUrl,
     nl2br,
     autop,
     trimWords,

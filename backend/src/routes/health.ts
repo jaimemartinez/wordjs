@@ -33,9 +33,10 @@ const { publicErrorText } = require('../middleware/errorHandler');
  *                   type: string
  */
 router.get('/', async (req: Request, res: Response) => {
-    const status = await SystemHealth.checkDatabase();
+    // Public: the cached, deadline-bound verdict the root /health serves too (core/readiness).
+    const db = await require('../core/readiness').databaseHealth();
     res.json({
-        status: status.status === 'OK' ? 'ok' : 'error',
+        status: db === 'ok' ? 'ok' : 'error',
         timestamp: new Date().toISOString()
     });
 });

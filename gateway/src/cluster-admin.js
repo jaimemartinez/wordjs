@@ -113,4 +113,16 @@ function joinCommand({ role, gatewayHost, enrollPort, token, caFingerprint, host
     ].join(' \\\n     ');
 }
 
-module.exports = { removedStore, describeNodes, removeNode, ttlMinutes, pinnedHost, joinCommand, MAX_TTL_MIN, DEFAULT_TTL_MIN, path };
+/**
+ * The bootstrap config /enroll returns to a joining node of `role`. The gateway's management secret goes
+ * to a BACKEND node only: a frontend node registers, and fetches its purge secret, over mTLS with its
+ * certificate as the authorization, so it has no use for a credential it would otherwise share with
+ * every node of the cluster. Everything else (ports, site address, the purge secret) goes to both.
+ */
+function enrollmentConfig(role, { gatewaySecret, gatewayPort, gatewayInternalPort, siteUrl, revalidateSecret }) {
+    const out = { gatewayPort, gatewayInternalPort, siteUrl, revalidateSecret };
+    if (role === 'backend') out.gatewaySecret = gatewaySecret;
+    return out;
+}
+
+module.exports = { removedStore, describeNodes, removeNode, ttlMinutes, pinnedHost, joinCommand, enrollmentConfig, MAX_TTL_MIN, DEFAULT_TTL_MIN, path };

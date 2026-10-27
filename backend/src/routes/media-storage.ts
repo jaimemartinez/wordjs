@@ -266,6 +266,7 @@ router.put('/', authenticate, isAdmin, networkAdminOnly, asyncHandler(async (req
  *             type: object
  *             properties:
  *               probe: { type: string, description: "The probe name a first call answered; deletes that probe" }
+ *               currentPassword: { type: string, description: "The administrator's own password; needed only when the stored secret would be used with another endpoint, region or bucket (403 rest_sudo_required without it)" }
  *     responses:
  *       200:
  *         description: "{ ok, steps: [{ step, ok, detail }], probe?, publicUrl?, warnings: [{ field, code, message }] } - warnings name likely mistakes in the public URL (the key prefix doubled, a path-style endpoint without the bucket, plain http on an https site); they do not fail the test"
@@ -285,6 +286,15 @@ router.post('/test', authenticate, isAdmin, networkAdminOnly, asyncHandler(async
     }
     if (probe !== undefined && (typeof probe !== 'string' || !PROBE_RE.test(probe))) {
         return badRequest(res, 'probe is not a connection-test probe name.', ['probe']);
+    }
+    // The stored secret signs requests for the bucket it belongs to. A test that keeps it (no secret typed)
+    // but points at another endpoint, region or bucket needs the administrator's own password first.
+    const typedSecret = typeof fields.secretAccessKey === 'string' && fields.secretAccessKey !== '';
+    if (!typedSecret && store.s3 && store.s3.secretAccessKey) {
+        const saved = candidateStore(current.mediaStorage && typeof current.mediaStorage === 'object' ? current.mediaStorage : {});
+        const sameBucket = !!(saved.s3 && saved.s3.secretAccessKey === store.s3.secretAccessKey
+            && saved.s3.endpoint === store.s3.endpoint && saved.s3.region === store.s3.region && saved.s3.bucket === store.s3.bucket);
+        if (!sameBucket && await require('./users').requireSudoConfirmation(req, res)) return;
     }
     const target = await testTarget(store);
     if (!target) {

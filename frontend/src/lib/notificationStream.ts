@@ -72,11 +72,12 @@ export function openReconnectingStream(deps: StreamDeps): () => void {
             attempt = 0; // a delivered notification proves the stream works
             deps.onNotification(n);
         };
-        // A named `error` frame (older servers refuse a stream past the cap with one, inside a 200)
-        // arrives on the same listener as a network error; only the frame carries data.
+        // A named `error` frame (older servers refuse a stream past the cap with one, inside a 200; the
+        // server closes a stream whose session ended with `unauthorized`) arrives on the same listener as
+        // a network error; only the frame carries data. Either way, back off before trying again.
         es.addEventListener("error", (event: Event) => {
             const data = (event as MessageEvent).data;
-            if (typeof data === "string" && data.includes("too_many_streams")) refused = true;
+            if (typeof data === "string" && (data.includes("too_many_streams") || data.includes("unauthorized"))) refused = true;
         });
         es.onerror = () => {
             if (stopped || !es) return;

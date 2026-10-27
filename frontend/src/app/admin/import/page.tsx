@@ -262,6 +262,8 @@ export default function ImportPage() {
     const [media, setMedia] = useState<ImportMediaMode>("download");
     const [allowHttp, setAllowHttp] = useState(false);
     const [allowPrivateSource, setAllowPrivateSource] = useState(false);
+    // Whether this site may use the private-source option at all (primary site, or the operator's opt-in).
+    const [privateSourceAllowed, setPrivateSourceAllowed] = useState(false);
 
     const reset = () => {
         setFile(null); setAnalysis(null); setSummary(null); setError(""); setPhase("idle");
@@ -274,6 +276,8 @@ export default function ImportPage() {
         try {
             const res = await importApi.analyze(f);
             setAnalysis(res.analysis);
+            setPrivateSourceAllowed(res.privateSourceAllowed === true);
+            if (res.privateSourceAllowed !== true) setAllowPrivateSource(false);
             setPhase("ready");
         } catch (e) {
             setError(e instanceof Error ? e.message : t("wpImport.readFailed"));
@@ -290,7 +294,7 @@ export default function ImportPage() {
                 importComments,
                 media,
                 allowHttp: media === "download" ? allowHttp : false,
-                allowPrivateSource: media === "download" ? allowPrivateSource : false,
+                allowPrivateSource: media === "download" && privateSourceAllowed ? allowPrivateSource : false,
             });
             setSummary(res.summary);
             setPhase("done");
@@ -413,7 +417,7 @@ export default function ImportPage() {
                                 label={t("wpImport.allowHttp.label")}
                                 hint={t("wpImport.allowHttp.hint")} />
                         )}
-                        {media === "download" && (
+                        {media === "download" && privateSourceAllowed && (
                             <Toggle checked={allowPrivateSource} onChange={setAllowPrivateSource}
                                 label={t("wpImport.allowPrivate.label")}
                                 hint={t("wpImport.allowPrivate.hint")} />

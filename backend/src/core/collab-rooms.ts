@@ -1266,6 +1266,10 @@ type RecheckScope = { userId?: number; postId?: number; all?: boolean };
  * ya no existe): no hay nada que re-autorizar contra una fila borrada.
  */
 function runRecheck(scope: RecheckScope, closePost = false): void {
+    // El stream de notificaciones responde a los mismos hechos de cuenta y de política (no a los de un post).
+    if (scope.postId === undefined) {
+        try { require('./notifications').recheck(scope.all ? undefined : scope.userId); } catch { /* queda su re-comprobación periódica */ }
+    }
     for (const room of [...roomsBySite.get().values()]) {
         if (scope.postId !== undefined && room.postId !== scope.postId) continue;
         for (const conn of [...room.conns.values()]) {

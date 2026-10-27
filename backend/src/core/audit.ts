@@ -149,6 +149,9 @@ const AUDIT_ACTIONS = Object.freeze({
     // stale entry was dropped and (only when the directory held no manifest and no entry file) its
     // residue removed. Recorded because it both changes the active list and deletes from disk.
     PLUGIN_ORPHAN_RECLAIM: 'plugin.orphan_reclaim',
+    // An install whose administrator chose to DISCARD what a previous uninstall kept under the same slug
+    // (existingData=discard): its data/ directory, wjp_<slug>_* tables, owned options and storage removed.
+    PLUGIN_DISCARD_PREVIOUS_DATA: 'plugin.discard_previous_data',
     // An administrator approved (or withdrew) an exact private host:port a plugin may reach (a LAN SMTP
     // relay): {destinations} - the full approved list after the write.
     PLUGIN_PRIVATE_EGRESS: 'plugin.private_egress',

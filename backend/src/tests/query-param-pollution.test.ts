@@ -437,10 +437,11 @@ describe('CLASS: every guard that compares a query value to a string refuses the
 // ═════════════════════════════════════════════════════════════════════════════════════════════════
 describe('CLASS: the refused parameters are load-bearing, and the honest spelling still works', () => {
     test('?rest=false selects the INTERNAL types — the answer a repeat quietly inverted', async () => {
-        const internal = await anon('get', '/types?rest=false');
+        // As an administrator: the definitions of internal types are shown only to who may edit them.
+        const internal = await as('admin', 'get', '/types?rest=false');
         assert.strictEqual(internal.status, 200);
         const internalNames = internal.body.map((t: any) => t.name);
-        const exposed = await anon('get', '/types');
+        const exposed = await as('admin', 'get', '/types');
         assert.strictEqual(exposed.status, 200);
         const exposedNames = exposed.body.map((t: any) => t.name);
 

@@ -60,7 +60,7 @@ const AdmZip = require('adm-zip');
 const multer = require('multer');
 const fs = require('fs');
 const path = require('path');
-const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, validatePluginPermissions, validateManifestPermissions, validateManifestRoles, syncPluginRoles, validateManifestDependencies, validateBrowserCapability, browserCodeSources, BROWSER_SCRIPT_TOKEN, listOrphanedPlugins, reclaimOrphanedPlugin, clearOrphanNotice, PLUGINS_DIR } = require('../core/plugins');
+const { getAllPlugins, activatePlugin, deactivatePlugin, createSamplePlugin, isPluginActive, listPluginTables, validatePluginPermissions, validateManifestPermissions, validateManifestRoles, syncPluginRoles, validateManifestDependencies, validateBrowserCapability, browserCodeSources, BROWSER_SCRIPT_TOKEN, listOrphanedPlugins, reclaimOrphanedPlugin, clearOrphanNotice, PLUGINS_DIR } = require('../core/plugins');
 const { assertZipWithinBudget } = require('../core/zip-guard');
 // refusePluginGrantByToken: an API token may revoke a plugin's grants or narrow its egress, never add to
 // them — nor activate a plugin whose activation would seed its declared permissions. isHeadless puts a
@@ -101,7 +101,10 @@ const upload = multer({
         // SECURITY: Prevent CVE-2025-47935/47944 DoS
         files: 1,           // Only 1 plugin zip per request
         fields: 10,         // Minimal fields needed
-        parts: 15           // Limited total parts
+        fieldSize: 16 * 1024,
+        fieldNameSize: 100,
+        parts: 15,          // Limited total parts
+        headerPairs: 200
     },
     fileFilter: (req: Request, file: Express.Multer.File, cb: FileFilterCallback) => {
         if (file.mimetype === 'application/zip' || file.mimetype === 'application/x-zip-compressed' || file.originalname.endsWith('.zip')) {
@@ -330,19 +333,26 @@ function resolveSafePluginDir(slug: any): string {
  *               plugin:
  *                 type: string
  *                 format: binary
+ *               existingData:
+ *                 type: string
+ *                 enum: [adopt, discard]
+ *                 description: Required only when a previous uninstall kept this plugin's data directory or tables. adopt keeps them and reconnects the plugin to them; discard removes them once the new package has passed validation.
  *     responses:
  *       200:
  *         description: Plugin installed
  *       400:
  *         description: Invalid file or zip slip detected
  *       409:
- *         description: core_version_too_old - the plugin's manifest requires a newer WordJS (requires.wordjs) than this install runs; nothing is installed. The body names requires, minimum and current.
+ *         description: existing_plugin_data - a previous installation left its data directory or tables and the request did not say whether to adopt or discard them (the body lists them in data.dataDir and data.tables); reserved_plugin_slug - the slug is reserved by the host (core, theme-*, @*); core_version_too_old - the plugin's manifest requires a newer WordJS (requires.wordjs) than this install runs; nothing is installed. The body names requires, minimum and current.
  */
 router.post('/upload', authenticate, isAdmin, upload.single('plugin'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
-    const result = await installPluginFromZip(req.file.path, req.file.originalname, undefined, req.user && req.user.id);
+    // What to do with data a previous uninstall kept (see installPluginFromZip): only these two words count.
+    const rawChoice = req.body && req.body.existingData;
+    const existingData = rawChoice === 'adopt' || rawChoice === 'discard' ? rawChoice : undefined;
+    const result = await installPluginFromZip(req.file.path, req.file.originalname, undefined, req.user && req.user.id, { existingData });
     // The marketplace path records its own `marketplace.install`; a direct zip upload is the same
     // lifecycle mutation and is recorded too (only when it actually installed something).
     if (result.ok && result.body && result.body.slug) {
@@ -482,7 +492,7 @@ function alreadyInstalled(slug: string, active: boolean, zip: any): { ok: boolea
  *   the point, and runPluginUpdate owns the swap. The case/Unicode squat check still runs against
  *   PLUGINS_DIR. The zip is consumed either way; the staged files are what the caller moves into place.
  */
-async function installPluginFromZip(zipPathIn: string, originalName: string, expectedSlug?: string, actorId?: any, opts: { stageRoot?: string } = {}): Promise<{ ok: boolean; status: number; body: any }> {
+async function installPluginFromZip(zipPathIn: string, originalName: string, expectedSlug?: string, actorId?: any, opts: { stageRoot?: string; existingData?: 'adopt' | 'discard' } = {}): Promise<{ ok: boolean; status: number; body: any }> {
     // CONTENCION PRIMERO — INLINE, Y AQUI SE QUEDA.
     //
     // POR QUE AQUI Y NO EN UN HELPER (no lo refactorices a una utilidad). Esta funcion borra su zip
@@ -510,7 +520,27 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
         return refuseUncontainedZip();
     }
     // ONE deletion helper, so no failure path can grow a raw unlink again.
-    const discardZip = () => { try { fs.unlinkSync(zipPath); } catch { /* already gone */ } };
+    // The containment is proved again INSIDE the closure, on the exact value it deletes: the check above
+    // guards the straight-line code, but a closure called from a dozen later failure paths is analysed
+    // on its own, and an unproved unlink there is the alert this comment block exists to prevent.
+    const discardZip = () => {
+        const target = path.resolve(zipPath);
+        if (!target.startsWith(OS_TMP_DIR + path.sep)) return;
+        try { fs.unlinkSync(target); } catch { /* already gone */ }
+    };
+    // existingData === 'discard': where the previous installation's data/ waits until the new package
+    // has passed validation. Any failure puts it back (restoreDiscardedData); success deletes it.
+    let discardedDataAside: string | null = null;
+    const restoreDiscardedData = (dir: string) => {
+        if (!discardedDataAside) return;
+        try {
+            fs.mkdirSync(dir, { recursive: true });
+            fs.renameSync(path.join(discardedDataAside, 'data'), path.join(dir, 'data'));
+            fs.rmSync(discardedDataAside, { recursive: true, force: true });
+            discardedDataAside = null;
+        } catch (e: any) { log.error({ err: e, aside: discardedDataAside }, '[plugins] could not restore the previous data directory after a failed install'); }
+    };
+    let restoreTarget: string | null = null;
     try {
         const zip = new AdmZip(zipPath);
         const zipEntries = zip.getEntries();
@@ -631,13 +661,14 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             }
         }
 
-        // SECURITY: an uploaded plugin must NOT claim a reserved system-plugin slug (empty list by default)
-        // nor clobber an existing plugin by case/Unicode variant. Canonicalize for comparison.
+        // SECURITY: an uploaded plugin must NOT claim a slug the host reserves for itself (`core`, the
+        // theme namespace `theme-*`, `@*` — core/plugin-slug-policy.ts, the one rule shared with the
+        // boot-time scan) nor clobber an existing plugin by case/Unicode variant. Canonicalize for comparison.
         const canonSlug = String(intendedSlug).normalize('NFC').toLowerCase();
-        const RESERVED_SLUGS: string[] = [];
-        if (RESERVED_SLUGS.some(s => String(s).normalize('NFC').toLowerCase() === canonSlug)) {
+        const reservedReason = require('../core/plugin-slug-policy').reservedPluginSlugReason(intendedSlug);
+        if (reservedReason) {
             discardZip();
-            return { ok: false, status: 409, body: { error: `Refused: '${intendedSlug}' is a reserved system plugin slug and cannot be uploaded or overwritten.` } };
+            return { ok: false, status: 409, body: { error: `Refused: ${reservedReason}. Rename the plugin's folder (its slug) and upload it again.`, code: 'reserved_plugin_slug' } };
         }
         try {
             const clash = fs.readdirSync(PLUGINS_DIR).find((d: string) => d !== intendedSlug && d.normalize('NFC').toLowerCase() === canonSlug);
@@ -704,6 +735,61 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             hadResidualData = fs.existsSync(path.join(installedDir, 'data'));
         }
 
+        // WHAT A PREVIOUS UNINSTALL KEPT IS ADOPTED ONLY ON AN EXPLICIT CHOICE. Uninstall-with-keep-data
+        // leaves plugins/<slug>/data/ and the wjp_<slug>_* tables behind; a later install under the same
+        // slug used to reconnect with them silently, so a different package that happened to carry the
+        // slug inherited the previous plugin's keys, attachments and rows. Now the caller must say which:
+        //   'adopt'   — keep them and reconnect (the previous behaviour, for a genuine reinstall);
+        //   'discard' — remove them and start clean (only once the new package has passed validation).
+        // Without a choice the answer is 409 `existing_plugin_data`, listing what was found, so the admin
+        // UI can ask. The update path (staging) replaces a plugin in place and is not concerned.
+        let discardLeftovers = false;
+        if (!staging) {
+            let leftoverTables: string[] = [];
+            try {
+                leftoverTables = await listPluginTables(intendedSlug);
+                // Only tables that are this slug's by the SQL guard's own ownership rule: 'acme' must not
+                // report (or, on discard, drop) the wjp_acme_shop_* tables of an installed 'acme-shop'.
+                const pluginApi = require('../core/plugin-api');
+                if (typeof pluginApi.isTableOwnedBy === 'function') {
+                    leftoverTables = leftoverTables.filter((t: string) => pluginApi.isTableOwnedBy(t, intendedSlug));
+                }
+            }
+            catch (e: any) { log.warn({ intendedSlug: logSafe(intendedSlug), err: e }, `[plugins] could not list the tables of ${logSafe(intendedSlug)} before installing it`); }
+            if (hadResidualData || leftoverTables.length > 0) {
+                const choice = opts.existingData;
+                if (choice !== 'adopt' && choice !== 'discard') {
+                    discardZip();
+                    return {
+                        ok: false,
+                        status: 409,
+                        body: {
+                            error: `A previous installation of '${intendedSlug}' left data behind`
+                                + `${hadResidualData ? ' (its data directory)' : ''}${leftoverTables.length ? ` (${leftoverTables.length} database table(s))` : ''}. `
+                                + 'Choose whether to keep it and reconnect the plugin to it, or to discard it and start clean, then upload again '
+                                + '(API: send existingData=adopt or existingData=discard with the zip).',
+                            code: 'existing_plugin_data',
+                            data: { slug: intendedSlug, dataDir: hadResidualData, tables: leftoverTables },
+                        },
+                    };
+                }
+                if (choice === 'discard') {
+                    // Set the preserved data/ aside (same volume: os-tmp is a sibling of plugins/) rather than
+                    // deleting it now: a package that fails validation below must leave the previous state
+                    // exactly as it was. Deleted for good — together with the tables — only on success.
+                    if (hadResidualData) {
+                        fs.mkdirSync(OS_TMP_DIR, { recursive: true, mode: 0o700 });
+                        const aside = fs.mkdtempSync(path.join(OS_TMP_DIR, 'discard-'));
+                        fs.renameSync(path.join(installedDir, 'data'), path.join(aside, 'data'));
+                        discardedDataAside = aside;
+                        restoreTarget = installedDir;
+                        hadResidualData = false; // a clean install: the zip's own data/ (if any) is extracted
+                    }
+                    discardLeftovers = true;
+                }
+            }
+        }
+
         // Write ONLY the already-validated FILE content entries OURSELVES — never zip.extractEntryTo (audit
         // #29 — adm-zip directory-entry Zip-Slip). extractEntryTo on a DIRECTORY entry re-enumerates that
         // dir's children by RAW startsWith-prefix, which re-introduces junk-filtered '..' entries that never
@@ -719,6 +805,8 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
             const hasDotDotSegment = rel.split('/').includes('..');
             if (!isContained || hasDotDotSegment) {
                 discardZip();
+                try { if (hadResidualData) removePluginDirPreservingData(installedDir); else fs.rmSync(installedDir, { recursive: true, force: true }); } catch { /* best-effort */ }
+                restoreDiscardedData(installedDir);
                 return { ok: false, status: 400, body: { error: 'Malicious zip file detected (Zip Slip / path traversal)' } };
             }
             // When adopting residual runtime data, the zip's own data/ payload is ignored ENTIRELY:
@@ -794,6 +882,7 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
                 if (hadResidualData) removePluginDirPreservingData(installedDir);
                 else fs.rmSync(installedDir, { recursive: true, force: true });
             } catch { /* best-effort */ }
+            restoreDiscardedData(installedDir);
             discardZip();
             if (valErr && valErr.status === 409 && valErr.body) return { ok: false, status: 409, body: valErr.body };
             return { ok: false, status: 400, body: { error: valErr.message, details: { missingPermissions: valErr.missingPermissions, dangerousCalls: valErr.dangerousCalls } } };
@@ -802,11 +891,26 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
         // Cleanup temp file
         discardZip();
 
+        // existingData === 'discard', and the package is valid: now the previous installation's leftovers
+        // go — its data/ (set aside above), its wjp_<slug>_* tables, owned options and private storage,
+        // as "delete with data" removes them.
+        if (discardLeftovers) {
+            if (discardedDataAside) {
+                try { fs.rmSync(discardedDataAside, { recursive: true, force: true }); }
+                catch (e: any) { log.warn({ err: e }, `[plugins] the previous data directory of ${logSafe(pluginSlug)} could not be removed from os-tmp`); }
+                discardedDataAside = null;
+            }
+            try { await require('../core/plugins').uninstallPluginData(pluginSlug, { dropTables: true, retireSandbox: false }); }
+            catch (e: any) { log.warn({ err: e }, `[plugins] the previous tables of ${logSafe(pluginSlug)} could not be removed`); }
+            await recordAudit(actorId, 'plugin.discard_previous_data', 'plugin', pluginSlug, { via: 'install' });
+        }
+
         if (staging) return { ok: true, status: 200, body: { success: true, staged: true, slug: pluginSlug } };
         return { ok: true, status: 200, body: { success: true, message: 'Plugin installed successfully', slug: pluginSlug } };
     } catch (error: any) {
         // Cleanup temp file on error
         discardZip();
+        if (restoreTarget) restoreDiscardedData(restoreTarget);
         log.error({ err: error }, '[plugins] install failed');
         return { ok: false, status: 500, body: { error: publicErrorText(error, 'Failed to install plugin.') } };
     }
@@ -1328,6 +1432,11 @@ async function recoverInterruptedPluginUpdates(): Promise<void> {
  *                         type: boolean
  *                       strategy:
  *                         type: string
+ *                       origins:
+ *                         type: array
+ *                         description: The https origins the script loads code from (e.g. an analytics provider); the public pages' Content-Security-Policy allows exactly these.
+ *                         items:
+ *                           type: string
  *                 styles:
  *                   type: array
  *                   items:
@@ -2012,8 +2121,12 @@ router.post('/:slug/permissions', authenticate, isAdmin, pluginLifecycleLimiter,
     // of truth (default-deny). We don't constrain to the manifest here — hasPermission already requires
     // BOTH the manifest declaration AND the grant, so granting an undeclared scope simply has no effect.
     const body = req.body || {};
+    // A JSON boolean or nothing: "false", 0 or {} must never read as "grant the network".
+    if (body.network !== undefined && typeof body.network !== 'boolean') {
+        return res.status(400).json({ error: 'network must be true or false.' });
+    }
     const tokens: string[] = Array.isArray(body.granted) ? body.granted.map((t: any) => String(t)) : [];
-    if (body.network) tokens.push('network');
+    if (body.network === true) tokens.push('network');
     // An administrator's decision (core/plugin-permissions ADMIN_DECISIONS_MARKER): no upgrade step may
     // later add back a capability this request left out, and a revoke of EVERY grant survives the next
     // activation instead of being re-seeded (shouldSeedDeclaredGrants).
@@ -3143,7 +3256,13 @@ router.delete('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request,
     if (!isValidSlug(slug)) {
         return res.status(400).json({ message: 'Invalid plugin slug' });
     }
-    const { password, dropData } = req.body;
+    const { password } = req.body;
+    // Deleting the plugin's data is irreversible, so only a JSON `true` asks for it: "false", "0", [false]
+    // or {} are refused rather than read as truthy. Absent = keep the data (the default).
+    if (req.body.dropData !== undefined && typeof req.body.dropData !== 'boolean') {
+        return res.status(400).json({ message: 'dropData must be true or false.' });
+    }
+    const dropData = req.body.dropData === true;
     const { isPluginActive, deactivatePlugin, PLUGINS_DIR, uninstallPluginData } = require('../core/plugins');
 
     if (!password) {

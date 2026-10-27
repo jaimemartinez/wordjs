@@ -33,7 +33,11 @@ test('the secret paths are the configuration, the data, logs and every plugin/th
 
 test('the probe protects the secrets first and requires an install-root canary to be refused', () => {
     const src = fs.readFileSync(path.join(__dirname, '..', 'core', 'sandbox-windows.ts'), 'utf8');
-    assert.match(src, /await protectSecretsFromAllAppContainers\(appRoot\);/);
+    // Protection runs in the profiles' round, which completes before either contained shape launches.
+    const probe = src.slice(src.indexOf('function probeAppContainer('));
+    const protect = probe.indexOf('protectSecretsFromAllAppContainers(appRoot)');
+    assert.ok(protect > 0 && protect < probe.indexOf('const [sid, siblingSid] = await Promise.all([') + 400);
+    assert.ok(protect < probe.indexOf('launchInAppContainer({'), 'the secrets are protected before any contained launch');
     assert.match(src, /const secretDenied = !secretCanary \|\| verdict\.secret === 'EPERM' \|\| verdict\.secret === 'EACCES';/);
     assert.match(src, /if \(!netDenied \|\| !readDenied \|\| !execDenied \|\| !canWork \|\| !secretDenied\)/);
     assert.match(src, /" {4}\$null = & icacls \$p \/inheritance:d \/C \/Q",\s+" {4}\$null = & icacls \$p \/remove:g \*S-1-15-2-1 \*S-1-15-2-2 \/C \/Q",/,

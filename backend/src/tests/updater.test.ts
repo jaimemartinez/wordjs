@@ -1,13 +1,16 @@
 /**
  * WordJS — Admin → Updates (core/updater, routes/update.ts, scripts/update-rollback.js), on the REAL app.
- * The network (GitHub's releases feed) and the process runner (`npx create-wordjs upgrade`) are injected;
+ * The network (GitHub's releases feed) and the process runner (the release's own create-wordjs, run by
+ * this Node binary) are injected;
  * everything around them is real:
  *
  *   - where the panel refuses, and what it says to do instead: a container, a git checkout, split mode,
  *     code this process cannot write, no supervisor;
- *   - the releases: only the project's published tags with a bundle, newest first, never a downgrade;
+ *   - the releases: only the project's published tags with a bundle, newest first, never a downgrade,
+ *     and never one that publishes no checksum for its bundle (listed, but refused with its reason);
  *   - POST /system/update: password AND a fresh two-factor code, administrators only, never an API token;
- *     then a backup, the official CLI with exactly `upgrade <root> --yes --version <tag>`, the state
+ *     then a backup, the CLI the installed release shipped (<root>/packages/create-wordjs/index.js) with
+ *     exactly `upgrade <root> --yes --version <tag>` — no registry package, no shell — the state
  *     `applied` and a restart (exit code 75 to the supervisor);
  *   - a failed CLI run puts the previous version back (`--version v<current> --force`) and says so;
  *   - the first boot after an update marks it done; the supervisor rolls back one that does not start,
@@ -33,6 +36,10 @@ const BACKEND = path.join(ROOT, 'backend');
 for (const d of ['backend/data', 'frontend']) fs.mkdirSync(path.join(ROOT, d), { recursive: true });
 fs.writeFileSync(path.join(ROOT, 'package.json'), JSON.stringify({ name: 'wordjs', version: '2.7.0' }));
 fs.writeFileSync(path.join(BACKEND, 'package.json'), JSON.stringify({ name: 'backend', version: '2.7.0' }));
+// The upgrade CLI every release ships; the panel runs this copy, never one fetched at update time.
+fs.mkdirSync(path.join(ROOT, 'packages', 'create-wordjs'), { recursive: true });
+fs.writeFileSync(path.join(ROOT, 'packages', 'create-wordjs', 'index.js'), '// fixture\n');
+const CLI = path.join(ROOT, 'packages', 'create-wordjs', 'index.js');
 const MAIN = 'localhost:3000';
 fs.writeFileSync(path.join(BACKEND, 'wordjs-config.json'), JSON.stringify({ installedAt: '2026-01-01T00:00:00.000Z', dbDriver: 'sqlite-native', siteUrl: `http://${MAIN}` }, null, 2));
 process.chdir(BACKEND);
@@ -58,19 +65,21 @@ const restart = require('../core/restart');
 const RELEASES = [
     { tag_name: 'v2.8.0', name: 'WordJS 2.8.0', body: '## What changed\n- Panel updates', published_at: '2026-10-21T00:00:00Z', assets: [{ name: 'wordjs-v2.8.0.zip' }, { name: 'wordjs-v2.8.0.zip.sha256' }] },
     { tag_name: 'v2.9.0-rc.1', name: 'RC', prerelease: true, assets: [{ name: 'wordjs-v2.9.0-rc.1.zip' }] },
+    // Newer, with a bundle but no checksum: listed, never installed by the panel.
+    { tag_name: 'v2.8.1', name: 'WordJS 2.8.1', published_at: '2026-10-22T00:00:00Z', assets: [{ name: 'wordjs-v2.8.1.zip' }] },
     { tag_name: 'v2.7.0', name: 'WordJS 2.7.0', assets: [{ name: 'wordjs-v2.7.0.zip' }] },
     { tag_name: 'v2.6.0', name: 'WordJS 2.6.0', assets: [{ name: 'wordjs-v2.6.0.zip' }] },
     { tag_name: 'nightly', assets: [] },
 ];
 const runs: string[][] = [];
 let exitCodes: number[] = [];
-const probeState = { docker: false, podman: false, git: false, writable: true };
+const probeState = { docker: false, podman: false, git: false, writable: true, noCli: false };
 updater._setForTests({
     fetchJson: async () => RELEASES,
     runner: async (args: string[]) => { runs.push(args); return exitCodes.length ? exitCodes.shift()! : 0; },
     probe: {
         exists: (p: string) => (p === '/.dockerenv' ? probeState.docker : p === '/run/.containerenv' ? probeState.podman
-            : p.endsWith(`${path.sep}.git`) ? probeState.git : fs.existsSync(p)),
+            : p.endsWith(`${path.sep}.git`) ? probeState.git : (p === CLI && probeState.noCli) ? false : fs.existsSync(p)),
         writable: () => probeState.writable,
     },
 });
@@ -159,6 +168,8 @@ describe('where the panel may update, and what it says otherwise', () => {
             ['docker', () => { probeState.podman = true; }, () => { probeState.podman = false; }, /pull the new image/],
             ['source_checkout', () => { probeState.git = true; }, () => { probeState.git = false; }, /git pull/],
             ['not_writable', () => { probeState.writable = false; }, () => { probeState.writable = true; }, /sudo npx create-wordjs@latest upgrade/],
+            // A release without its upgrade CLI cannot be updated by the panel (nothing is fetched instead).
+            ['not_a_release', () => { probeState.noCli = true; }, () => { probeState.noCli = false; }, /does not look like a WordJS release/],
             ['split_mode', () => { delete process.env.WORDJS_EMBEDDED; }, () => { process.env.WORDJS_EMBEDDED = '1'; }, /each machine/],
             ['no_supervisor', () => { delete process.env.WORDJS_SUPERVISED; }, () => { process.env.WORDJS_SUPERVISED = '1'; }, /supervisor/],
         ];
@@ -195,10 +206,11 @@ describe('Admin → Updates', () => {
         const res = await as('owner', 'get', `${API}/system/update`);
         assert.strictEqual(res.status, 200, JSON.stringify(res.body));
         assert.strictEqual(res.body.current, '2.7.0');
-        assert.strictEqual(res.body.latest.tag, 'v2.8.0');
-        assert.deepStrictEqual(res.body.newer.map((r: any) => r.tag), ['v2.8.0'], 'no pre-release, no older, no unversioned tag');
-        assert.match(res.body.latest.notes, /Panel updates/);
-        assert.strictEqual(res.body.latest.hasChecksum, true);
+        assert.strictEqual(res.body.latest.tag, 'v2.8.1');
+        assert.deepStrictEqual(res.body.newer.map((r: any) => r.tag), ['v2.8.1', 'v2.8.0'], 'no pre-release, no older, no unversioned tag');
+        assert.strictEqual(res.body.newer[0].hasChecksum, false, 'the one without a checksum says so');
+        assert.match(res.body.newer[1].notes, /Panel updates/);
+        assert.strictEqual(res.body.newer[1].hasChecksum, true);
         assert.strictEqual(res.body.environment.canUpdate, true);
         assert.strictEqual((await as('writer', 'get', `${API}/system/update`)).status, 403);
         assert.strictEqual((await (request(server) as any).get(`${API}/system/update`).set('Host', MAIN).set('Authorization', `Bearer ${tokens.apiToken}`)).status, 403);
@@ -216,6 +228,10 @@ describe('Admin → Updates', () => {
         const fake = await as('owner', 'post', `${API}/system/update`).send({ tag: 'v9.9.9', currentPassword: PASSWORD, mfaCode: freshCode() });
         assert.strictEqual(fake.status, 400);
         assert.strictEqual(fake.body.code, 'update_unknown_release');
+        const unverified = await as('owner', 'post', `${API}/system/update`).send({ tag: 'v2.8.1', currentPassword: PASSWORD, mfaCode: freshCode() });
+        assert.strictEqual(unverified.status, 409, JSON.stringify(unverified.body));
+        assert.strictEqual(unverified.body.code, 'update_unverified_release');
+        assert.match(unverified.body.message, /publishes no checksum/);
         const shell = await as('owner', 'post', `${API}/system/update`).send({ tag: 'v2.8.0; rm -rf /', currentPassword: PASSWORD, mfaCode: freshCode() });
         assert.strictEqual(shell.status, 400);
         assert.strictEqual(shell.body.code, 'update_invalid_tag');
@@ -228,7 +244,7 @@ describe('Admin → Updates', () => {
         assert.strictEqual(res.status, 202, JSON.stringify(res.body));
         await settle();
         assert.strictEqual(backups, 1, 'a backup was taken');
-        assert.deepStrictEqual(runs, [['--yes', 'create-wordjs@latest', 'upgrade', ROOT, '--yes', '--version', 'v2.8.0']]);
+        assert.deepStrictEqual(runs, [[CLI, 'upgrade', ROOT, '--yes', '--version', 'v2.8.0']]);
         const state = updater.readState();
         assert.strictEqual(state.state, 'applied');
         assert.strictEqual(state.fromTag, 'v2.7.0');
@@ -259,8 +275,8 @@ describe('Admin → Updates', () => {
         assert.ok(started.some((r: any) => /"reauth":"password"/.test(String(r.detail))), 'audited as confirmed by the password alone');
         await settle();
         assert.deepStrictEqual(runs, [
-            ['--yes', 'create-wordjs@latest', 'upgrade', ROOT, '--yes', '--version', 'v2.8.0'],
-            ['--yes', 'create-wordjs@latest', 'upgrade', ROOT, '--yes', '--version', 'v2.7.0', '--force'],
+            [CLI, 'upgrade', ROOT, '--yes', '--version', 'v2.8.0'],
+            [CLI, 'upgrade', ROOT, '--yes', '--version', 'v2.7.0', '--force'],
         ]);
         const state = updater.readState();
         assert.strictEqual(state.state, 'rolled_back');
@@ -278,9 +294,9 @@ describe('the supervisor rolls back a new version that does not start', () => {
     test('right after an applied update: the previous tag is re-applied once', () => {
         write({ state: 'applied', from: '2.7.0', fromTag: 'v2.7.0', to: '2.8.0', appliedAt: new Date(realNow()).toISOString() });
         const calls: any[] = [];
-        const ok = rollback.rollBack({ file: file(), root: ROOT, log: () => {}, spawnSync: (cmd: string, args: string[]) => { calls.push(args); return { status: 0 }; } });
+        const ok = rollback.rollBack({ file: file(), root: ROOT, log: () => {}, spawnSync: (cmd: string, args: string[], opts: any) => { calls.push({ cmd, args, shell: opts.shell, nodePath: opts.env.NODE_PATH }); return { status: 0 }; } });
         assert.strictEqual(ok, true);
-        assert.deepStrictEqual(calls, [['--yes', 'create-wordjs@latest', 'upgrade', ROOT, '--yes', '--version', 'v2.7.0', '--force']]);
+        assert.deepStrictEqual(calls, [{ cmd: process.execPath, args: [CLI, 'upgrade', ROOT, '--yes', '--version', 'v2.7.0', '--force'], shell: false, nodePath: path.join(ROOT, 'backend', 'node_modules') }]);
         assert.strictEqual(JSON.parse(fs.readFileSync(file(), 'utf8')).state, 'rolled_back');
         assert.strictEqual(rollback.rollBack({ file: file(), root: ROOT, log: () => {}, spawnSync: () => { throw new Error('must not run twice'); } }), false);
     });
@@ -293,5 +309,28 @@ describe('the supervisor rolls back a new version that does not start', () => {
         assert.strictEqual(rollback.rollBack({ file: file(), root: ROOT, log: () => {}, spawnSync: never }), false);
         fs.rmSync(file(), { force: true });
         assert.strictEqual(rollback.rollBack({ file: file(), root: ROOT, log: () => {}, spawnSync: never }), false);
+    });
+});
+
+describe('the upgrade runs the shipped CLI with this Node binary and no shell', () => {
+    test('arguments arrive exactly as given, whatever the install path contains', async () => {
+        // A path a shell would split or interpret: spaces, an ampersand, a quote and a dollar sign.
+        const odd = fs.mkdtempSync(path.join(os.tmpdir(), "wjs update & $HOME 'x' "));
+        try {
+            const cli = path.join(odd, 'packages', 'create-wordjs', 'index.js');
+            const out = path.join(odd, 'argv.json');
+            fs.mkdirSync(path.dirname(cli), { recursive: true });
+            fs.writeFileSync(cli, `require('fs').writeFileSync(${JSON.stringify(out)}, JSON.stringify({ argv: process.argv.slice(2), nodePath: process.env.NODE_PATH, exec: process.execPath }));\nconsole.log('Syncing runtime dependencies');\n`);
+            const lines: string[] = [];
+            const code = await updater._defaultRunner(updater.upgradeArgs(odd, 'v2.8.0'), odd, (l: string) => lines.push(l));
+            assert.strictEqual(code, 0, lines.join('\n'));
+            const seen = JSON.parse(fs.readFileSync(out, 'utf8'));
+            assert.deepStrictEqual(seen.argv, ['upgrade', odd, '--yes', '--version', 'v2.8.0']);
+            assert.strictEqual(seen.nodePath, path.join(odd, 'backend', 'node_modules'));
+            assert.strictEqual(seen.exec, process.execPath);
+            assert.ok(lines.some((l) => /Syncing runtime dependencies/.test(l)));
+        } finally {
+            fs.rmSync(odd, { recursive: true, force: true });
+        }
     });
 });

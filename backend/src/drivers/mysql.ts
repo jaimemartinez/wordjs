@@ -1164,8 +1164,37 @@ class MysqlDriver extends DatabaseDriverInterface {
         await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${db}.${tbl} TO ${uLit}@'%'`);
     }
 
+    /**
+     * GRANT a plugin user what its OWN DDL on these exact objects needs (core/plugin-db-isolation runDdl):
+     * ALL on each named table/view, which MySQL accepts for a name that does not exist yet. The names are
+     * the ones the plugin SQL guard proved the plugin owns; the statement then runs AS the user, so a
+     * view, trigger or CREATE TABLE … SELECT naming anything else is refused by the server itself, and a
+     * view or trigger it creates carries the user as its DEFINER.
+     */
+    async grantPluginDdlToUser(user: string, names: string[]): Promise<void> {
+        const uLit = mysqlSync.escape(safeIdent(user));
+        const db = mysqlSync.escapeId(String((this.config || config.db).name));
+        for (const name of names) {
+            const tbl = mysqlSync.escapeId(safeIdent(String(name).toLowerCase()));
+            await this.pool.query(`GRANT ALL PRIVILEGES ON ${db}.${tbl} TO ${uLit}@'%'`);
+        }
+    }
+
+    /** Run one DDL statement AS a plugin user, translated exactly as run() translates it. */
+    async runDdlAsUser(user: string, password: string, sql: string, params: any[] = []): Promise<any> {
+        const pool = this.getScopedPool(user, password);
+        const translated = await this.prepareStatement(sql);
+        try {
+            const [result] = await pool.query(translated, params);
+            return { lastID: (result && result.insertId) || 0, changes: (result && result.affectedRows) || 0 };
+        } catch (err: any) {
+            if (isBenignDup(err, translated)) return { lastID: 0, changes: 0 };
+            throw err;
+        }
+    }
+
     /** GRANT CRUD on every EXISTING wjp_<slug>_* table to a plugin user (initial provisioning). */
-    async grantPluginPrefixToUser(user: string, prefix: string): Promise<void> {
+    async grantPluginPrefixToUser(user: string, prefix: string, owns: (table: string) => boolean = () => true): Promise<void> {
         const dbName = String((this.config || config.db).name);
         // Escape LIKE metacharacters in the literal prefix with an EXPLICIT ESCAPE clause, using a char
         // that never appears in a table name. (This used to say the session ran NO_BACKSLASH_ESCAPES so
@@ -1178,7 +1207,8 @@ class MysqlDriver extends DatabaseDriverInterface {
         );
         for (const r of rows) {
             const t = r.t || r.T || r.table_name;
-            if (t) await this.grantPluginTableToUser(user, String(t).toLowerCase());
+            // A longer sibling prefix (wjp_event_ ⊂ wjp_event_tickets_) owns its own tables.
+            if (t && owns(String(t).toLowerCase())) await this.grantPluginTableToUser(user, String(t).toLowerCase());
         }
     }
 

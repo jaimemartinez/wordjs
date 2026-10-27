@@ -211,6 +211,56 @@ function withClassBound(config: any): any {
     };
 }
 
+/**
+ * THE NAMED-PROPERTY CHANNEL. An `id` or `name` written by an author becomes a property of `window` /
+ * `document` / a form (DOM clobbering): `id="__next_f"` alone breaks the page's hydration, and the same
+ * markup reaches the administrator's comment queue. So every author id is namespaced under
+ * `user-content-` (idempotent — content saved twice is not prefixed twice; the same prefix DOMPurify's
+ * SANITIZE_NAMED_PROPS uses on the client), and `name` survives only on the form controls that need
+ * it, namespaced the same way. An in-page link to `#intro` still lands on `user-content-intro`: the
+ * public site resolves the prefixed target when the plain one does not exist (UserContentAnchors).
+ */
+const USER_CONTENT_PREFIX = 'user-content-';
+const NAMED_FORM_CONTROLS = new Set(['input', 'select', 'textarea', 'button']);
+
+function namedPropsTransform(tagName: string, attribs: Record<string, string>) {
+    if (typeof attribs.id === 'string') {
+        const id = attribs.id.trim();
+        if (!id) delete attribs.id;
+        else attribs.id = id.startsWith(USER_CONTENT_PREFIX) ? id : USER_CONTENT_PREFIX + id;
+    }
+    if (typeof attribs.name === 'string') {
+        const name = attribs.name.trim();
+        if (!name || !NAMED_FORM_CONTROLS.has(String(tagName).toLowerCase())) delete attribs.name;
+        else attribs.name = name.startsWith(USER_CONTENT_PREFIX) ? name : USER_CONTENT_PREFIX + name;
+    }
+    return { tagName, attribs };
+}
+
+/** Wrap a sanitize-html config so every surviving element's id/name is namespaced (see above). */
+function withNamedPropsBound(config: any): any {
+    const existing = config && config.transformTags;
+    const existingAll = existing && existing['*'];
+    return {
+        ...config,
+        transformTags: {
+            ...(existing || {}),
+            '*': existingAll
+                ? (tagName: string, attribs: Record<string, string>) => {
+                    const first = existingAll(tagName, attribs);
+                    return namedPropsTransform(first.tagName, first.attribs);
+                }
+                : namedPropsTransform,
+        },
+    };
+}
+
+/**
+ * An embed's capabilities are the site's, never the author's: every iframe gets exactly this sandbox and
+ * this permission list, whatever the markup asked for.
+ */
+const IFRAME_ALLOW = 'autoplay; encrypted-media; fullscreen; picture-in-picture';
+
 const INLINE_STYLE_VALUE_PATTERNS = Object.fromEntries(
     Object.entries(HTML_SANITIZATION.inlineStyleValuePatterns).map(([property, patterns]: [string, any]) => [
         property,
@@ -220,7 +270,7 @@ const INLINE_STYLE_VALUE_PATTERNS = Object.fromEntries(
 
 // Authoritative sanitization config. The browser parser consumes its own generated copy.
 const sanitize = (html: string) => {
-    return sanitizeHtml(html, withClassBound({
+    return sanitizeHtml(html, withNamedPropsBound(withClassBound({
         allowedTags: HTML_SANITIZATION.allowedTags.filter(
             (tag: string) => !(HTML_SANITIZATION.forbiddenTags as readonly string[]).includes(tag),
         ),
@@ -235,14 +285,14 @@ const sanitize = (html: string) => {
         transformTags: {
             iframe: (tagName: string, attribs: Record<string, string>) => ({
                 tagName,
-                attribs: { ...attribs, sandbox: attribs.sandbox || HTML_SANITIZATION.iframeSandbox },
+                attribs: { ...attribs, sandbox: HTML_SANITIZATION.iframeSandbox, allow: IFRAME_ALLOW },
             }),
             a: (tagName: string, attribs: Record<string, string>) => {
                 if ((attribs.target || '').toLowerCase() === '_blank') attribs.rel = 'noopener noreferrer';
                 return { tagName, attribs };
             },
         },
-    }));
+    })));
 };
 
 // Field names within a Puck component's `props` that may carry rich HTML and are rendered through a
@@ -594,6 +644,8 @@ module.exports = {
     // with them for the same reason the style ones do: the gate compares the two packages' copies, so
     // that adding a keyword on one side fails immediately instead of waiting for a test case.
     isSafeClassToken, safeClassAttribute, safeExtraClassList, classAttributeTransform, withClassBound,
+    // THE NAMED-PROPERTY CHANNEL, shared with core/formatting.ts for the same reason.
+    withNamedPropsBound, namedPropsTransform, USER_CONTENT_PREFIX, NAMED_FORM_CONTROLS, IFRAME_ALLOW,
     CSS_POSITION_KEYWORDS, POSITION_BINDING_CLASSES, MAX_CLASS_ATTR_TOKEN, MAX_EXTRA_CLASS_TOKENS,
     // Structural availability bound. Routes use the branded error to reject the whole write before
     // any post/revision/meta mutation; importers may skip the offending metadata item.

@@ -1757,6 +1757,11 @@ function appContainerLaunchZones(z: { traverse: string[]; readExec: string[]; wr
 // Per-plugin permission grant check (Android-style, default-deny). No plugin bypasses the sandbox:
 // host-level capabilities (mail provider, notify transport, raw-HTML hooks are denied to all) are
 // gated on an explicit admin grant for the requested scope:access. See core/plugin-permissions.
+/** multer limits for a plugin multipart route (host-parsed): one file, and few, small text fields. */
+const MULTIPART_LIMITS = (fileSize: number) => ({
+    fileSize, files: 1, fields: 20, fieldSize: 64 * 1024, parts: 25, fieldNameSize: 100, headerPairs: 200,
+});
+
 function isGrantedFor(slug: string, scope: string, access: string): boolean {
     try { return require('./plugin-permissions').isGranted(slug, scope, access); } catch { return false; }
 }
@@ -3212,7 +3217,10 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                         // was unreadable to the handler). Created by the host, before the first request.
                         const stagingDir = require('./sandbox-paths').uploadStagingDir(path.resolve(__dirname, '..', '..'), slug, siteId);
                         require('fs').mkdirSync(stagingDir, { recursive: true });
-                        const up = multer({ dest: stagingDir, limits: { fileSize: maxFileSize, files: 1 } });
+                        // Bound the NON-file parts too: busboy holds every text field in memory, and a plugin
+                        // route without auth takes this from anyone. A plugin form needs a handful of small
+                        // fields next to its one file.
+                        const up = multer({ dest: stagingDir, limits: MULTIPART_LIMITS(maxFileSize) });
                         mw.push(up.single(String(msg.opts.multipart)));
                         startUploadReaper(stagingDir); // sweep crash-orphaned temp uploads (the per-request unlink handles the happy path)
                     } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Isolate ${logSafe(slug)}] multipart unavailable`); }
@@ -3772,7 +3780,7 @@ module.exports = {
     isIsolated: (slug: string) => isolates.has(isolateKey(slug)),
     // The policy fingerprint the RUNNING child of `slug` was spawned with (undefined when none is running).
     spawnPolicyFingerprint: (slug: string) => { const key = isolateKey(slug); return isolates.has(key) ? spawnPolicies.get(key) : undefined; },
-    listIsolates, listIsolateKeys, isolateKey, splitIsolateKey, getPluginGraphRouter,
+    listIsolates, listIsolateKeys, isolateKey, splitIsolateKey, getPluginGraphRouter, MULTIPART_LIMITS,
     // Network-wide: stop one isolate by key (core/plugins, when a plugin leaves the network or a site).
     unloadIsolateKey: unloadKey,
     // What a plugin route handler receives as req.user (incl. its own pluginCapabilities).
