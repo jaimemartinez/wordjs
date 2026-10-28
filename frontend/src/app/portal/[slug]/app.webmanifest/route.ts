@@ -18,7 +18,7 @@ export async function GET(request: Request, { params }: Params): Promise<Respons
     const sub = info?.pages && Object.prototype.hasOwnProperty.call(info.pages, page) ? info.pages[page] : null;
     if (!sub || !sub.app) return portalNotFound();
     const scope = `/portal/${slug}/${page}`;
-    const manifest: Record<string, string> = {
+    const manifest: Record<string, unknown> = {
         name: sub.app.name,
         short_name: sub.app.shortName || sub.app.name,
         scope,
@@ -29,6 +29,9 @@ export async function GET(request: Request, { params }: Params): Promise<Respons
     if (sub.app.backgroundColor) manifest.background_color = sub.app.backgroundColor;
     const theme = sub.app.themeColor || info?.themeColor;
     if (theme) manifest.theme_color = theme;
+    // One PNG (512x512 recommended) for both sizes a home screen asks for.
+    const icon = sub.app.icon;
+    if (icon) manifest.icons = ["192x192", "512x512"].map((sizes) => ({ src: icon, sizes, type: "image/png", purpose: "any maskable" }));
     return new Response(JSON.stringify(manifest), {
         status: 200,
         headers: {

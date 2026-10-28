@@ -990,11 +990,15 @@ coordinators, a vendor, a field team opening a QR link. Declare it in the manife
   Portals are always `noindex`.
 - **`pages`** (optional) — the `<head>` of sub-pages, keyed by their first path segment:
   `{ "me": { "title": "My page", "private": true, "app": { "name": "My page", "shortName"?, "description"?,
-  "backgroundColor"?, "themeColor"? } } }` (at most 20). `title` replaces the portal's; `private` marks a personal
+  "backgroundColor"?, "themeColor"?, "icon"? } } }` (at most 20). `title` replaces the portal's; `private` marks a personal
   page — never indexed, never stored by a cache, and no `Referer` leaves it (a link or a map tile that needs one
   opts in itself); `app` makes the sub-page installable to a phone's home screen (what an iPhone needs before it
   delivers Web Push): the core serves its web app manifest at `/portal/<slug>/app.webmanifest?page=me`, scoped to
-  `/portal/<slug>/me`. Hex colours only; no `<` or `>` in a text.
+  `/portal/<slug>/me`. Hex colours only; no `<` or `>` in a text. `icon` (optional) is the home-screen icon: a PNG
+  inside your `public/` folder (`"public/icon-512.png"`, 512×512 recommended; a relative path, no `..`). The
+  manifest lists it at 192×192 and 512×512 (`purpose: "any maskable"`, so keep the artwork inside the central safe
+  zone) and the page links it as `apple-touch-icon`; it is served from `/plugins/<folder>/public/…` like any other
+  public file. Any other value is refused at install, like every other invalid `app` field.
 - **`serviceWorker`** (optional) — a plain `.js` file under `client/` (`"client/portal/sw.js"`), served as-is
   (never compiled) at `/portal/<slug>/sw.js`, so a page of the portal can register it with the portal or one of its
   sub-pages as its scope — e.g. to show notifications sent by Web Push. Sending them needs the `network` grant.
