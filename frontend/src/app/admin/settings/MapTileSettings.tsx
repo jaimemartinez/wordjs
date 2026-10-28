@@ -11,6 +11,7 @@
  */
 import dynamic from "next/dynamic";
 import { useI18n } from "@/contexts/I18nContext";
+import { Input } from "@/components/ui";
 import { DEFAULT_TILE_ATTRIBUTION, DEFAULT_TILE_URL, isValidTileUrl } from "@/components/map/mapUtils";
 
 // Leaflet touches `window` when it loads: the preview renders in the browser only.
@@ -32,8 +33,6 @@ export function mapTileProblem(values: MapTileValues): string | null {
     return null;
 }
 
-const inputCls = "w-full px-4 py-3.5 bg-gray-50/50 border border-gray-200 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none";
-
 export default function MapTileSettings({ values, onChange }: { values: MapTileValues; onChange: (v: MapTileValues) => void }) {
     const { t } = useI18n();
     const problem = mapTileProblem(values);
@@ -49,42 +48,30 @@ export default function MapTileSettings({ values, onChange }: { values: MapTileV
                 <p className="text-xs text-gray-500 mt-1">{t("settings.maps.help")}</p>
             </div>
             <div className="p-8 space-y-6">
-                <div className="space-y-2">
-                    <label htmlFor="settings-map-tile-url" className="text-sm font-bold text-gray-700">{t("settings.maps.url")}</label>
-                    <input
-                        id="settings-map-tile-url"
-                        type="url"
-                        inputMode="url"
-                        spellCheck={false}
-                        maxLength={512}
-                        value={values.map_tile_url}
-                        placeholder={DEFAULT_TILE_URL}
-                        aria-invalid={problem === "settings.maps.url.invalid" || undefined}
-                        aria-describedby="settings-map-tile-url-help"
-                        onChange={(e) => onChange({ ...values, map_tile_url: e.target.value })}
-                        className={inputCls + " font-mono text-sm"}
-                    />
-                    <p id="settings-map-tile-url-help" className="text-xs text-gray-500">{t("settings.maps.url.help")}</p>
-                </div>
-                <div className="space-y-2">
-                    <label htmlFor="settings-map-tile-attribution" className="text-sm font-bold text-gray-700">{t("settings.maps.attribution")}</label>
-                    <input
-                        id="settings-map-tile-attribution"
-                        type="text"
-                        maxLength={200}
-                        value={values.map_tile_attribution}
-                        placeholder={DEFAULT_TILE_ATTRIBUTION}
-                        aria-invalid={problem === "settings.maps.attribution.required" || undefined}
-                        onChange={(e) => onChange({ ...values, map_tile_attribution: e.target.value })}
-                        className={inputCls}
-                    />
-                    <p className="text-xs text-gray-500">{t("settings.maps.attribution.help")}</p>
-                </div>
-                {problem && (
-                    <p role="alert" className="text-sm font-semibold text-rose-600" data-testid="settings-maps-problem">
-                        <i className="fa-solid fa-circle-exclamation mr-1.5" aria-hidden="true"></i>{t(problem)}
-                    </p>
-                )}
+                <Input
+                    id="settings-map-tile-url"
+                    type="url"
+                    inputMode="url"
+                    spellCheck={false}
+                    maxLength={512}
+                    label={t("settings.maps.url")}
+                    help={t("settings.maps.url.help")}
+                    error={problem === "settings.maps.url.invalid" ? t(problem) : undefined}
+                    value={values.map_tile_url}
+                    placeholder={DEFAULT_TILE_URL}
+                    onChange={(e) => onChange({ ...values, map_tile_url: e.target.value })}
+                    className="font-mono"
+                />
+                <Input
+                    id="settings-map-tile-attribution"
+                    maxLength={200}
+                    label={t("settings.maps.attribution")}
+                    help={t("settings.maps.attribution.help")}
+                    error={problem === "settings.maps.attribution.required" ? t(problem) : undefined}
+                    value={values.map_tile_attribution}
+                    placeholder={DEFAULT_TILE_ATTRIBUTION}
+                    onChange={(e) => onChange({ ...values, map_tile_attribution: e.target.value })}
+                />
                 {!url && (
                     <div className="p-4 bg-amber-50/60 rounded-2xl border border-amber-100 text-xs text-amber-900 leading-relaxed" data-testid="settings-maps-osm-note">
                         <i className="fa-solid fa-circle-info mr-1.5" aria-hidden="true"></i>
