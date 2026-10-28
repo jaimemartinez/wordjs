@@ -173,7 +173,7 @@ const nextConfig: NextConfig = {
           // user. ONE value for every route on purpose: a document keeps the policy it was LOADED with,
           // and the admin is usually reached by a client-side navigation (/login → /admin), so an
           // /admin-only value would not apply until the next full reload.
-          { key: 'Permissions-Policy', value: 'camera=(self), microphone=(), geolocation=(), browsing-topics=()' },
+          { key: 'Permissions-Policy', value: 'camera=(self), microphone=(self), geolocation=(), browsing-topics=()' },
         ],
       },
       {
