@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.24] - 2026-10-28
+
 ### Added
 - **Choose the map tile server from the panel.** Settings → General → «Maps» sets the tile URL template and
   its attribution for every map on the site, plugin maps included (`map_tile_url`, `map_tile_attribution`).
