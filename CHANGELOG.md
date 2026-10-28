@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.23] - 2026-10-28
+
 ### Added
 - **Maps and QR codes for plugins.** Two host modules plugin bundles may import:
   `@/components/map/MapView` — a declarative Leaflet map (OpenStreetMap tiles by default; markers and lines
