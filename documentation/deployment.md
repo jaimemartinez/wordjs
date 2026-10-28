@@ -66,7 +66,7 @@ One backend + one frontend per gateway needs **no** shared database or filesyste
 
 WordJS ships **downloadable, pre-compiled bundles** so an operator can deploy without cloning the repo or building anything locally. If you just want to run WordJS, grab a release ZIP instead of following the from-source installation steps below.
 
-> **Latest release:** [v2.11.21](https://github.com/jaimemartinez/wordjs/releases) at `github.com/jaimemartinez/wordjs/releases`.
+> **Latest release:** [v2.11.22](https://github.com/jaimemartinez/wordjs/releases) at `github.com/jaimemartinez/wordjs/releases`.
 
 ### Versioning policy
 
@@ -94,8 +94,8 @@ tag examples on this page, and the supported-versions table in `SECURITY.md`.
 Push a version tag and the release pipeline does the rest:
 
 ```bash
-git tag v2.11.21
-git push origin v2.11.21
+git tag v2.11.22
+git push origin v2.11.22
 ```
 
 A `v*` tag triggers **`.github/workflows/release.yml`**. It runs a **`verify`** job first — `npm run ci:all` (the parallel workspace installer, root `scripts/ci-install.mjs`), then the dependency-audit gate (`scripts/ci-audit.mjs`, which wraps `npm audit --omit=dev --audit-level=high` and blocks on any high/critical advisory in production dependencies) in `backend`, `gateway`, `frontend` and `packages/create-wordjs`, and a strict backend type check (`npx tsc --noEmit`), plus the frontend, gateway and `create-wordjs` tests; the backend unit suite runs beside it in **`verify-backend-tests`**, four parallel shards (`npm test -- --test-shard=N/4`). Nothing is built or published unless `verify` and all four shards are green. The **`build-release`** job (`needs: [verify, verify-backend-tests]`) then runs `npm run ci:all` again followed by `npm run bundle-release` (root `scripts/make-release.js`). The packager:
@@ -536,10 +536,10 @@ Then `GET /api/v1/setup/status` reports `"installed":true` and `/readyz` turns 2
 A minimal chart lives at **[`deploy/helm/wordjs`](../deploy/helm/wordjs)**.
 
 ```bash
-docker build -t <registry>/wordjs:2.11.21 . && docker push <registry>/wordjs:2.11.21
+docker build -t <registry>/wordjs:2.11.22 . && docker push <registry>/wordjs:2.11.22
 helm install wordjs deploy/helm/wordjs \
   --namespace wordjs --create-namespace \
-  --set image.repository=<registry>/wordjs --set image.tag=2.11.21 \
+  --set image.repository=<registry>/wordjs --set image.tag=2.11.22 \
   --set siteUrl=https://cms.example.com \
   --set installToken.value="$(openssl rand -hex 24)"
 kubectl -n wordjs port-forward deployment/wordjs 3000:3000   # then browse /install
@@ -835,7 +835,7 @@ It downloads the latest release (`--version <tag>` for another one, which is als
 Without access to GitHub (or to pin the exact bundle), download `wordjs-<tag>.zip` and its `.sha256` from the releases page and point the upgrade at the file:
 
 ```bash
-npx create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-v2.11.21.zip --sha256 <hex> --yes --force
+npx create-wordjs@latest upgrade /srv/wordjs --zip ./wordjs-v2.11.22.zip --sha256 <hex> --yes --force
 ```
 
 `--force` is needed only when the site already reports that version (re-applying a release). Run it with `sudo` when the site belongs to the service account: the upgraded files are given back to the site's owner. Then `sudo systemctl restart wordjs`.

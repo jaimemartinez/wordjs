@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.22] - 2026-10-28
+
 ### Fixed
 - **Audio and video built from a page's own API.** Audio and video a page fetches through its own API and plays from
   a `blob:` URL could not play: the Content-Security-Policy had no `media-src`, so it fell back to `default-src 'self'`.
