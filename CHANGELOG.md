@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.19] - 2026-10-28
+
 ### Added
 - **conference-manager 2.36.22: cupos at a glance and family groups in the admin's edit form.** «Localidades» opens
   with the conference's totals: assigned places (the sum of every locality's cupo), registered, places still
