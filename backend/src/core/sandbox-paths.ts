@@ -8,9 +8,23 @@ const path = require('path');
 const crypto = require('crypto');
 const OWNED_SEGMENT = /^[a-zA-Z0-9][a-zA-Z0-9_-]{0,63}$/;
 
+// The readable part of a key is 48 characters; every slug that reaches here is far shorter than this
+// bound (a segment is at most 64 characters, plus a `theme:` or `s<id>:` prefix), so bounding the input
+// before any pattern runs changes no key, and keeps the work linear whatever a caller passes.
+const STORAGE_KEY_INPUT_MAX = 256;
+
+/** `s` without its leading and trailing '-' (an index walk: linear, unlike an anchored alternation). */
+function trimDashes(s: string): string {
+    let start = 0;
+    let end = s.length;
+    while (start < end && s.charCodeAt(start) === 45) start++;
+    while (end > start && s.charCodeAt(end - 1) === 45) end--;
+    return s.slice(start, end);
+}
+
 function storageKey(slug: string): string {
     const raw = String(slug || 'plugin');
-    const readable = raw.toLowerCase().replace(/^theme:/, 'theme-').replace(/[^a-z0-9._-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 48) || 'plugin';
+    const readable = trimDashes(raw.slice(0, STORAGE_KEY_INPUT_MAX).toLowerCase().replace(/^theme:/, 'theme-').replace(/[^a-z0-9._-]+/g, '-')).slice(0, 48) || 'plugin';
     const digest = crypto.createHash('sha256').update(raw, 'utf8').digest('hex').slice(0, 12);
     return `${readable}-${digest}`;
 }

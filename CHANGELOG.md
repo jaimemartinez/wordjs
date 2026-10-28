@@ -15,6 +15,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   plugin's `public/` folder. "Add to home screen" then shows it, from the web app manifest and the page's
   `apple-touch-icon`. Portals without one are unchanged.
 
+### Fixed
+- **Plugin storage keys** (the folder names of a plugin's private storage) are computed in time proportional to the
+  slug's length whatever the slug, and are unchanged for every existing plugin and theme.
+
 ## [2.11.18] - 2026-10-27
 
 ## [2.11.17] - 2026-10-27
