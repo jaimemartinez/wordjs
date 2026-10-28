@@ -494,6 +494,10 @@ async function main() {
     // server races the proxy's socket reuse and drops requests mid-flight.
     server.keepAliveTimeout = 65000;
     server.headersTimeout = 66000;
+    // SIGTERM drains these listeners instead of cutting their requests: the backend loaded above owns
+    // the signal handlers (backend core/graceful-shutdown), and this process is the same process.
+    const { trackServer } = require(path.join(backendTree, 'core', 'graceful-shutdown'));
+    trackServer(server);
     server.listen(PUBLIC_PORT, () => {
         console.log('');
         console.log(`✅ WordJS MONOLITH (${dev ? 'dev' : 'prod'}) — one process on ${proto}://localhost:${PUBLIC_PORT}`);
@@ -506,7 +510,8 @@ async function main() {
 
     // 5) Loopback-only HTTP listener for the frontend's server-side (SSR) API calls — keeps SSR on
     //    plain HTTP so self-signed TLS never blocks it. Not exposed (127.0.0.1).
-    installClientAbortGuard(http.createServer(backendApp)).listen(LOOPBACK_PORT, '127.0.0.1', () => {
+    // Closed after the public listener on shutdown: the pages it is still rendering call this API.
+    trackServer(installClientAbortGuard(http.createServer(backendApp)), { closeLast: true }).listen(LOOPBACK_PORT, '127.0.0.1', () => {
         console.log(`   ↳ internal SSR API: http://127.0.0.1:${LOOPBACK_PORT} (loopback only)`);
     });
 

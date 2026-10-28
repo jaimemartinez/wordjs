@@ -1116,6 +1116,7 @@ const readinessModule = require('./core/readiness');
 const readiness = readinessModule.createReadinessProbe({
     isInstalled: () => require('./core/configManager').isInstalled(),
     isBooted: () => appReady,
+    isDraining: () => require('./core/graceful-shutdown').isDraining(),
     checkDatabase: (opts: { timeoutMs: number }) => require('./core/system-health').checkDatabase(opts),
     timeoutMs: readinessModule.readinessTimeoutMs(process.env),
     onError: (err: unknown) => log.warn({ err }, '/readyz: readiness check failed'),
@@ -1372,6 +1373,8 @@ async function initializeMainSite() {
     }
     // A browser that cancels a request must not end the process (core/client-abort).
     require('./core/client-abort').installClientAbortGuard(server);
+    // A termination signal drains this listener instead of cutting its requests (core/graceful-shutdown).
+    require('./core/graceful-shutdown').trackServer(server);
 
     // Bind IPv4 loopback when host is a loopback NAME: Node resolves 'localhost' to ::1 (IPv6) on a
     // dual-stack box, but in split mode the backend advertises 127.0.0.1 (IPv4) to the gateway (below), so
@@ -2055,18 +2058,10 @@ process.on('unhandledRejection', (reason, promise) => {
     log.error({ err: reason }, 'Unhandled Rejection');
 });
 
-// Graceful shutdown
-process.on('SIGTERM', () => {
-    log.info('SIGTERM received. Shutting down gracefully...');
-    saveDatabase();
-    process.exit(0);
-});
-
-process.on('SIGINT', () => {
-    log.info('SIGINT received. Shutting down gracefully...');
-    saveDatabase();
-    process.exit(0);
-});
+// Graceful shutdown: /readyz turns 503, the listeners stop accepting and the requests in flight finish
+// before the database is flushed (core/graceful-shutdown). The monolith's listeners share this process
+// and are tracked by monolith.js.
+require('./core/graceful-shutdown').installSignalHandlers({ flush: () => saveDatabase() });
 
 // Start the application — only when run directly (split mode via backend/server.js). When required by
 // the monolith (WORDJS_EMBEDDED=1), the entrypoint calls initialize() itself after mounting.

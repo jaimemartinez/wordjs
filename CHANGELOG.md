@@ -10,6 +10,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **Audio and video built from a page's own API.** Audio and video a page fetches through its own API and plays from
   a `blob:` URL could not play: the Content-Security-Policy had no `media-src`, so it fell back to `default-src 'self'`.
   It now has `media-src 'self' blob:` (no `data:`, no remote hosts; media offload still adds its configured origin).
+- **Stopping the server no longer cuts the requests it is serving.** `SIGTERM`/`SIGINT` used to flush the
+  database and exit at once, so every deploy, scale-down or restart by the orchestrator answered errors, and
+  `/readyz` stayed 200 until the process vanished. Now `/readyz` answers 503 `draining` at once, the listeners stop
+  accepting (after `WORDJS_SHUTDOWN_DRAIN_DELAY_MS`, 5 s under Kubernetes), the requests in flight finish for up to
+  `WORDJS_SHUTDOWN_TIMEOUT_MS` (10 s), and only then does the process exit. The monolith closes its internal API
+  listener last, so pages still rendering can finish. The split-mode supervisor (`npm start`) now passes the signal
+  on to the app instead of dying under it.
 
 ## [2.11.21] - 2026-10-28
 
