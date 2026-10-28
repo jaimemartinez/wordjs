@@ -68,7 +68,7 @@ function writeProbe(folder: string) {
                     entry: 'client/portal/page.tsx', slug: portalOf(folder),
                     title: 'Probe portal', themeColor: '#2563eb', viewportFit: 'cover',
                     serviceWorker: 'client/portal/sw.js', file: '/public/file',
-                    pages: { me: { title: 'My page', private: true, app: { name: 'My page', backgroundColor: '#ffffff' } } },
+                    pages: { me: { title: 'My page', private: true, app: { name: 'My page', backgroundColor: '#ffffff', icon: 'public/icon-512.png' } } },
                 },
             },
         }),
@@ -171,6 +171,29 @@ describe('frontend.portalPage: the declaration', () => {
         assert.deepStrictEqual(head, { serviceWorker: true, file: true, pages: { me: { title: 'T', private: true, app: { name: 'N' } } } });
     });
 
+    it('validates an app icon: a .png under public/, nothing else', () => {
+        const base = { entry: 'client/portal/page.tsx', slug: 'ok' };
+        const withIcon = (icon: unknown) => withPage({ ...base, pages: { yo: { app: { name: 'x', icon } } } });
+        for (const icon of ['public/icon.png', './public/icon-512.png', 'public/img/app_icon.v2.png']) {
+            assert.deepStrictEqual(portalPages.validatePortalPage(withIcon(icon)), [], icon);
+        }
+        for (const icon of [
+            'public/../manifest.png', 'public/a/../../x.png', '../public/x.png',
+            '/public/x.png', '\\public\\x.png', 'public\\x.png', 'C:/public/x.png', 'https://evil.example/public/x.png', '//evil.example/x.png',
+            'public/icon.svg', 'public/icon.jpg', 'public/icon.PNG', 'public/icon.png?x=1', 'public/.png', 'public/.hidden.png',
+            'client/icon.png', 'data/icon.png', 'icon.png', 'public/', 'public//x.png', '', 1, null, ['public/x.png'],
+        ]) {
+            const problems = portalPages.validatePortalPage(withIcon(icon));
+            assert.ok(problems.some((p: string) => /app\.icon/.test(p)), JSON.stringify(icon));
+        }
+        // The head gives the icon's URL on the static /plugins mount (under the plugin FOLDER), and only then.
+        const manifest = withPage({ ...base, pages: { yo: { app: { name: 'N', icon: './public/icon.png' } }, no: { app: { name: 'M' } } } });
+        assert.deepStrictEqual(portalPages.portalPageHead(manifest, 'my-plugin').pages, {
+            yo: { app: { name: 'N', icon: '/plugins/my-plugin/public/icon.png' } }, no: { app: { name: 'M' } },
+        });
+        assert.deepStrictEqual(portalPages.portalPageHead(manifest).pages, { yo: { app: { name: 'N' } }, no: { app: { name: 'M' } } });
+    });
+
     it('a portal slug belongs to one installed plugin', () => {
         const installed = new Map<string, string | null>([['plugin-a', 'shared'], ['plugin-b', null]]);
         const manifest = withPage({ entry: 'client/portal/page.tsx', slug: 'shared' });
@@ -202,7 +225,7 @@ describe('GET /plugins/:slug/portal', () => {
         assert.deepStrictEqual(res.body, {
             slug: portalOf(ON), title: 'Probe portal', themeColor: '#2563eb', viewportFit: 'cover',
             serviceWorker: true,
-            pages: { me: { title: 'My page', private: true, app: { name: 'My page', backgroundColor: '#ffffff' } } },
+            pages: { me: { title: 'My page', private: true, app: { name: 'My page', backgroundColor: '#ffffff', icon: `/plugins/${ON}/public/icon-512.png` } } },
             // The plugin's own public route, under its FOLDER (plugin routes are mounted there).
             fileEndpoint: `/plugin/${ON}/public/file`,
         });

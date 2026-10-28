@@ -485,6 +485,9 @@ const PORTAL_NOT_FOUND = { error: 'Portal not found' };
  *                             type: string
  *                           themeColor:
  *                             type: string
+ *                           icon:
+ *                             type: string
+ *                             description: Public URL of the app's home-screen icon (a PNG under the plugin's public/ folder).
  *                 serviceWorker:
  *                   type: boolean
  *                 fileEndpoint:
@@ -503,7 +506,7 @@ router.get('/:slug/portal', asyncHandler(async (req: Request, res: Response) => 
     // Presentation of a public page — but per-install state (activation, grants), so never stored.
     res.setHeader('Cache-Control', 'no-store');
     const manifest = readManifest(folder);
-    const { file, ...head } = portalPages.portalPageHead(manifest);
+    const { file, ...head } = portalPages.portalPageHead(manifest, folder);
     const fileRoute = file ? portalPages.portalFileRoute(manifest) : null;
     // The plugin's own public route (routes are mounted under the plugin FOLDER) — the frontend's
     // /portal/<slug>/file asks it and answers the bytes.

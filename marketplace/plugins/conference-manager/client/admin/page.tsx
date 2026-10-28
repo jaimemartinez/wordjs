@@ -27,6 +27,7 @@ import { Overlay } from "./Overlay";
 import { canAutoFocus, LAYER } from "../lib/overlay";
 // Phones (2.16.0): the shell scrolls with the page; the tab strip reveals the active tab.
 import { DECO_LAYER_CLASS, HERO_HEAD_CLASS, SHELL_CSS, STAT_GRID_CLASS } from "../lib/phoneLayout";
+import { capacityTotals } from "../lib/locationFilter";
 import { SectionPicker } from "./SectionPicker";
 import { WithdrawDeadlineSetting } from "./WithdrawDeadline";
 import { RegistrationClosesSetting, LocationRegistrationCloses } from "./RegistrationCloses";
@@ -51,6 +52,7 @@ import { fieldDependents, isOrphanFeeRule, isSwitchOn, LODGING_FIELD, missingRul
 import { NO_ACCESS_TEXT, noAccessReason } from "../lib/team";
 import { paymentMethodLabel, switchLabel } from "../lib/labels";
 import { HealthConditionsInput } from "../lib/HealthConditionsInput";
+import { GroupPicker, groupsAmong } from "../lib/GroupPicker";
 import { VerbalHealthConsent } from "../lib/VerbalHealthConsent";
 import { DateField } from "../lib/DateField";
 import { FeeRuleBuilder } from "./FeeRuleBuilder";
@@ -1744,6 +1746,28 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
                                                     </span>
                                                     {switchLabel(tx, isSwitchOn(formData[field.name]))}
                                                 </button>
+                                            ) : Number(field.is_group) ? (
+                                                // 2.36.22: the locality's groups (family groups) to pick from, as in the coordinator's portal.
+                                                formData.location_id == null || formData.location_id === '' ? (
+                                                    <>
+                                                        <input data-field={field.name} aria-invalid={fe.invalid(field.name)} aria-describedby={fe.describedBy(field.name)} type="text" placeholder={field.label}
+                                                            className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                                            value={formData[field.name] ?? ''} onChange={e => handleFormChange(field.name, e.target.value)} />
+                                                        <p className="mt-1 text-[11px] text-gray-500" data-group-needs-location="">{tx('group.pick.location', 'Elige la localidad para ver sus grupos.')}</p>
+                                                    </>
+                                                ) : (
+                                                    <GroupPicker field={field} id={`cm-group-${editId || 'new'}`} value={formData[field.name] ?? ''}
+                                                        onChange={(v) => handleFormChange(field.name, v)}
+                                                        groups={groupsAmong(inscriptions, field.name, formData.location_id, nameOf, editId)}
+                                                        invalid={fe.invalid(field.name)} describedBy={fe.describedBy(field.name)}
+                                                        className="w-full border-2 border-gray-100 rounded-xl px-4 py-2.5 bg-gray-50/30 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                                        labels={{
+                                                            placeholder: tx('group.pick.placeholder', 'Buscar grupo existente o escribir uno nuevo…'),
+                                                            empty: tx('group.pick.empty', 'Aún no hay grupos en esta localidad. Escribe para crear el primero.'),
+                                                            person: tx('group.pick.person', 'persona'), people: tx('group.pick.people', 'personas'),
+                                                            create: tx('group.pick.create', 'Crear grupo «{name}»'), inGroup: tx('group.pick.in', 'En «{name}» ({n}):'),
+                                                        }} />
+                                                )
                                             ) : isPhoneField(field) ? (
                                                 // 2.33.2: the country's calling code next to the number; E.164 is sent.
                                                 <PhoneInput dataField={field.name} label={field.label} lang={language} defaultCountry={excelConf?.phone_country}
@@ -5006,6 +5030,7 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
     const [locFilter, setLocFilter] = useState<LocationFilter>('all');
     const shownLocations = useMemo(() => filterLocations(locations, locQuery, locFilter), [locations, locQuery, locFilter]);
     const locCounts = useMemo(() => locationCounts(locations), [locations]);
+    const capTotals = useMemo(() => capacityTotals(locations), [locations]);
     const [savingMethods, setSavingMethods] = useState<number | null>(null);
     // The general lodging dates (2.21.0): the two inputs mirror the conference's opening / closing until saved.
     const [datesInput, setDatesInput] = useState({ opens: '', closes: '' });
@@ -5510,6 +5535,13 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                 </div>
             ) : (
                 <div className="flex-1">
+                    {/* 2.36.22: the conference's cupos at a glance — every locality, whatever the search or filter. */}
+                    <div className={`${STAT_GRID_CLASS} mb-6`} data-locations-totals="">
+                        <StatCard icon="fa-ticket" label={tx('loc.totals.assigned', 'Cupos asignados')} value={capTotals.assigned} color="blue" />
+                        <StatCard icon="fa-users" label={tx('loc.totals.inscribed', 'Inscritos')} value={capTotals.inscribed} color="indigo" />
+                        <StatCard icon="fa-chair" label={tx('loc.totals.available', 'Cupos disponibles')} value={capTotals.available} color={capTotals.available > 0 ? 'green' : 'gray'} />
+                        {capTotals.unlimited > 0 && <StatCard icon="fa-infinity" label={tx('loc.totals.unlimited', 'Localidades sin límite')} value={capTotals.unlimited} color="orange" />}
+                    </div>
                     {/* 2.36.19: search by the locality or its coordinator, and one quick filter at a time (with its count). */}
                     <div className="mb-6 space-y-3" data-locations-filters="">
                         <div className="relative">

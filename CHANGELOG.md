@@ -6,9 +6,20 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **conference-manager 2.36.22: cupos at a glance and family groups in the admin's edit form.** «Localidades» opens
+  with the conference's totals: assigned places (the sum of every locality's cupo), registered, places still
+  available and localities without a limit. Editing a participant, the grouping field («Grupo familiar») now lists
+  the groups of the person's locality, with who is in each, as the coordinator's portal does.
+- **Home-screen icon for installable plugin portals.** A portal sub-page's `app` may name an `icon`: a PNG in the
+  plugin's `public/` folder. "Add to home screen" then shows it, from the web app manifest and the page's
+  `apple-touch-icon`. Portals without one are unchanged.
+
 ### Fixed
 - **Plugin storage keys** (the folder names of a plugin's private storage) are computed in time proportional to the
   slug's length whatever the slug, and are unchanged for every existing plugin and theme.
+
+## [2.11.18] - 2026-10-27
 
 ## [2.11.17] - 2026-10-27
 
@@ -50,6 +61,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
     install's Windows sandbox profiles before an install or a worktree is deleted.
 - **mail-server 3.3.7:** declares the SMTP ports it uses (25, 465, 587 and 2525), and a relay on another port is
   explained in the console.
+
+### Fixed
+- **robots.txt no longer blocks `/_next/`, and it can be edited.** That folder holds the CSS and JS every public
+  page is rendered with; crawlers that may not fetch them render the page unstyled. **Settings → Reading** has a new
+  «Your own robots.txt rules» field: the lines are added after the built-in rules (one rule per line — `User-agent`,
+  `Allow`, `Disallow`, `Sitemap`, `Crawl-delay`, `Host`, `Clean-param` — or a `# comment`; anything else is refused
+  on save). While search engines are discouraged the whole site stays blocked and these rules are not served.
 
 ## [2.11.16] - 2026-10-27
 

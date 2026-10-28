@@ -63,6 +63,8 @@ export async function generateMetadata({ params }: Props): Promise<Metadata> {
     if (sub?.app && path) {
         meta.manifest = `/portal/${slug}/app.webmanifest?page=${encodeURIComponent(path[0])}`;
         meta.appleWebApp = { capable: true, title: sub.app.shortName || sub.app.name, statusBarStyle: "default" };
+        // <link rel="apple-touch-icon">: an iPhone ignores the web app manifest's icons.
+        if (sub.app.icon) meta.icons = { apple: sub.app.icon };
     }
     return meta;
 }

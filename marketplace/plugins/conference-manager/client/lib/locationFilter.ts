@@ -42,3 +42,21 @@ export function locationCounts(list: any[]): Record<LocationFilter, number> {
     for (const f of LOCATION_FILTERS) out[f] = list.filter((l) => matchesFilter(l, f)).length;
     return out;
 }
+
+/**
+ * The conference's cupos (2.36.22, owner: «una estadística que se pueda ver el total de cupos asignados»): `assigned` =
+ * the sum of the localities' cupo máximo (those with one), `inscribed` = seats taken in every locality, `available` =
+ * the cupos still free in the localities with a limit, `unlimited` = how many localities have no limit.
+ */
+export function capacityTotals(list: any[]): { assigned: number; inscribed: number; available: number; unlimited: number } {
+    const out = { assigned: 0, inscribed: 0, available: 0, unlimited: 0 };
+    for (const l of list || []) {
+        const taken = Math.max(0, Number(l.inscribed) || 0);
+        out.inscribed += taken;
+        const cap = l.capacity == null || l.capacity === '' ? null : Number(l.capacity);
+        if (cap == null || !Number.isFinite(cap) || cap <= 0) { out.unlimited++; continue; }
+        out.assigned += cap;
+        out.available += Math.max(0, cap - taken);
+    }
+    return out;
+}
