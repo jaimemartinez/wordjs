@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.20] - 2026-10-28
+
 ### Fixed
 - **Audit log external copy on a cluster.** The delivery position only moves forward: when another node already
   delivered further, a node finishing an older batch no longer moves it back, so those entries are not sent again.
