@@ -12,7 +12,7 @@
 // list read: two version numbers that disagree name two different builds of the same package.
 exports.metadata = {
     name: 'Video Gallery',
-    version: '1.1.1',
+    version: '1.1.2',
     description: 'A horizontal scrolling video carousel with YouTube integration and multi-gallery support',
     author: 'WordJS'
 };
@@ -33,8 +33,31 @@ function extractThumbnail(youtubeUrl) {
     return null;
 }
 
+// The host lets a plugin write only the options named after it ('video_gallery_…'), so every option this
+// plugin keeps is stored under that name. One an earlier version kept under its bare name is read from
+// there the first time and carried over.
+const OPTION_UNSET = '\u0000unset';
+function namespacedOptions(raw, ns) {
+    const nameOf = (key) => (String(key).startsWith(ns) ? String(key) : ns + String(key));
+    return {
+        async get(key, def = null) {
+            const name = nameOf(key);
+            let v = await raw.get(name, OPTION_UNSET);
+            if (v === OPTION_UNSET && name !== key) {
+                v = await raw.get(key, OPTION_UNSET);
+                if (v !== OPTION_UNSET && v !== null && v !== '') {
+                    try { await raw.set(name, v); } catch (e) { /* read from the old name again next time */ }
+                }
+            }
+            return v === OPTION_UNSET ? def : v;
+        },
+        set: (key, value) => raw.set(nameOf(key), value),
+    };
+}
+
 exports.init = function (wordjs) {
-    const { options, http, shortcodes, adminMenu } = wordjs;
+    const { http, shortcodes, adminMenu } = wordjs;
+    const options = namespacedOptions(wordjs.options, 'video_gallery_');
 
     console.log('🎬 Initializing Video Gallery plugin (v2, isolated)...');
 

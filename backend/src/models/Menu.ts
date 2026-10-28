@@ -245,6 +245,8 @@ class Menu {
      * Set menu location
      */
     static async setLocation(location: any, menuId: any) {
+        // A location is a name — the key of the stored map — never an array or an object.
+        if (typeof location !== 'string' || !location) throw new Error('Invalid menu location');
         const locations = await getOption('nav_menu_locations', {});
         locations[location] = menuId;
         await updateOption('nav_menu_locations', locations);

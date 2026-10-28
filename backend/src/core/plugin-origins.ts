@@ -22,7 +22,13 @@ export type PluginOrigin = { source: string; catalogId: string; version: string 
 
 /** Normalize a source URL for comparison (trailing slashes + case are not identity). */
 function normSource(s: any): string {
-    return String(s == null ? '' : s).replace(/\/+$/, '').toLowerCase();
+    // Trailing slashes are trimmed by walking back from the end — linear in the length. A regex anchored
+    // at the end (`/\/+$/`) retries from every slash of a long run that is followed by another character,
+    // which is quadratic on a crafted catalog or admin URL.
+    const str = String(s == null ? '' : s);
+    let end = str.length;
+    while (end > 0 && str.charCodeAt(end - 1) === 47 /* '/' */) end--;
+    return str.slice(0, end).toLowerCase();
 }
 
 async function getAllOrigins(): Promise<Record<string, PluginOrigin>> {

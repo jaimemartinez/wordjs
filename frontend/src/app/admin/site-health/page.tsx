@@ -2,7 +2,7 @@
 
 import { useEffect, useState } from "react";
 import Link from "next/link";
-import { apiGet } from "@/lib/api";
+import { apiGet, apiPost } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import { plural, registerTranslations } from "@/lib/i18n";
 import { PageHeader, Button, Card } from "@/components/ui";
@@ -18,6 +18,8 @@ type Status = "ok" | "warn" | "fail" | "info";
 interface Check {
     id: string; group: string; status: Status; title: string; message: string;
     fix?: { href: string; label: string; labelKey?: string };
+    /** A one-click fix: POST `endpoint` with `body`, then run the checks again. */
+    action?: { endpoint: string; label: string; labelKey?: string; body?: Record<string, string> };
     /** Catalogue keys from core/site-health; absent (older backend, plugin-added check) → the English text. */
     titleKey?: string; messageKey?: string; vars?: Record<string, string>;
 }
@@ -54,6 +56,8 @@ registerTranslations({
         "siteHealth.check.database.reachable.title": "Base de datos",
         "siteHealth.check.database.reachable.ok": "La base de datos responde ({driver}).",
         "siteHealth.check.database.reachable.down": "La base de datos no responde: {error}.",
+        "siteHealth.check.database.pluginIsolation.title": "Aislamiento de los plugins en la base de datos",
+        "siteHealth.check.database.pluginIsolation.missing": "Estos plugins funcionan sin su propio usuario de base de datos, así que solo las comprobaciones SQL de WordJS los limitan a sus propias tablas: {plugins}. Da al usuario de base de datos con el que conecta WordJS permiso para crear usuarios (Postgres: CREATEROLE; MySQL/MariaDB: CREATE USER y GRANT OPTION) y reinicia WordJS.",
         "siteHealth.check.database.driver.title": "Motor de base de datos",
         "siteHealth.check.database.driver.legacy": "Este sitio usa el motor SQLite antiguo y más lento (sqlite-legacy), que mantiene toda la base de datos en memoria y no admite una red de sitios. Pásalo al motor actual: tarda un minuto y WordJS se reinicia solo.",
         "siteHealth.check.mail.transport.title": "Envío de correo",
@@ -85,6 +89,11 @@ registerTranslations({
         "siteHealth.check.background.plugins.title": "Aislamiento de plugins",
         "siteHealth.check.background.plugins.degraded": "Los plugins funcionan, pero sin el confinamiento adicional del sistema operativo en este servidor. Puede que tu hosting necesite un kernel más reciente o activar el sandbox de la plataforma.",
         "siteHealth.check.background.plugins.ok": "Los plugins se ejecutan aislados del sitio y entre sí.",
+        "siteHealth.check.security.pluginSecrets.title": "Acceso de los plugins a secretos",
+        "siteHealth.check.security.pluginSecrets.exposed": "Todos los sandbox de plugins de este servidor pueden leer {count} carpeta(s) o archivo(s) con secretos por cómo están los permisos de la carpeta de instalación, y WordJS no ha podido cambiarlos. Los plugins no se inician hasta que se corrija: ejecuta como administrador icacls <ruta> /inheritance:d y después icacls <ruta> /remove:g *S-1-15-2-1 *S-1-15-2-2 en cada una, o mueve WordJS fuera de C:\\Program Files.",
+        "siteHealth.check.background.pluginFiles.title": "Archivos de plugins",
+        "siteHealth.check.background.pluginFiles.changed": "Los archivos del plugin {slug} han cambiado desde que WordJS lo instaló, así que no se ha iniciado. Actualízalo o reinstálalo desde Plugins; si los cambiaste tú, acéptalos.",
+        "siteHealth.action.acceptPluginFiles": "Aceptar estos archivos",
         "siteHealth.check.background.outbox.title": "Eventos de contenido",
         "siteHealth.check.background.outbox.dead": "{count} evento(s) de contenido no se han podido entregar (webhooks, búsqueda, caché).",
         "siteHealth.check.background.outbox.ok": "Los webhooks y las actualizaciones de caché se entregan.",
@@ -101,6 +110,23 @@ registerTranslations({
         "siteHealth.fixLabel.certificates": "Certificados",
         "siteHealth.fixLabel.securityServer": "Seguridad → Servidor",
         "siteHealth.fixLabel.webhooks": "Webhooks",
+        "siteHealth.fixLabel.duplicates": "Registros duplicados",
+        "siteHealth.fixLabel.audit": "Auditoría",
+        "siteHealth.check.database.unique.title": "Nombres de usuario, correos y slugs únicos",
+        "siteHealth.check.database.unique.ok": "La propia base de datos garantiza que los nombres de usuario, los correos y los slugs no se repiten.",
+        "siteHealth.check.database.unique.duplicates": "{count} valor(es) están guardados más de una vez ({rules}), así que la base de datos todavía no puede garantizar esa regla. Elige qué registro conserva cada valor; los demás reciben uno nuevo y no se borra nada.",
+        "siteHealth.check.database.unique.missing": "Falta el índice único de {rules} aunque nada se repite. Créalo desde Registros duplicados.",
+        "siteHealth.check.security.auditChain.title": "Integridad del registro de auditoría",
+        "siteHealth.check.security.auditChain.ok": "Todas las entradas del registro de auditoría ({count}) coinciden con su cadena de hashes.",
+        "siteHealth.check.security.auditChain.partial": "Las primeras {count} entradas del registro de auditoría coinciden con su cadena de hashes; el resto no dio tiempo a comprobarlo. Admin → Auditoría las comprueba todas.",
+        "siteHealth.check.security.auditChain.broken.altered": "La cadena de hashes del registro de auditoría se rompe en la entrada {seq}: su contenido cambió. Se cambiaron o borraron entradas fuera de WordJS; compáralo con la copia externa.",
+        "siteHealth.check.security.auditChain.broken.gap": "La cadena de hashes del registro de auditoría se rompe en la entrada {seq}: falta la entrada anterior. Se cambiaron o borraron entradas fuera de WordJS; compáralo con la copia externa.",
+        "siteHealth.check.security.auditChain.broken.link": "La cadena de hashes del registro de auditoría se rompe en la entrada {seq}: no enlaza con la entrada anterior. Se cambiaron o borraron entradas fuera de WordJS; compáralo con la copia externa.",
+        "siteHealth.check.security.auditChain.broken.start": "La cadena de hashes del registro de auditoría se rompe en la entrada {seq}: las entradas más antiguas no coinciden con lo que borró la retención. Se cambiaron o borraron entradas fuera de WordJS; compáralo con la copia externa.",
+        "siteHealth.check.security.auditExport.title": "Copia del registro de auditoría",
+        "siteHealth.check.security.auditExport.off": "El registro de auditoría solo se guarda en esta base de datos. Envía una copia a un servidor syslog o a un webhook, para que lo que registra no se pueda borrar desde aquí.",
+        "siteHealth.check.security.auditExport.failing": "La copia a {target} está fallando ({error}); {count} entrada(s) esperan y se envían cuando vuelva a responder.",
+        "siteHealth.check.security.auditExport.ok": "Cada entrada se copia a {target}.",
     },
     en: {
         "siteHealth.check.error": "This check could not run here ({error}).",
@@ -127,6 +153,8 @@ registerTranslations({
         "siteHealth.check.database.reachable.title": "Database",
         "siteHealth.check.database.reachable.ok": "The database answers ({driver}).",
         "siteHealth.check.database.reachable.down": "The database does not answer: {error}.",
+        "siteHealth.check.database.pluginIsolation.title": "Plugin database isolation",
+        "siteHealth.check.database.pluginIsolation.missing": "These plugins run without their own database user, so only WordJS's SQL checks keep them to their own tables: {plugins}. Give the database user WordJS connects with the right to create users (Postgres: CREATEROLE; MySQL/MariaDB: CREATE USER and GRANT OPTION) and restart WordJS.",
         "siteHealth.check.database.driver.title": "Database engine",
         "siteHealth.check.database.driver.legacy": "This site runs on the older, slower SQLite engine (sqlite-legacy), which keeps the whole database in memory and cannot hold a network of sites. Move it to the current engine: it takes a minute and restarts WordJS by itself.",
         "siteHealth.check.mail.transport.title": "Sending email",
@@ -158,6 +186,11 @@ registerTranslations({
         "siteHealth.check.background.plugins.title": "Plugin isolation",
         "siteHealth.check.background.plugins.degraded": "Plugins run, but without the operating system’s extra confinement on this host. Your host may need a newer kernel or the platform’s sandbox enabled.",
         "siteHealth.check.background.plugins.ok": "Plugins run isolated from the site and from each other.",
+        "siteHealth.check.security.pluginSecrets.title": "Plugin access to secrets",
+        "siteHealth.check.security.pluginSecrets.exposed": "Every plugin sandbox on this server can read {count} folder(s) or file(s) that hold secrets, because of how the install folder's permissions are set, and WordJS could not change them. Plugins are not started until this is fixed: run, as an administrator, icacls <path> /inheritance:d and then icacls <path> /remove:g *S-1-15-2-1 *S-1-15-2-2 for each one, or move WordJS out of C:\\Program Files.",
+        "siteHealth.check.background.pluginFiles.title": "Plugin files",
+        "siteHealth.check.background.pluginFiles.changed": "The files of the plugin {slug} changed since WordJS installed it, so it was not started. Update or reinstall it from Plugins; if you changed them yourself, accept them.",
+        "siteHealth.action.acceptPluginFiles": "Accept these files",
         "siteHealth.check.background.outbox.title": "Content events",
         "siteHealth.check.background.outbox.dead": "{count} content event(s) could not be delivered (webhooks, search, cache).",
         "siteHealth.check.background.outbox.ok": "Webhooks and cache updates are delivered.",
@@ -174,6 +207,23 @@ registerTranslations({
         "siteHealth.fixLabel.certificates": "Certificates",
         "siteHealth.fixLabel.securityServer": "Security → Server",
         "siteHealth.fixLabel.webhooks": "Webhooks",
+        "siteHealth.fixLabel.duplicates": "Duplicate records",
+        "siteHealth.fixLabel.audit": "Audit",
+        "siteHealth.check.database.unique.title": "Unique logins, emails and slugs",
+        "siteHealth.check.database.unique.ok": "The database itself enforces that logins, email addresses and slugs are unique.",
+        "siteHealth.check.database.unique.duplicates": "{count} value(s) are stored more than once ({rules}), so the database cannot enforce that rule yet. Choose which record keeps each value; the others get a new one and nothing is deleted.",
+        "siteHealth.check.database.unique.missing": "The unique index for {rules} is missing although nothing repeats. Build it from Duplicate records.",
+        "siteHealth.check.security.auditChain.title": "Audit log integrity",
+        "siteHealth.check.security.auditChain.ok": "Every entry of the audit log ({count}) matches its hash chain.",
+        "siteHealth.check.security.auditChain.partial": "The first {count} entries of the audit log match their hash chain; the rest were not checked in time. Admin → Audit checks all of them.",
+        "siteHealth.check.security.auditChain.broken.altered": "The audit log's hash chain breaks at entry {seq}: its content was changed. Entries were changed or removed outside WordJS; compare with the external copy.",
+        "siteHealth.check.security.auditChain.broken.gap": "The audit log's hash chain breaks at entry {seq}: the entry before it is missing. Entries were changed or removed outside WordJS; compare with the external copy.",
+        "siteHealth.check.security.auditChain.broken.link": "The audit log's hash chain breaks at entry {seq}: it does not link to the entry before it. Entries were changed or removed outside WordJS; compare with the external copy.",
+        "siteHealth.check.security.auditChain.broken.start": "The audit log's hash chain breaks at entry {seq}: the oldest entries do not match what retention removed. Entries were changed or removed outside WordJS; compare with the external copy.",
+        "siteHealth.check.security.auditExport.title": "Copy of the audit log",
+        "siteHealth.check.security.auditExport.off": "The audit log is kept only in this database. Send a copy to a syslog server or a webhook, so what it records cannot be erased from here.",
+        "siteHealth.check.security.auditExport.failing": "The copy to {target} is failing ({error}); {count} entr(ies) are waiting and are sent when it answers again.",
+        "siteHealth.check.security.auditExport.ok": "Every entry is copied to {target}.",
     },
     pt: {
         "siteHealth.check.error": "Esta verificação não pôde ser executada aqui ({error}).",
@@ -200,6 +250,8 @@ registerTranslations({
         "siteHealth.check.database.reachable.title": "Banco de dados",
         "siteHealth.check.database.reachable.ok": "O banco de dados responde ({driver}).",
         "siteHealth.check.database.reachable.down": "O banco de dados não responde: {error}.",
+        "siteHealth.check.database.pluginIsolation.title": "Isolamento dos plugins no banco de dados",
+        "siteHealth.check.database.pluginIsolation.missing": "Estes plugins funcionam sem o seu próprio usuário de banco de dados, então só as verificações SQL do WordJS os limitam às suas próprias tabelas: {plugins}. Dê ao usuário de banco de dados com que o WordJS se conecta o direito de criar usuários (Postgres: CREATEROLE; MySQL/MariaDB: CREATE USER e GRANT OPTION) e reinicie o WordJS.",
         "siteHealth.check.database.driver.title": "Mecanismo do banco de dados",
         "siteHealth.check.database.driver.legacy": "Este site usa o mecanismo SQLite antigo e mais lento (sqlite-legacy), que mantém todo o banco de dados na memória e não comporta uma rede de sites. Mude para o mecanismo atual: leva um minuto e o WordJS reinicia sozinho.",
         "siteHealth.check.mail.transport.title": "Envio de e-mail",
@@ -231,6 +283,11 @@ registerTranslations({
         "siteHealth.check.background.plugins.title": "Isolamento de plugins",
         "siteHealth.check.background.plugins.degraded": "Os plugins funcionam, mas sem o confinamento extra do sistema operacional neste servidor. Sua hospedagem pode precisar de um kernel mais novo ou ativar o sandbox da plataforma.",
         "siteHealth.check.background.plugins.ok": "Os plugins rodam isolados do site e uns dos outros.",
+        "siteHealth.check.security.pluginSecrets.title": "Acesso dos plugins a segredos",
+        "siteHealth.check.security.pluginSecrets.exposed": "Todos os sandboxes de plugins deste servidor podem ler {count} pasta(s) ou arquivo(s) com segredos por causa das permissões da pasta de instalação, e o WordJS não conseguiu alterá-las. Os plugins não são iniciados até que isso seja corrigido: execute como administrador icacls <caminho> /inheritance:d e depois icacls <caminho> /remove:g *S-1-15-2-1 *S-1-15-2-2 em cada um, ou mova o WordJS para fora de C:\\Program Files.",
+        "siteHealth.check.background.pluginFiles.title": "Arquivos de plugins",
+        "siteHealth.check.background.pluginFiles.changed": "Os arquivos do plugin {slug} mudaram desde que o WordJS o instalou, então ele não foi iniciado. Atualize ou reinstale-o em Plugins; se você mesmo os alterou, aceite-os.",
+        "siteHealth.action.acceptPluginFiles": "Aceitar estes arquivos",
         "siteHealth.check.background.outbox.title": "Eventos de conteúdo",
         "siteHealth.check.background.outbox.dead": "{count} evento(s) de conteúdo não puderam ser entregues (webhooks, busca, cache).",
         "siteHealth.check.background.outbox.ok": "Os webhooks e as atualizações de cache são entregues.",
@@ -247,6 +304,23 @@ registerTranslations({
         "siteHealth.fixLabel.certificates": "Certificados",
         "siteHealth.fixLabel.securityServer": "Segurança → Servidor",
         "siteHealth.fixLabel.webhooks": "Webhooks",
+        "siteHealth.fixLabel.duplicates": "Registros duplicados",
+        "siteHealth.fixLabel.audit": "Auditoria",
+        "siteHealth.check.database.unique.title": "Logins, e-mails e slugs únicos",
+        "siteHealth.check.database.unique.ok": "O próprio banco de dados garante que logins, endereços de e-mail e slugs não se repetem.",
+        "siteHealth.check.database.unique.duplicates": "{count} valor(es) estão gravados mais de uma vez ({rules}), então o banco de dados ainda não consegue garantir essa regra. Escolha qual registro fica com cada valor; os outros recebem um novo e nada é apagado.",
+        "siteHealth.check.database.unique.missing": "Falta o índice único de {rules}, embora nada se repita. Crie-o em Registros duplicados.",
+        "siteHealth.check.security.auditChain.title": "Integridade do registro de auditoria",
+        "siteHealth.check.security.auditChain.ok": "Todas as entradas do registro de auditoria ({count}) conferem com a cadeia de hashes.",
+        "siteHealth.check.security.auditChain.partial": "As primeiras {count} entradas do registro de auditoria conferem com a cadeia de hashes; o resto não foi verificado a tempo. Admin → Auditoria verifica todas.",
+        "siteHealth.check.security.auditChain.broken.altered": "A cadeia de hashes do registro de auditoria quebra na entrada {seq}: o conteúdo foi alterado. Entradas foram alteradas ou apagadas fora do WordJS; compare com a cópia externa.",
+        "siteHealth.check.security.auditChain.broken.gap": "A cadeia de hashes do registro de auditoria quebra na entrada {seq}: falta a entrada anterior. Entradas foram alteradas ou apagadas fora do WordJS; compare com a cópia externa.",
+        "siteHealth.check.security.auditChain.broken.link": "A cadeia de hashes do registro de auditoria quebra na entrada {seq}: não liga com a entrada anterior. Entradas foram alteradas ou apagadas fora do WordJS; compare com a cópia externa.",
+        "siteHealth.check.security.auditChain.broken.start": "A cadeia de hashes do registro de auditoria quebra na entrada {seq}: as entradas mais antigas não conferem com o que a retenção apagou. Entradas foram alteradas ou apagadas fora do WordJS; compare com a cópia externa.",
+        "siteHealth.check.security.auditExport.title": "Cópia do registro de auditoria",
+        "siteHealth.check.security.auditExport.off": "O registro de auditoria fica só neste banco de dados. Envie uma cópia a um servidor syslog ou a um webhook, para que o que ele registra não possa ser apagado daqui.",
+        "siteHealth.check.security.auditExport.failing": "A cópia para {target} está falhando ({error}); {count} entrada(s) aguardam e são enviadas quando ele voltar a responder.",
+        "siteHealth.check.security.auditExport.ok": "Cada entrada é copiada para {target}.",
     },
 });
 
@@ -258,6 +332,7 @@ export default function SiteHealthPage() {
     const [report, setReport] = useState<Report | null>(null);
     const [error, setError] = useState<string | null>(null);
     const [running, setRunning] = useState(false);
+    const [acting, setActing] = useState<string | null>(null);
 
     const run = async () => {
         setRunning(true);
@@ -268,6 +343,17 @@ export default function SiteHealthPage() {
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
     useEffect(() => { run(); }, []);
+
+    /** A check's one-click fix, then the report again so the result shows. */
+    const act = async (c: Check, key: string) => {
+        if (!c.action) return;
+        setActing(key);
+        setError(null);
+        try { await apiPost(c.action.endpoint, c.action.body || {}); }
+        catch (e: any) { setError(e?.message || t("siteHealth.failed")); }
+        finally { setActing(null); }
+        await run();
+    };
 
     /** The check's text in the panel's language when the catalogue has its key, else the backend's English. */
     const tr = (key: string | undefined, fallback: string, vars?: Record<string, string>): string => {
@@ -306,8 +392,8 @@ export default function SiteHealthPage() {
                         <Card key={g} variant="default" padding="lg">
                             <h2 className="text-xs font-black uppercase tracking-widest text-gray-400 mb-2">{t(`siteHealth.group.${g}`)}</h2>
                             <ul className="divide-y divide-gray-100">
-                                {items.map((c) => (
-                                    <li key={c.id} data-check={c.id} data-status={c.status} className="flex items-start gap-3 py-4">
+                                {items.map((c, i) => (
+                                    <li key={`${c.id}-${i}`} data-check={c.id} data-status={c.status} className="flex items-start gap-3 py-4">
                                         <i className={`fa-solid ${ICON[c.status]} mt-0.5`} aria-hidden="true"></i>
                                         <div className="min-w-0 flex-1">
                                             <p className="text-sm font-bold text-gray-900">{tr(c.titleKey, c.title, c.vars)}</p>
@@ -316,6 +402,13 @@ export default function SiteHealthPage() {
                                                 <Link href={c.fix.href} className="mt-1 inline-flex items-center gap-2 text-sm font-bold text-blue-600 underline">
                                                     {t("siteHealth.fix").replace("{where}", tr(c.fix.labelKey, c.fix.label))} <i className="fa-solid fa-arrow-right" aria-hidden="true"></i>
                                                 </Link>
+                                            )}
+                                            {c.action && c.status !== "ok" && (
+                                                <div className="mt-2">
+                                                    <Button size="sm" onClick={() => act(c, `${c.id}-${i}`)} pending={acting === `${c.id}-${i}`} disabled={acting !== null} data-testid={`site-health-action-${c.id}`}>
+                                                        {tr(c.action.labelKey, c.action.label)}
+                                                    </Button>
+                                                </div>
                                             )}
                                         </div>
                                     </li>

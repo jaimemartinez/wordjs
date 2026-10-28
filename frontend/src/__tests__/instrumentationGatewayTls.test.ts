@@ -18,6 +18,18 @@ import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { gatewayClientOptions, isRegisterHandshakeFailure } from '@/instrumentation';
+import { checkGatewayIdentity } from '@/lib/gatewayIdentity';
+import { clusterSecretRequestOptions } from '@/lib/revalidateSecret';
+import { edgeInfoRequestOptions } from '@/lib/edgeSync';
+
+/** The peer check of the two sibling legs (purge-secret repair, edge sync), built from real files. */
+function clusterSecretRequestOptionsCheck() {
+    const p = certDir(FULL);
+    const id = { gatewayHost: 'localhost', gatewayInternalPort: 3100, ca: p.ca, key: p.key, cert: p.cert } as any;
+    const a = clusterSecretRequestOptions(id).checkServerIdentity;
+    expect(edgeInfoRequestOptions(id).checkServerIdentity).toBe(a);
+    return a;
+}
 
 /** A cert directory with real files on disk — readFileSync must actually succeed. */
 function certDir(files: Record<string, string>): { ca: string; key: string; cert: string; dir: string } {
@@ -50,14 +62,22 @@ describe('instrumentation: the gateway registration leg', () => {
         expect(String(opts.cert)).toBe('CERT-PEM');
     });
 
-    it('does NOT relax hostname verification with a second policy', () => {
-        // Ordinary hostname verification is the check here: the gateway-internal certificate carries
-        // localhost + 127.0.0.1 SANs on top of its advertise host, and the sibling leg in this same
-        // process (lib/revalidateSecret.ts → clusterSecretRequestOptions) dials the SAME host and port
-        // with exactly this strictness. A checkServerIdentity override appearing here would mean a
-        // second, weaker rule for one leg — which is how the first one got lost.
+    it('checks the hostname AND that the certificate names the gateway', () => {
+        // Every cluster certificate — a backend's and a frontend's too — carries localhost + 127.0.0.1
+        // SANs, so hostname verification alone accepts another node answering on the gateway's internal
+        // port. The check keeps the hostname verification (never a CN check INSTEAD of it) and adds the
+        // gateway's identity. The sibling legs to the same port use the same function.
         const opts = gatewayClientOptions(fs, certDir(FULL));
-        expect(opts.checkServerIdentity).toBeUndefined();
+        expect(opts.checkServerIdentity).toBe(checkGatewayIdentity);
+        expect(clusterSecretRequestOptionsCheck()).toBe(checkGatewayIdentity);
+        const leaf = (cn: string) => ({ subject: { CN: cn }, subjectaltname: 'DNS:localhost, IP Address:127.0.0.1' });
+        expect(checkGatewayIdentity('localhost', leaf('gateway-internal'))).toBeUndefined();
+        expect(checkGatewayIdentity('127.0.0.1', leaf('gateway'))).toBeUndefined();
+        for (const cn of ['backend', 'frontend', 'evil']) {
+            expect(checkGatewayIdentity('localhost', leaf(cn)), cn).toBeInstanceOf(Error);
+        }
+        // …and the hostname still has to match: the gateway's own certificate for another host is refused.
+        expect(checkGatewayIdentity('gw.example', leaf('gateway-internal'))).toBeInstanceOf(Error);
     });
 
     it('reports NO cluster identity when any of the three files is missing', () => {

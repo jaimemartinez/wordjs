@@ -471,24 +471,18 @@ const PROXIED_PREFIXES = ['/api/', '/uploads/', '/themes/', '/plugins/', '/publi
  * placed in one of these two buckets on purpose.
  *
  *  - `/api/revalidate` → NEXT. Only Next can invalidate its own caches; the backend has no such route.
- *  - `/api/internal/gateway-update` → the BACKEND's, and now unambiguously so. It used to exist
- *    TWICE: `backend/src/index.ts` mounts a real, shared-secret-gated `/api/internal` router (covered
- *    by authz-idor.test.ts) AND `frontend/src/app/api/internal/gateway-update/route.ts` served the same
- *    path from Next. Every dispatcher sends the path to the backend, so the Next handler was
- *    unreachable code — nothing in the repo, the gateway included, ever POSTed at it — that wrote
- *    `gatewayPort` into wordjs-config.json without validating its type. It has been DELETED (audit
- *    #28 leftover) rather than exempted: exempting it would have taken a live endpoint away from the
- *    backend, and renaming it would have kept a second, weaker copy of a control-plane write.
+ *  - `/api/internal/gateway-update` → the BACKEND's prefix, and served by nobody. It used to exist
+ *    TWICE (a Next route handler and a backend `/api/internal` router); nothing ever POSTed at either,
+ *    and both are now deleted. Every dispatcher still sends the path to the backend, which answers 404.
  */
 const NEXT_OWNED_API_PATHS = ['/api/revalidate'];
 /**
  * Paths under `/api/` that a Next route handler must NOT claim, because a real backend mount already
- * answers them. A tombstone, not a to-do: the Next twin at `/api/internal/gateway-update` is gone, and
- * this entry is what keeps the three dispatchers agreeing that the path is the backend's — and what
- * makes anyone who re-creates a route handler there meet the collision (gateway/test/
- * dispatcher-parity.test.js drives this list) instead of shipping dead code a second time.
+ * answers them. Empty today: its one entry, `/api/internal/gateway-update`, is no longer mounted on
+ * either side. gateway/test/dispatcher-parity.test.js still fails on any Next route handler that is in
+ * neither this list nor NEXT_OWNED_API_PATHS, so a handler re-created there meets that test.
  */
-const CONTESTED_API_PATHS = ['/api/internal/gateway-update'];
+const CONTESTED_API_PATHS = [];
 
 /**
  * True when the App Router owns this path, so no dispatcher may forward it to the backend: the route

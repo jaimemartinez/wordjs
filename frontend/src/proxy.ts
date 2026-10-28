@@ -23,9 +23,17 @@
  * are never rewritten (the admin declares its site from this same header; install and portals are
  * network-wide or the plugin's), and neither are Next's assets or files with an extension other than the
  * feed, sitemap and robots documents the public tree serves.
+ *
+ * It also writes every document's Content-Security-Policy (lib/contentSecurityPolicy.ts): a fresh nonce
+ * for the documents that render per request (the admin, the sign-in screens, install, migration,
+ * portals), handed to Next on the request so it stamps its scripts; for the public pages, which are
+ * served from the ISR cache, the policy without a nonce, with the script origins the active plugins
+ * declare. Writing a response header here does not make a cached page dynamic.
  */
 import { NextResponse } from "next/server";
 import type { NextRequest } from "next/server";
+import { DYNAMIC_DOCUMENT, contentSecurityPolicy, createNonce } from "./lib/contentSecurityPolicy";
+import { publicScriptOrigins } from "./lib/publicScriptOrigins";
 
 const SITE_TREE = "/wjs-site";
 const SITE_HOST_HEADER = "x-wordjs-site-host";
@@ -45,9 +53,12 @@ function isSitePage(pathname: string): boolean {
     return !last.includes(".") || PUBLIC_DOCUMENTS.test(pathname);
 }
 
-export function proxy(request: NextRequest) {
+/**
+ * The routing decision alone (no policy header): what proxy() does before it writes the CSP. `headers`
+ * are the request headers passed on to Next; the caller may add to them first.
+ */
+export function routeRequest(request: NextRequest, headers: Headers = new Headers(request.headers)) {
     const { pathname } = request.nextUrl;
-    const headers = new Headers(request.headers);
     headers.delete(SITE_ROUTE_HEADER);
     const pass = () => NextResponse.next({ request: { headers } });
 
@@ -64,6 +75,25 @@ export function proxy(request: NextRequest) {
     }
     if (isSitePage(pathname)) headers.set(SITE_ROUTE_HEADER, host);
     return pass();
+}
+
+export async function proxy(request: NextRequest) {
+    const headers = new Headers(request.headers);
+    const dev = process.env.NODE_ENV === "development";
+    let csp: string;
+    if (DYNAMIC_DOCUMENT.test(request.nextUrl.pathname)) {
+        csp = contentSecurityPolicy({ nonce: createNonce(), dev });
+        // Next reads the nonce from the REQUEST's policy header and puts it on every script it renders.
+        headers.set("content-security-policy", csp);
+    } else {
+        const raw = request.headers.get(SITE_HOST_HEADER);
+        const siteHost = raw && SITE_HOST.test(raw.trim().toLowerCase()) ? raw.trim().toLowerCase() : null;
+        csp = contentSecurityPolicy({ scriptOrigins: await publicScriptOrigins(siteHost), dev });
+        headers.delete("content-security-policy");
+    }
+    const res = routeRequest(request, headers);
+    res.headers.set("Content-Security-Policy", csp);
+    return res;
 }
 
 export const config = {

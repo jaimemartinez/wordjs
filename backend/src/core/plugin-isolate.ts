@@ -695,12 +695,14 @@ async function awaitKeySettled(key: string, timeoutMs = 30000): Promise<boolean>
 // OWN OS process, so off-heap growth is the CHILD's rss — bounded per-child in loadIsolatedPlugin —
 // not the host's. A worker_thread shared the host rss and could OOM-crash it; a child cannot.)
 
-// --- KERNEL-ENFORCED memory cap (RLIMIT_AS via `ulimit -v`) ---------------------------------------
+// --- KERNEL-ENFORCED memory cap (RLIMIT_AS via prlimit) -------------------------------------------
 // We prefer a KERNEL cap on the child's address space over a pure userspace poll: it holds even if the
 // host event loop is wedged, and it bounds
-// off-heap (Buffer/ArrayBuffer) growth the V8 heap flag can't. The wrapper `sh -c 'ulimit -v N; exec
-// node …'` preserves the fork-style IPC channel — the inherited NODE_CHANNEL_FD + its fd survive the
-// shell's `exec`, so the exec'd node attaches IPC exactly as a forked child would. V8's pointer-
+// off-heap (Buffer/ArrayBuffer) growth the V8 heap flag can't. util-linux `prlimit --as=N -- node …` sets
+// the limits on itself and execs the command, with no shell: argv only, and the binary is taken from a
+// fixed list of system paths, never from PATH. That exec preserves the fork-style IPC channel — the
+// inherited NODE_CHANNEL_FD + its fd survive it, so the exec'd node attaches IPC exactly as a forked
+// child would. Without prlimit (macOS, a minimal image) there is no kernel rlimit cap. V8's pointer-
 // compression cage reserves a large VIRTUAL range (~4 GB) that RLIMIT_AS counts, so the cap must be
 // GENEROUS — it is a coarse virtual *backstop* (bounds pathological allocation; kernel-enforced even if
 // the host loop is wedged), NOT a tight RSS cap. The precise
@@ -709,12 +711,30 @@ async function awaitKeySettled(key: string, timeoutMs = 30000): Promise<boolean>
 // child's footprint — cage + ts-node — not a bare `node` that under-counts it and false-kills loads).
 // Result (cached Promise): null = unavailable (→ plain fork + /proc poll), number = RLIMIT_AS in KiB.
 let osCapProbe: Promise<number | null> | undefined;
+// util-linux prlimit, from the system directories only: never resolved through PATH or the environment.
+const PRLIMIT_CANDIDATES = ['/usr/bin/prlimit', '/bin/prlimit', '/usr/sbin/prlimit', '/sbin/prlimit'];
+let prlimitBin: string | null | undefined;
+function prlimitPath(): string | null {
+    if (prlimitBin !== undefined) return prlimitBin;
+    prlimitBin = null;
+    for (const p of PRLIMIT_CANDIDATES) {
+        try { if (fs.statSync(p).isFile()) { fs.accessSync(p, fs.constants.X_OK); prlimitBin = p; break; } } catch { /* next */ }
+    }
+    return prlimitBin;
+}
+// Whether RLIMIT_NOFILE is applied with the address-space cap (a host whose hard limit is below FD_CAP
+// refuses to raise it, and then only the address-space cap is set).
+let osCapNofile = false;
+/** prlimit's arguments for an address-space cap of `kb` KiB (and the fd cap when `nofile`), then `--`. */
+function rlimitArgs(kb: number, nofile: boolean): string[] {
+    return [`--as=${kb * 1024}`, ...(nofile ? [`--nofile=${FD_CAP}`] : []), '--'];
+}
 function probeOsMemoryCap(): Promise<number | null> {
     if (osCapProbe) return osCapProbe;
     osCapProbe = (async () => {
-        if (process.platform === 'win32') return null; // no POSIX ulimit / RLIMIT_AS
+        if (process.platform === 'win32') return null; // no POSIX RLIMIT_AS
         if (process.platform === 'darwin') {
-            // Darwin accepts `ulimit -v` but aliases RLIMIT_AS to an unenforced RLIMIT_RSS. A successful
+            // Darwin accepts an address-space limit but aliases RLIMIT_AS to an unenforced RLIMIT_RSS. A successful
             // shell command is therefore not evidence of a cap. Measure the bite first and never print
             // "kernel memory cap active" unless the impossible-limit control proves enforcement.
             let enforcement = 'unknown';
@@ -738,30 +758,41 @@ function probeOsMemoryCap(): Promise<number | null> {
         // Probe with the SAME execArgv the real child uses (ts-node in dev) so the validated cap reflects
         // the real startup footprint (cage + ts-node compiler), not a bare `node` that under-counts it.
         const execArgv = __filename.endsWith('.ts') ? ['-r', TS_NODE_REGISTER] : [];
-        // The probe child boots node UNDER the candidate RLIMIT_AS through the SAME shell wrapper the real
+        // The probe child boots node UNDER the candidate RLIMIT_AS through the SAME prlimit launcher the real
         // load uses, and sends ONE IPC message. We accept a cap only if node both starts AND its IPC
-        // channel survives the shell `exec` (process.send works) — this self-validates the kernel cap +
+        // channel survives prlimit's exec (process.send works) — this self-validates the kernel cap +
         // IPC-preservation on the ACTUAL host, so the path needs no per-platform assumptions and falls
         // back cleanly to plain fork wherever it doesn't hold.
         // Exit only AFTER the IPC write flushes (send callback) — exiting synchronously after send would
         // drop the message and falsely fail the probe even where the cap works. Backstop self-exit so a
         // stuck candidate fails fast rather than waiting out the outer spawn timeout.
         const probeSrc = 'if(!process.send){process.exit(3)}process.send("ok",function(){process.exit(0)});setTimeout(function(){process.exit(4)},8000)';
+        const prlimit = prlimitPath();
+        if (!prlimit) {
+            log.info('[Sandbox] kernel rlimit cap unavailable here (no util-linux prlimit); relying on /proc RSS poll + process separation.');
+            return null;
+        }
+        const bootsUnder = (kb: number, nofile: boolean) => new Promise<boolean>((res) => {
+            let c: any, got = false, done = false;
+            const finish = (v: boolean) => { if (!done) { done = true; try { if (c) c.kill(); } catch { /* */ } res(v); } };
+            try {
+                // The same launcher the real load uses: prlimit <limits> -- node …execArgv -e src.
+                c = spawn(prlimit, [...rlimitArgs(kb, nofile), process.execPath, ...execArgv, '-e', probeSrc],
+                    { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 20000 });
+            } catch { return res(false); }
+            c.on('message', (m: any) => { if (m === 'ok') got = true; });
+            c.on('error', () => finish(false));
+            c.on('exit', (code: number) => finish(got && code === 0));
+        });
         for (const mb of candidatesMb) {
-            const kb = mb * 1024; // `ulimit -v` unit is KiB
-            const ok = await new Promise<boolean>((res) => {
-                let c: any, got = false, done = false;
-                const finish = (v: boolean) => { if (!done) { done = true; try { if (c) c.kill(); } catch { /* */ } res(v); } };
-                try {
-                    // Same `exec "$@"` wrapper the real load uses; $0 = label, $@ = [node, …execArgv, -e, src].
-                    c = spawn('sh', ['-c', `ulimit -v ${kb} 2>/dev/null; exec "$@"`, 'wjs-probe', process.execPath, ...execArgv, '-e', probeSrc],
-                        { stdio: ['ignore', 'ignore', 'ignore', 'ipc'], serialization: 'advanced', timeout: 20000 });
-                } catch { return res(false); }
-                c.on('message', (m: any) => { if (m === 'ok') got = true; });
-                c.on('error', () => finish(false));
-                c.on('exit', (code: number) => finish(got && code === 0));
-            });
-            if (ok) { log.info({ mb: logSafe(mb) }, `[Sandbox] kernel memory cap active: RLIMIT_AS ${logSafe(mb)} MB per isolated child.`); return kb; }
+            const kb = mb * 1024; // the cap is kept in KiB; prlimit takes bytes
+            for (const nofile of [true, false]) {
+                if (await bootsUnder(kb, nofile)) {
+                    osCapNofile = nofile;
+                    log.info({ mb: logSafe(mb) }, `[Sandbox] kernel memory cap active: RLIMIT_AS ${logSafe(mb)} MB per isolated child${nofile ? `, RLIMIT_NOFILE ${FD_CAP}` : ''}.`);
+                    return kb;
+                }
+            }
         }
         log.info('[Sandbox] kernel rlimit cap unavailable here; relying on /proc RSS poll + process separation.');
         return null;
@@ -1437,9 +1468,9 @@ const KERNEL_MECHANISM_BY_PLATFORM: Record<string, ConfinementMechanism> = {
     linux: 'landlock', win32: 'appcontainer', darwin: 'seatbelt',
 };
 const NETWORK_MECHANISM_BY_PLATFORM: Record<string, string> = {
-    linux: 'seccomp-bpf all-socket denial without a grant; AF_INET/AF_INET6 clients only with a grant, plus Landlock TCP rules where supported',
-    win32: 'AppContainer without internetClient unless the plugin holds the network grant',
-    darwin: 'Seatbelt deny network* unless the plugin holds the network grant',
+    linux: 'seccomp-bpf all-socket denial without a grant; with a grant AF_INET/AF_INET6 clients only, and Landlock TCP rules (ABI >= 4) limit connects to the ports of the plugin',
+    win32: 'AppContainer without internetClient unless the plugin holds the network grant; the private ranges also need privateNetworkClientServer, given only for an approved private destination',
+    darwin: 'Seatbelt deny network* unless the plugin holds the network grant; with it, only the TCP ports of the plugin and never loopback',
 };
 function platformKernelMechanism(platform: string = process.platform): ConfinementMechanism {
     return KERNEL_MECHANISM_BY_PLATFORM[platform] || 'none';
@@ -1450,11 +1481,13 @@ const LINUX_FLOOR_LAYERS: readonly LinuxFloorLayer[] = ['landlock', 'none'] as c
 function linuxFloorDecision(o: { platform: string; hardened?: boolean; zeroConf: ConfinementState; netGranted: boolean }): { layer: LinuxFloorLayer; denyNetwork: boolean; reason: string } {
     if (o.platform !== 'linux') return { layer: 'none', denyNetwork: false, reason: 'Landlock and seccomp-bpf are Linux kernel features' };
     if (o.zeroConf !== 'active') return { layer: 'none', denyNetwork: false, reason: `the Landlock/seccomp probe did not certify this host (state '${o.zeroConf}')` };
+    // No plugin opens a socket of its own: a network-granted one reaches the network through the host's
+    // egress tunnel (core/egress-tunnel), so the IP-socket denial applies to every plugin.
     return {
         layer: 'landlock',
-        denyNetwork: !o.netGranted,
+        denyNetwork: true,
         reason: o.netGranted
-            ? 'Landlock and the dangerous-syscall filter stay active; the network grant removes only the IP-socket denial'
+            ? 'Landlock, the dangerous-syscall filter and the IP-socket denial were certified on this host; the network grant is served by the host egress tunnel'
             : 'Landlock, the dangerous-syscall filter and the IP-socket denial were certified on this host',
     };
 }
@@ -1619,19 +1652,36 @@ function nativeGateRefusal(slug: string, mech: ConfinementMechanism, state: Conf
     return sandboxUnavailable(slug, { mechanism: mech, state, reason, failure });
 }
 
-function platformLaunchDecision(o: { platform: string; state: ConfinementState; netGranted: boolean; tsNode: boolean }): { mechanism: ConfinementMechanism; use: boolean; reason: string } {
+function platformLaunchDecision(o: { platform: string; state: ConfinementState; netGranted: boolean; tsNode: boolean; env?: Record<string, string | undefined> }): { mechanism: ConfinementMechanism; use: boolean; reason: string } {
     const mechanism = platformKernelMechanism(o.platform);
     if (mechanism === 'none') return { mechanism, use: false, reason: 'no kernel confinement mechanism exists for this platform' };
     if (o.state !== 'active') return { mechanism, use: false, reason: `the ${mechanism} probe did not certify this host (state '${o.state}')` };
-    if (mechanism === 'appcontainer' && o.tsNode) return { mechanism, use: false, reason: 'AppContainer applies to compiled production; recursively provisioning the ts-node development dependency tree exceeds development test deadlines' };
+    if (mechanism === 'appcontainer' && sourceWorkerExempt({ platform: o.platform, tsNode: o.tsNode, env: o.env })) return { mechanism, use: false, reason: 'the source-only development worker is exempt from AppContainer by an explicit development opt-in' };
     return { mechanism, use: true, reason: `${mechanism} confinement certified; network=${o.netGranted ? 'granted' : 'denied'} changes only the network rule` };
 }
 
-/** Production is fail-closed. The sole exception is the source-only Windows development worker: its
- * TypeScript dependency tree makes first-run recursive ACL provisioning exceed development test deadlines;
- * compiled production has a bounded runtime tree and no exception. */
-function nativeSandboxRequired(o: { configured: boolean; platform: string; tsNode: boolean }): boolean {
-    return o.configured && !(o.platform === 'win32' && o.tsNode);
+/**
+ * The ONE exemption from the native sandbox: the source-only (ts-node) worker on Windows, whose TypeScript
+ * dependency tree makes first-run ACL provisioning exceed development test deadlines. It applies only when
+ * the process says it is a development or test run: `npm run dev` / the dev monolith set
+ * WORDJS_DEV_SANDBOX_EXEMPT=1 (never honoured with NODE_ENV=production), and node:test marks the processes
+ * it runs with NODE_TEST_CONTEXT (a test may set NODE_ENV=production to exercise production code paths; it
+ * is still a test). Running the sources is not by itself a reason: a production install whose build
+ * failed must refuse plugins rather than start them without AppContainer.
+ */
+function isTestRun(env: Record<string, string | undefined>): boolean {
+    return typeof env.NODE_TEST_CONTEXT === 'string' && env.NODE_TEST_CONTEXT.length > 0;
+}
+function sourceWorkerExempt(o: { platform: string; tsNode: boolean; env?: Record<string, string | undefined> }): boolean {
+    const env = o.env || process.env;
+    if (o.platform !== 'win32' || !o.tsNode) return false;
+    if (isTestRun(env)) return true;
+    return env.NODE_ENV !== 'production' && env.WORDJS_DEV_SANDBOX_EXEMPT === '1';
+}
+
+/** Production is fail-closed; the only exception is sourceWorkerExempt(). Compiled code has none. */
+function nativeSandboxRequired(o: { configured: boolean; platform: string; tsNode: boolean; env?: Record<string, string | undefined> }): boolean {
+    return o.configured && !sourceWorkerExempt(o);
 }
 
 let platformConfinementProbe: Promise<ConfinementState> | undefined;
@@ -1664,7 +1714,9 @@ function probePlatformConfinement(): Promise<ConfinementState> {
         if (mech === 'appcontainer' && __filename.endsWith('.ts')) {
             sandboxPlatformState = sandboxHardeningState = 'disabled';
             sandboxPlatformNetworkState = 'disabled';
-            sandboxPlatformNote = 'AppContainer applies to compiled production; the source-only ts-node development worker is exempt because first-run recursive ACL provisioning exceeds development test deadlines';
+            sandboxPlatformNote = sourceWorkerExempt({ platform: process.platform, tsNode: true })
+                ? 'AppContainer applies to compiled production; this source-only development worker is exempt by an explicit development opt-in'
+                : 'AppContainer applies to the compiled build only, and this server is running the TypeScript sources without a development opt-in: run `npm run build` and start the compiled build';
             return sandboxPlatformState;
         }
         try {
@@ -1695,18 +1747,21 @@ function probePlatformConfinement(): Promise<ConfinementState> {
  * them from the same `sandbox.*` knobs the Linux cgroup path uses, so an operator sets one number and both
  * operating systems obey it, and there is no second place for the defaults to drift.
  */
-async function launchAppContainerChild(slug: string, appRoot: string, io: {
-    args: string[]; env: Record<string, string>; stdio: any; allowNetwork: boolean;
+async function launchAppContainerChild(slug: string, siteId: number, appRoot: string, io: {
+    args: string[]; env: Record<string, string>; stdio: any; allowNetwork: boolean; allowPrivateNetwork: boolean;
     zones: { traverse: string[]; readExec: string[]; write: string[] };
 }): Promise<{ child: any; containedPid: number | null }> {
     const win = require('./sandbox-windows');
-    // A SID is derived from BOTH the install and the slug. Sharing one package SID across plugins makes
-    // every recursive ACL ever granted to that SID cumulative, which destroys native cross-plugin
-    // separation even though the JavaScript guards still look correct.
-    const profile = win.appContainerProfileNameForPlugin(appRoot, slug);
+    // A SID is derived from the install, the worker (site + slug) and a per-install generation. Sharing
+    // one package SID across plugins makes every ACL ever granted to it cumulative, which destroys native
+    // cross-plugin separation; reusing one across reinstalls would hand a new install the old one's ACEs.
+    const profile = await win.launchProfileNameFor(appRoot, slug, siteId);
     const sid = await win.ensureAppContainerProfile(profile);
     if (!sid) throw new Error('the AppContainer probe reported ACTIVE but no package SID is available');
-    const zones = io.zones;
+    const zones = appContainerLaunchZones(io.zones);
+    // What the policy no longer includes is taken back FIRST (a withdrawn filesystem grant, a folder that
+    // became read-only); the grants below then add exactly the current shapes.
+    await win.revokeZonesOutsidePolicy(sid, appRoot, slug, siteId, zones);
     const grant = async (dirs: string[], mode: 'traverse' | 'rx' | 'full') => {
         const ok = await win.grantAppContainerAccess(sid, dirs, mode);
         if (!ok) throw new Error(`could not grant AppContainer ${mode} access to ${dirs.join(', ')}`);
@@ -1715,14 +1770,31 @@ async function launchAppContainerChild(slug: string, appRoot: string, io: {
     await grant(zones.readExec, 'rx');
     await grant(zones.write, 'full');
     const runtimeExe = await win.ensureAppContainerRuntime(sid);
-    const r = await win.launchInAppContainer({ sid, exe: runtimeExe, args: io.args, cwd: appRoot, env: io.env, stdio: io.stdio, allowNetwork: io.allowNetwork });
+    const r = await win.launchInAppContainer({ sid, exe: runtimeExe, args: io.args, cwd: appRoot, env: io.env, stdio: io.stdio, allowNetwork: io.allowNetwork, allowPrivateNetwork: io.allowPrivateNetwork });
     if (!r || !r.child) throw new Error('the AppContainer relay produced no child process');
     return { child: r.child, containedPid: r.containedPid ?? null };
+}
+
+/**
+ * One ACL shape per directory. A writable zone is also READABLE (the kernel layers list it in both sets),
+ * but on Windows granting it `rx` and then `full` replaced one ACE with the other on every launch - each
+ * shape's cache marker invalidated the other's, so both were redone, launch after launch. The writable
+ * shape already includes read, so a write zone is granted `full` only.
+ */
+function appContainerLaunchZones(z: { traverse: string[]; readExec: string[]; write: string[] }): { traverse: string[]; readExec: string[]; write: string[] } {
+    const key = (d: string) => path.resolve(d).toLowerCase();
+    const writes = new Set(z.write.map(key));
+    return { traverse: z.traverse, readExec: z.readExec.filter((d) => !writes.has(key(d))), write: z.write };
 }
 
 // Per-plugin permission grant check (Android-style, default-deny). No plugin bypasses the sandbox:
 // host-level capabilities (mail provider, notify transport, raw-HTML hooks are denied to all) are
 // gated on an explicit admin grant for the requested scope:access. See core/plugin-permissions.
+/** multer limits for a plugin multipart route (host-parsed): one file, and few, small text fields. */
+const MULTIPART_LIMITS = (fileSize: number) => ({
+    fileSize, files: 1, fields: 20, fieldSize: 64 * 1024, parts: 25, fieldNameSize: 100, headerPairs: 200,
+});
+
 function isGrantedFor(slug: string, scope: string, access: string): boolean {
     try { return require('./plugin-permissions').isGranted(slug, scope, access); } catch { return false; }
 }
@@ -1762,6 +1834,28 @@ function getEgressAllowlistFor(slug: string): string[] {
     let priv: string[];
     try { const l = require('./plugin-permissions').getPrivateDestinations(slug); priv = Array.isArray(l) ? l : []; } catch { priv = []; }
     return [...hosts, ...priv];
+}
+/**
+ * The TCP ports a network-granted plugin may connect to at the KERNEL level (Landlock TCP rules on Linux,
+ * Seatbelt `remote tcp` filters on macOS): DNS over TCP and the web, the ports its manifest declares on its
+ * `network` permission (`"ports": [25, 587]`), and the port of each private destination an administrator
+ * approved. The egress guard still decides which HOSTS; this bounds the ports even if that guard is defeated.
+ */
+function egressTcpPortsFor(slug: string): number[] {
+    const ports = new Set<number>(require('./sandbox-linux').DEFAULT_EGRESS_TCP_PORTS);
+    const add = (n: unknown) => { if (Number.isInteger(n) && (n as number) >= 1 && (n as number) <= 65535 && ports.size < 48) ports.add(n as number); };
+    try {
+        for (const perm of require('./io-guard').declaredPermissionsOf(slug)) {
+            if (perm && perm.scope === 'network' && Array.isArray(perm.ports)) perm.ports.forEach(add);
+        }
+    } catch { /* no manifest: the defaults */ }
+    try {
+        for (const dest of require('./plugin-permissions').getPrivateDestinations(slug) || []) {
+            const m = /:(\d{1,5})$/.exec(String(dest));
+            if (m) add(Number(m[1]));
+        }
+    } catch { /* no approved destinations */ }
+    return Array.from(ports).sort((a, b) => a - b);
 }
 // Whether the per-plugin egress policy loaded cleanly at boot. When FALSE (DB/options load failed, or the
 // permissions module can't be required at all), the spawn path below fails egress CLOSED for a
@@ -1885,6 +1979,16 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
         platform: process.platform,
         tsNode: __filename.endsWith('.ts'),
     });
+    // The source-mode worker is launched without the production flags (permission model, code-generation
+    // block), so it never starts a plugin on a server that says it is production, whatever the platform.
+    if (__filename.endsWith('.ts') && process.env.NODE_ENV === 'production' && !isTestRun(process.env)) {
+        log.warn({ slug: logSafe(slug) }, `[Sandbox] refusing to launch isolated plugin '${logSafe(slug)}': NODE_ENV=production but the server runs the TypeScript sources. Run \`npm run build\` and start the compiled build.`);
+        throw require('./sandbox-refusal').sandboxUnavailable(slug, {
+            mechanism: platformKernelMechanism(), state: sandboxPlatformState,
+            reason: 'This production server is running the TypeScript sources instead of the compiled build, so isolated plugins cannot be started with their production confinement. Run `npm run build` and restart WordJS.',
+            failure: null,
+        });
+    }
     // FAIL-CLOSED: if the operator requires the OS backstop, REFUSE to launch when it isn't actually ACTIVE
     // (no such mechanism here, disabled, or the probe failed) instead of silently degrading to
     // JS-guards-only isolation.
@@ -1985,7 +2089,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // Measured on a real macOS runner (backend/scripts/diagnose-macos-isolate.mjs):
     //
     //     L0 bare fork ......... BOOTED     L2 + Seatbelt ......... DIED
-    //     L1 + ulimit wrapper .. BOOTED     L6 compiled + Seatbelt  BOOTED
+    //     L1 + prlimit cap ... BOOTED     L6 compiled + Seatbelt  BOOTED
     //
     //     Error: EPERM: operation not permitted, uv_cwd
     //         at findAndReadConfig (ts-node/dist/configuration.js)
@@ -2034,8 +2138,35 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // site 1's floor — the code directory — always exists); what plugin code may actually write there is
     // still decided by io-guard and the filesystem grant, exactly as for site 1's private storage.
     if (!nativePaths.ownWritable) fs.mkdirSync(nativePaths.storage[0], { recursive: true, mode: 0o700 });
+    // The code and manifest about to run must be the ones the host installed (core/plugin-integrity).
+    const integrity = require('./plugin-context').runAsHost(() => require('./plugin-integrity').verifyPluginIntegrity(APP_ROOT, slug));
+    if (!integrity.ok) {
+        log.warn({ slug: logSafe(slug) }, `[Sandbox] refusing to launch '${logSafe(slug)}': ${logSafe(integrity.reason)}. Update or reinstall it from Plugins, or accept its current files in Site Health.`);
+        throw require('./sandbox-refusal').sandboxUnavailable(slug, {
+            mechanism: platformKernelMechanism(), state: sandboxPlatformState,
+            reason: 'The files of this plugin changed since WordJS installed it, so it was not started. Update or reinstall it from Plugins, or, if you changed them yourself, accept its current files in Site Health.',
+            failure: null,
+        });
+    }
+    if (integrity.recorded) log.info({ slug: logSafe(slug) }, `[Sandbox] '${logSafe(slug)}': recorded the fingerprint of its code and manifest.`);
+    // Site 1: the code directory is read-only, and its `data` folder is a link to the plugin's own data
+    // directory (core/plugin-own-data), migrated there on first launch. Failing that, the plugin is not
+    // started at all: without its data it would start empty (mail-server would mint a new key).
+    if (nativePaths.ownWritable) {
+        try {
+            const outcome = require('./plugin-context').runAsHost(() => require('./plugin-own-data').prepareOwnDataLink(APP_ROOT, slug));
+            if (outcome === 'migrated' || outcome === 'merged') log.info({ slug: logSafe(slug), outcome }, `[Sandbox] '${logSafe(slug)}': its data/ folder now lives in its private data directory (the code folder is read-only).`);
+        } catch (e: any) {
+            log.warn({ slug: logSafe(slug), err: e }, `[Sandbox] refusing to launch '${logSafe(slug)}': its data folder could not be linked (${logSafe(e && e.message)}).`);
+            throw require('./sandbox-refusal').sandboxUnavailable(slug, {
+                mechanism: platformKernelMechanism(), state: sandboxPlatformState,
+                reason: 'The data folder of this plugin could not be moved out of its code folder, so it was not started (its data is untouched). Check that WordJS can write the plugin folder and data/plugin-own/.',
+                failure: e && e.message, cause: e,
+            });
+        }
+    }
     const sandboxWritable = nativePaths.ownWritable
-        ? [nativePaths.own, ...(fsGrant.write ? nativePaths.storage : [])]
+        ? [nativePaths.ownData, ...(fsGrant.write ? nativePaths.storage : [])]
         : Array.from(new Set([nativePaths.storage[0], ...(fsGrant.write ? nativePaths.storage : [])]));
     const sandboxReadable = Array.from(new Set([
         ...nativePaths.readOnly,
@@ -2057,8 +2188,12 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // stamps every frame it emits with this secret, the host drops any inbound frame that lacks it, and the
     // worker scrubs the secret out of process.argv before plugin code runs, so a forged frame written
     // straight to fd 3 by plugin code can never carry it. Closes the frame-forge class regardless of vector.
+    // The secret is NOT part of the command line: argv is what the kernel shows in `ps` and in
+    // /proc/<pid>/cmdline, and rewriting process.argv inside the child does not change that copy. It is the
+    // FIRST message the host sends on the channel (see 'wjs-frame-nonce' below), which the worker reads
+    // before it loads a single line of plugin code.
     const frameNonce = require('crypto').randomBytes(24).toString('base64url');
-    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, site: siteId, envAllow: SAFE_ENV_KEYS, frameNonce });
+    const childCfg = JSON.stringify({ slug, entryFile, coreDir: __dirname, network: netGranted, allowedHosts: (netGranted && !egressDenyAll) ? getEgressAllowlistFor(slug) : [], egressDenyAll, fsRead: fsGrant.read, fsWrite: fsGrant.write, storage, site: siteId, envAllow: SAFE_ENV_KEYS });
     const HEAP_FLAG = '--max-old-space-size=256'; // caps the JS HEAP; cgroup/rlimit/poll cap TOTAL memory
     // RSS_BUDGET_BYTES (resident budget — cgroup memory.max AND the /proc poll AND the Job-Object cap) is
     // module-scoped now, shared with cgroupResourceProps() so the probe and this launch never disagree.
@@ -2087,15 +2222,19 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     // plugin holding the network grant. The flag is all-or-nothing; the JS egress guard remains the
     // authority on where a granted plugin may connect, and the native sandbox on whether IP sockets exist.
     if (permFlag && !__filename.endsWith('.ts')) {
-        execArgv.push(...permissionModelArgv({ permFlag, readable: sandboxReadable, writable: sandboxWritable, netGranted, netFlags: netPermFlags }));
+        // Node's permission model checks the path AS WRITTEN (it does not resolve links), so the `data` link
+        // is named as well; every kernel layer checks its target, which is the own data directory above.
+        const nodeWritable = nativePaths.ownWritable ? [...sandboxWritable, nativePaths.ownDataLink] : sandboxWritable;
+        // No --allow-net: the child opens no socket (the host egress tunnel carries a granted plugin's traffic).
+        execArgv.push(...permissionModelArgv({ permFlag, readable: sandboxReadable, writable: nodeWritable, netGranted: false, netFlags: netPermFlags }));
     }
     const childStdio: any = IPC_STDIO;
     // -- LINUX ZERO-CONFIGURATION CONFINEMENT (Landlock + seccomp-bpf) -----------------------------
     // This is a PREFIX, like Seatbelt, so it sits in the same argv slot and
     // composes with everything already there:
-    //   · the memory-cap wrapper — `sh -c 'ulimit -v N; ulimit -n M; exec "$@"' wjs-sandbox <prefix> node …`.
-    //     The shell sets both rlimits and execs perl; perl applies Landlock+seccomp to ITSELF and execs
-    //     node. Rlimits survive execve, so the caps still bite the process that matters.
+    //   · the memory-cap launcher — `prlimit --as=N --nofile=M -- <prefix> node …`. prlimit sets both
+    //     rlimits and execs perl; perl applies Landlock+seccomp to ITSELF and execs node. Rlimits survive
+    //     execve, so the caps still bite the process that matters.
     //   · the cgroup scope — the prefix sits inside `systemd-run
     //     --scope … -- env -u … <prefix> node …`, under the same MemoryMax/CPUQuota.
     //   · the permission-model flags and --disallow-code-generation-from-strings are part of `execArgv`,
@@ -2183,12 +2322,13 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     if (platformLaunch.use && platformLaunch.mechanism === 'seatbelt') {
         try {
             const mac = require('./sandbox-macos');
-            // The profile always confines filesystem/process operations; the grant changes only network.
+            // One profile for every plugin: no network of its own (a network-granted plugin's connections
+            // go through the host egress tunnel).
             const profile = mac.buildSeatbeltProfile({
                 writableDirs: sandboxWritable,
                 readOnlyDirs: sandboxReadable,
                 readOnlyFiles: tsNodeProjectFiles,
-                denyNetwork: !netGranted,
+                denyNetwork: true,
                 appRoot: APP_ROOT,
                 nodePath: process.execPath,
             });
@@ -2198,10 +2338,10 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
             }
             // seatbeltArgs() returns ARGUMENTS, not a command line, so the
             // caller decides where they sit. `[sandbox-exec, '-p', <profile>]` composes in front of the
-            // node argv, INCLUDING inside the `sh -c 'ulimit …; exec "$@"'`
-            // memory-cap wrapper: two execs in a row, and fd 3 (NODE_CHANNEL_FD) survives both, because
+            // node argv, INCLUDING after the `prlimit … --`
+            // memory-cap launcher: two execs in a row, and fd 3 (NODE_CHANNEL_FD) survives both, because
             // neither is a fork and neither touches the descriptor table. Each leg is separately
-            // probe-verified with its own IPC round-trip — the shell leg by probeOsMemoryCap, the
+            // probe-verified with its own IPC round-trip — the prlimit leg by probeOsMemoryCap, the
             // sandbox-exec leg by probeSeatbelt — which is the only reason this composition is asserted
             // rather than assumed.
             seatbeltPre = [mac.SEATBELT_BIN, ...mac.seatbeltArgs(profile, [])];
@@ -2225,14 +2365,17 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
     let acLaunch: { child: any; containedPid: number | null } | null = null;
     if (platformLaunch.use && platformLaunch.mechanism === 'appcontainer') {
         try {
-            acLaunch = await launchAppContainerChild(key, APP_ROOT, {
+            acLaunch = await launchAppContainerChild(slug, siteId, APP_ROOT, {
                 args: [...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
                 // No cwd here: launchAppContainerChild takes a typed options object and sets the
                 // container's working directory itself. The blanket insertion that gave the four real
                 // spawn branches their cwd reached this one too, and tsc refused it.
                 env: workerEnv,
                 stdio: childStdio,
-                allowNetwork: netGranted,
+                // No network capability for any plugin: a network-granted one reaches the network through the
+                // host egress tunnel, so no Windows setting is involved.
+                allowNetwork: false,
+                allowPrivateNetwork: false,
                 zones: { traverse: nativePaths.traverse, readExec: sandboxReadable, write: sandboxWritable },
             });
         } catch (e: any) {
@@ -2291,21 +2434,22 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 ...zeroConfPre, process.execPath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg],
                 { stdio: childStdio, serialization: 'advanced', env: cgroupClientEnv(workerEnv) });
         } else if (capKb) {
-            // KERNEL-capped path: a shell sets RLIMIT_AS, then `exec`s node KEEPING the inherited IPC fd
-            // (NODE_CHANNEL_FD + serialization mode are injected into the child env by the 'ipc' stdio and
-            // survive the exec). argv after the shell name = [node, …execArgv, HEAP_FLAG, WORKER, cfg];
-            // `exec "$@"` runs it, so cfg lands at process.argv[2] exactly like fork(WORKER,[cfg]).
+            // KERNEL-capped path: prlimit sets RLIMIT_AS (and RLIMIT_NOFILE), then execs node KEEPING the
+            // inherited IPC fd (NODE_CHANNEL_FD + serialization mode are injected into the child env by the
+            // 'ipc' stdio and survive the exec). argv after `--` = [node, …execArgv, HEAP_FLAG, WORKER, cfg],
+            // so cfg lands at process.argv[2] exactly like fork(WORKER,[cfg]). No shell is involved.
             // Each platform contributes at most one native prefix. Current macOS does not reach this
             // branch because its enforcement probe correctly rejects Darwin's inert RLIMIT_AS alias.
             // Two prefixes, ONE slot, and at most one is non-empty: Seatbelt on macOS, Landlock on Linux.
-            //   sh -c 'ulimit …; exec "$@"' wjs-sandbox /usr/bin/perl <shim> <zones> 1 -- node …
-            // i.e. the shell sets the rlimits and execs perl, which confines ITSELF and execs node. Three
+            //   prlimit --as=N --nofile=M -- /usr/bin/perl <shim> <zones> 1 -- node …
+            // i.e. prlimit sets the rlimits and execs perl, which confines ITSELF and execs node. Three
             // execs at most, no fork, no change to the descriptor table — so fd 3 (the IPC socketpair)
-            // reaches node exactly as it does through the shell alone.
+            // reaches node exactly as it does through prlimit alone.
             const nodeArgv = [...seatbeltPre, ...zeroConfPre, nativeNodePath, ...execArgv, HEAP_FLAG, WORKER_FILE, childCfg];
             // Also cap file descriptors (RLIMIT_NOFILE, per-process) alongside the RLIMIT_AS memory backstop,
-            // so a plugin can't exhaust the host fd table. Best-effort (2>/dev/null); exec runs regardless.
-            child = spawn('sh', ['-c', `ulimit -v ${capKb} 2>/dev/null; ulimit -n ${FD_CAP} 2>/dev/null; exec "$@"`, 'wjs-sandbox', ...nodeArgv], {
+            // so a plugin can't exhaust the host fd table, wherever the probe found the host allows it.
+            // probeOsMemoryCap returned a number, so prlimit was found and is the launcher it validated.
+            child = spawn(prlimitPath() as string, [...rlimitArgs(capKb, osCapNofile), ...nodeArgv], {
                 stdio: childStdio,
                 serialization: 'advanced',
                 env: workerEnv,
@@ -2349,6 +2493,9 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 serialization: 'advanced',
             });
         }
+        // The frame nonce, as the first message on the channel (it is not in argv; see childCfg). Queued by
+        // Node until the child attaches its channel, so it always precedes any other host message.
+        try { child.send({ kind: 'wjs-frame-nonce', nonce: frameNonce }); } catch { /* child already gone: the load fails on its own */ }
         // Record the pid as OURS-and-alive from the moment it exists (see livePids): the registry entry
         // below is not evidence of a running process, and every teardown path needs an answer that is.
         const spawnedPid: number | undefined = child.pid;
@@ -2418,6 +2565,24 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
             on: child.on.bind(child),
             _child: child,
         };
+        // This child's network egress: it has no direct network at the kernel layer, so a network-granted
+        // plugin's connections and name lookups are decided and opened here (core/egress-tunnel). The
+        // policy is read when each connection opens, so an approval or a withdrawal applies to the next one.
+        const egressTunnel = require('./egress-tunnel').createEgressTunnelHost({
+            slug,
+            send: (m: any) => worker.postMessage(m),
+            policy: () => {
+                const perms = require('./plugin-permissions');
+                return {
+                    network: isNetworkGrantedFor(slug),
+                    loaded: egressPolicyLoaded(),
+                    allowedHosts: (() => { try { return perms.getEgressAllowlist(slug) || []; } catch { return []; } })(),
+                    privateDestinations: (() => { try { return perms.getPrivateDestinations(slug) || []; } catch { return []; } })(),
+                    ports: egressTcpPortsFor(slug),
+                };
+            },
+        });
+        child.on('exit', () => egressTunnel.closeAll());
         let settled = false; // load Promise settled (ready / init-error / early exit / ready timeout)
         let readyTimer: any = null; // startup deadline — see READY_TIMEOUT_MS; cleared by 'ready' and failLoad
         // Reactive per-child RSS poll — the FALLBACK resident cap when the preventive cgroup cap isn't
@@ -2898,6 +3063,9 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 // child stays alive with everything it registered before the throw still applying to
                 // host content — failLoad is what makes the rejection mean "nothing of it is left".
                 failLoad(new Error(msg.error));
+            } else if (msg.kind === 'net') {
+                // A tunnelled connection or name lookup (core/egress-tunnel judges and opens it).
+                egressTunnel.handle(msg);
             } else if (msg.kind === 'call') {
                 // The isolate invoked a wordjs.* method — run it here, in the plugin's context.
                 if (inflightCalls >= MAX_INFLIGHT_CALLS) {
@@ -3100,7 +3268,10 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                         // was unreadable to the handler). Created by the host, before the first request.
                         const stagingDir = require('./sandbox-paths').uploadStagingDir(path.resolve(__dirname, '..', '..'), slug, siteId);
                         require('fs').mkdirSync(stagingDir, { recursive: true });
-                        const up = multer({ dest: stagingDir, limits: { fileSize: maxFileSize, files: 1 } });
+                        // Bound the NON-file parts too: busboy holds every text field in memory, and a plugin
+                        // route without auth takes this from anyone. A plugin form needs a handful of small
+                        // fields next to its one file.
+                        const up = multer({ dest: stagingDir, limits: MULTIPART_LIMITS(maxFileSize) });
                         mw.push(up.single(String(msg.opts.multipart)));
                         startUploadReaper(stagingDir); // sweep crash-orphaned temp uploads (the per-request unlink handles the happy path)
                     } catch (e: any) { log.warn({ slug: logSafe(slug), err: e }, `[Isolate ${logSafe(slug)}] multipart unavailable`); }
@@ -3660,7 +3831,7 @@ module.exports = {
     isIsolated: (slug: string) => isolates.has(isolateKey(slug)),
     // The policy fingerprint the RUNNING child of `slug` was spawned with (undefined when none is running).
     spawnPolicyFingerprint: (slug: string) => { const key = isolateKey(slug); return isolates.has(key) ? spawnPolicies.get(key) : undefined; },
-    listIsolates, listIsolateKeys, isolateKey, splitIsolateKey, getPluginGraphRouter,
+    listIsolates, listIsolateKeys, isolateKey, splitIsolateKey, getPluginGraphRouter, MULTIPART_LIMITS,
     // Network-wide: stop one isolate by key (core/plugins, when a plugin leaves the network or a site).
     unloadIsolateKey: unloadKey,
     // What a plugin route handler receives as req.user (incl. its own pluginCapabilities).
@@ -3706,6 +3877,11 @@ module.exports = {
     // layers can never be active.
     __platformLaunchDecision: platformLaunchDecision,
     __nativeSandboxRequired: nativeSandboxRequired,
+    __sourceWorkerExempt: sourceWorkerExempt,
+    __egressTcpPortsFor: egressTcpPortsFor,
+    __rlimitArgs: rlimitArgs,
+    __prlimitCandidates: PRLIMIT_CANDIDATES,
+    __appContainerLaunchZones: appContainerLaunchZones,
     // The reactive CPU watchdog's DECISION, exported as a PURE function for exactly the reason
     // __platformLaunchDecision is: the property that matters — an unbroken 60 s burn kills, a shorter
     // burst does not, one quiet tick resets — cannot be asserted by actually pegging a core for a minute

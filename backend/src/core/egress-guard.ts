@@ -58,6 +58,7 @@ function isBlockedV4(a: string): boolean {
     if (x === 192 && y === 168) return true;           // 192.168.0.0/16 private
     if (x === 100 && y >= 64 && y <= 127) return true; // 100.64.0.0/10 CGNAT
     if (x === 192 && y === 0 && p[2] === 0) return true; // 192.0.0.0/24 IETF protocol assignments
+    if (x === 198 && (y === 18 || y === 19)) return true; // 198.18.0.0/15 benchmarking (RFC 2544), used inside labs/VPCs
     if (x >= 224) return true;                         // 224.0.0.0/4 multicast + 240.0.0.0/4 reserved
     return false;
 }
@@ -121,6 +122,11 @@ function embeddedIpv4(b: number[]): string[] | null {
     if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0 && b[5] === 0 && b[6] === 0 && b[7] === 0) {
         return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
     }
+    // Local-use NAT64 prefix 64:ff9b:1::/48 (RFC 8215): an operator's own translator, typically with a
+    // /96 inside it, so the embedded IPv4 sits in the last 32 bits like the well-known prefix above.
+    if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0x00 && b[5] === 0x01) {
+        return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
+    }
     // 6to4 prefix 2002::/16 (RFC 3056) embeds the site's IPv4 in bytes 2-5 (2002:V4V4:V4V4::/48) which
     // a 6to4 relay routes to that v4 address — so a 6to4 address wrapping an RFC1918/loopback/link-local
     // v4 reaches the internal host the same way NAT64 does. Extract + classify the embedded v4; block only
@@ -160,6 +166,9 @@ export function isBlockedIp(ip: string): boolean {
     if (fam === 6) {
         const b = ipv6ToBytes(a);
         if (!b) return true;                                       // unparseable → fail closed
+        // 64:ff9b:1::/48 is a LOCAL translator (RFC 8215): whatever IPv4 it embeds, and wherever in the
+        // /48 the operator placed it, it routes into the operator's own network — never a public target.
+        if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0x00 && b[5] === 0x01) return true;
         const embedded = embeddedIpv4(b);
         if (embedded) return embedded.some((v4) => isBlockedV4(v4));
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;  // fe80::/10 link-local
@@ -208,7 +217,7 @@ export function setAllowedHosts(list: any): void {
 }
 // Canonicalize an IP LITERAL (strip [] brackets, fold IPv6 to a normalized byte form) so equivalent
 // spellings — bracketed vs bare, compressed vs expanded IPv6 — compare equal. Returns null for a hostname.
-function canonIp(s: string): string | null {
+export function canonIp(s: string): string | null {
     const a = String(s).replace(/^\[|\]$/g, '');
     const fam = realIsIP(a);
     if (fam === 4) return 'v4:' + a;
@@ -233,6 +242,32 @@ interface PrivateDestination { host: string; ip: string | null; port: number }
 let privateDestinations: PrivateDestination[] = [];
 // canonIp|port pairs this module resolved for a hostname entry (bounded; refreshed on every resolution).
 const resolvedPrivate = new Set<string>();
+
+/**
+ * True when an IP literal reaches THIS machine: 127.0.0.0/8, 0.0.0.0/8 (connects to the local host), ::1
+ * and :: in every spelling, and every IPv6 form that embeds one of those IPv4s (mapped, compatible, NAT64,
+ * 6to4, ISATAP, Teredo). Judged on the numeric bytes, never the text. Unparseable input counts as loopback
+ * (fail closed).
+ */
+export function isLoopbackIp(ip: string): boolean {
+    let a = String(ip || '').replace(/^\[|\]$/g, '');
+    const z = a.indexOf('%'); if (z >= 0) a = a.slice(0, z);
+    const v4 = (s: string) => {
+        const p = s.split('.').map((n) => parseInt(n, 10));
+        if (p.length !== 4 || p.some((n) => isNaN(n) || n < 0 || n > 255)) return true;
+        return p[0] === 127 || p[0] === 0;
+    };
+    const fam = realIsIP(a);
+    if (fam === 4) return v4(a);
+    if (fam === 6) {
+        const b = ipv6ToBytes(a);
+        if (!b) return true;
+        if (b.slice(0, 15).every((x) => x === 0) && (b[15] === 1 || b[15] === 0)) return true; // ::1, ::
+        const embedded = embeddedIpv4(b);
+        return !!embedded && embedded.some((x) => v4(x));
+    }
+    return true;
+}
 
 /** True for an address no approval can open: unspecified, link-local (incl. cloud metadata), multicast/reserved. */
 export function isNeverExemptIp(ip: string): boolean {
@@ -288,7 +323,7 @@ export function setPrivateDestinations(list: any): void {
     resolvedPrivate.clear();
 }
 
-function notePrivateResolution(hostname: string, addresses: any): void {
+export function notePrivateResolution(hostname: string, addresses: any): void {
     const name = String(hostname || '').toLowerCase().replace(/\.$/, '');
     const ports = privateDestinations.filter((d) => !d.ip && d.host === name).map((d) => d.port);
     if (!ports.length) return;
@@ -581,8 +616,12 @@ function guardNet(mod: any): any {
 // is the single chokepoint. SAFE ONLY in the child: the whole child process is ONE plugin (its core
 // bootstrap + IPC bridge never use net), so constraining the shared prototype here cannot affect host
 // code. NEVER call this on the host (it would wrongly constrain core). Idempotent.
+//
+// `viaTunnel` (core/egress-tunnel-client connectViaTunnel) replaces the native connect: the child has no
+// direct network at the kernel layer, so after the same pre-checks the socket is handed to the tunnel,
+// whose host side decides and opens the real connection.
 let childNetGuardInstalled = false;
-export function installChildNetGuard(): void {
+export function installChildNetGuard(viaTunnel?: (socket: any, args: any[]) => any): void {
     if (childNetGuardInstalled) return;
     childNetGuardInstalled = true;
     try {
@@ -590,7 +629,8 @@ export function installChildNetGuard(): void {
         if (proto && typeof proto.connect === 'function' && !(proto.connect as any).__wjGuarded) {
             const origConnect = proto.connect;
             const desc = Object.getOwnPropertyDescriptor(proto, 'connect');
-            const patched = function (this: any, ...args: any[]) { return secureConnect(origConnect, this, args); };
+            const target = viaTunnel ? function (this: any, ...a: any[]) { return viaTunnel(this, a); } : origConnect;
+            const patched = function (this: any, ...args: any[]) { return secureConnect(target, this, args); };
             (patched as any).__wjGuarded = true;
             // LOCK it: a network-granted plugin must NOT be able to reassign net.Socket.prototype.connect
             // (e.g. `Object.getPrototypeOf(require('net').Socket.prototype).connect = raw`) back to the raw
@@ -654,16 +694,28 @@ function normalizeHttpArgs(args: any[]): { url?: any; options: any; cb?: any } {
     return { url, options, cb };
 }
 
+/** The port a URL addresses: its own, else its scheme's default (http/ws 80, https/wss 443). */
+function urlPort(u: URL): number {
+    if (u.port) return Number(u.port);
+    return u.protocol === 'https:' || u.protocol === 'wss:' ? 443 : 80;
+}
+
 function guardHttp(mod: any): any {
+    const defaultPort = mod === realHttps ? 443 : 80;
     const wrap = (orig: any) => function (...args: any[]) {
         const { url, options, cb } = normalizeHttpArgs(args);
         let host = options.host || options.hostname;
-        if (!host && url) { try { host = new URL(String(url)).hostname; } catch { /* */ } }
-        assertHostLiteral(host);
+        let port: any = options.port;
+        if (url) { try { const u = new URL(String(url)); if (!host) host = u.hostname; if (port == null) port = urlPort(u); } catch { /* */ } }
+        if (port == null) port = defaultPort;
+        // An administrator-approved private destination (exact host AND port) is reachable over http too,
+        // exactly as over net.connect; everything else is public-only.
+        const approved = isApprovedPrivate(host, port);
+        if (!approved) assertHostLiteral(host);
         // Always inject the validating lookup (unless a unix-socket), so http(s).request({port}) with no
         // host — which defaults to 'localhost' — is validated (and blocked) instead of silently hitting
         // loopback. IP-literal hosts skip lookup and are covered by assertHostLiteral above.
-        if (!options.socketPath) options.lookup = validatingLookup;
+        if (!options.socketPath) options.lookup = approved ? approvedPrivateLookup : validatingLookup;
         const rebuilt = url !== undefined ? [url, options] : [options];
         if (cb) rebuilt.push(cb);
         return orig.apply(mod, rebuilt);
@@ -733,8 +785,17 @@ function pinDgramAddress(sock: any, list: any[]): string {
 // Validate a dgram send() against the egress policy, then delegate to `orig` with the destination pinned
 // to a validated IP literal. `orig`/`thisArg`/`args` mirror the prototype call so this is reusable from
 // both the in-place prototype patch AND the module-wrapper instance/subclass overrides.
+// UDP has no egress tunnel: once the child's TCP goes through the host (core/egress-tunnel-client), a
+// datagram is refused here too, with the same answer the kernel layer gives in production.
+let udpRefused = false;
+export function refuseUdp(): void { udpRefused = true; }
+function udpRefusal(): Error {
+    return Object.assign(new Error('[sandbox] network egress is blocked: plugins cannot send UDP datagrams (only TCP connections, through the host)'), { code: 'EACCES' });
+}
+
 function secureDgramSend(orig: any, thisArg: any, args: any[]): any {
     const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : undefined;
+    if (udpRefused) { const e = udpRefusal(); if (cb) { process.nextTick(cb, e); return; } throw e; }
     const idx = dgramSendAddressIndex(args);
     const address = typeof args[idx] === 'string' ? args[idx] : undefined;
     if (address === undefined) {
@@ -765,6 +826,7 @@ function secureDgramSend(orig: any, thisArg: any, args: any[]): any {
 // marking the socket connected-to-a-validated-destination so a later no-address send() is allowed.
 function secureDgramConnect(orig: any, thisArg: any, args: any[]): any {
     const cb = typeof args[args.length - 1] === 'function' ? args[args.length - 1] : undefined;
+    if (udpRefused) { const e = udpRefusal(); if (cb) { process.nextTick(cb, e); return; } throw e; }
     const address = typeof args[1] === 'string' ? args[1] : undefined; // arg after port
     if (address === undefined) {
         // connect(port) with no address defaults to 127.0.0.1 / ::1 — a loopback binding. Deny. (EG-3)
@@ -1068,16 +1130,20 @@ export function getGuardedModule(base: string): any {
 
 /** Throw synchronously if a URL's host is a blocked IP literal (used for WebSocket). */
 export function assertUrlAllowedSync(rawUrl: string): void {
-    let host: string | undefined;
-    try { host = new URL(String(rawUrl)).hostname; } catch { return; }
-    assertHostLiteral(host);
+    let u: URL;
+    try { u = new URL(String(rawUrl)); } catch { return; }
+    if (isApprovedPrivate(u.hostname, urlPort(u))) return;
+    assertHostLiteral(u.hostname);
 }
 
 /** Resolve + validate a URL's host; rejects (throws) if it resolves to a blocked IP. For fetch. */
 export async function assertUrlAllowed(rawUrl: string): Promise<void> {
     let host: string | undefined;
-    try { host = new URL(String(rawUrl)).hostname; } catch { return; } // non-URL (e.g. relative) → let fetch handle
+    let u: URL;
+    try { u = new URL(String(rawUrl)); host = u.hostname; } catch { return; } // non-URL (e.g. relative) → let fetch handle
     if (!host) return;
+    // An approved private destination is judged at its connect (the host side of the egress tunnel).
+    if (isApprovedPrivate(host, urlPort(u))) return;
     if (!isHostAllowed(host)) throw blockErr(host); // per-plugin egress policy: allowlist or deny-all (hostname path)
     if (realIsIP(host)) { assertHostLiteral(host); return; }
     await new Promise<void>((resolve, reject) => {

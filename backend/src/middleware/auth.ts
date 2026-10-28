@@ -130,10 +130,21 @@ const SESSION_ID = new WeakMap<object, string>();
  * cookie (no Max-Age), so closing the browser ends it; every refresh of it keeps that choice.
  */
 const SESSION_NOT_REMEMBERED = new WeakSet<object>();
+/**
+ * The verified claims of the session JWT (or query ticket) that authenticated this request, set by
+ * verifyAndAttachUser only. A long-lived stream re-checks THESE (streamRevalidator) for as long as it
+ * stays open, and a query ticket copies the session's lifetime from them.
+ */
+const SESSION_CLAIMS = new WeakMap<object, any>();
 
 /** Did the session on `req` sign in with «Remember me» (the default for sessions minted before it existed)? */
 function sessionRemembered(req?: Request): boolean {
     return !(req && SESSION_NOT_REMEMBERED.has(req));
+}
+
+/** The session id (`ses`) of the session that authenticated this request, or null (API token, legacy session). */
+function sessionIdOf(req: Request): string | null {
+    return (req && SESSION_ID.get(req)) || null;
 }
 
 /** The handoff the presenting session belongs to, or null for any other session. */
@@ -469,10 +480,11 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
     // raw SESSION JWT presented as `Authorization: Bearer <jwt>` authenticates a full session and MUST be
     // enforced — exempting all Bearer requests let an un-enrolled admin replay their own session JWT as a
     // header to skip the gate entirely (and then mint a wjt_ token). Only the wjt_ prefix is exempt.
-    const authHeader = req.headers.authorization;
+    // The header is read through bearerToken, the reader every authenticator uses, so the gate and the
+    // route's auth always judge the same string.
     let token: string | null = null;
-    if (authHeader && authHeader.startsWith('Bearer ') && authHeader !== 'Bearer null' && authHeader !== 'Bearer undefined') {
-        const bearer = authHeader.slice(7);
+    const bearer = bearerToken(req);
+    if (bearer) {
         // Headless API token: exempt unless the admin opted in with `enforceForApiTokens` (see the helper).
         if (bearer.startsWith(ApiToken.PREFIX)) {
             return policy.enforceForApiTokens ? enforceApiTokenMfa(bearer, req, res, next) : next();
@@ -498,7 +510,14 @@ async function mfaComplianceGate(req: Request, res: Response, next: NextFunction
 
     let decoded: any;
     try { decoded = verifyForSite(token); }
-    catch { return next(); } // invalid/expired — the route's authenticate will 401 it
+    catch {
+        // An ambient cookie or a query value that no longer verifies is the route's business (it reads
+        // as a visitor or gets its own 401). A Bearer value is a deliberate claim, and one the gate cannot
+        // recognise is refused HERE: passing it on in the belief that the route refuses it as well is how
+        // any disagreement between two readers of the header became a skipped check.
+        if (token === bearer) return refuseInvalidBearer(res);
+        return next();
+    }
     // Challenge/special-purpose tokens are not sessions — except a query ticket, which acts as one.
     if (!decoded || (decoded.purpose && !(qToken && decoded.purpose === QUERY_TICKET_PURPOSE))) return next();
     // A session minted on an address the site no longer answers is no session: the route's own
@@ -564,19 +583,54 @@ async function enforceApiTokenMfa(raw: string, req: Request, res: Response, next
         if (!user) return next();
         const status = await mfa.evaluate(user);
         if (!status.enforced) return next();
-        return res.status(403).json({
-            code: 'mfa_enrollment_required',
-            message: 'Two-factor authentication is required for this token owner\'s role. An API token cannot complete a 2FA challenge: the token\'s owner must enroll in two-factor authentication (or an administrator must revoke this token).',
-            data: { status: 403, graceDeadline: status.graceDeadline }
-        });
+        return refuseHeadlessMfa(res, status);
     } catch (e: any) {
         log.warn({ err: e }, '[mfa] gate: token compliance check failed, failing closed');
-        return res.status(503).json({
-            code: 'mfa_check_failed',
-            message: 'Could not verify two-factor compliance. Please try again.',
-            data: { status: 503 }
-        });
+        return refuseMfaCheckFailed(res);
     }
+}
+
+function refuseHeadlessMfa(res: Response, status: { graceDeadline?: any }) {
+    return res.status(403).json({
+        code: 'mfa_enrollment_required',
+        message: 'Two-factor authentication is required for this token owner\'s role. An API token cannot complete a 2FA challenge: the token\'s owner must enroll in two-factor authentication (or an administrator must revoke this token).',
+        data: { status: 403, graceDeadline: status.graceDeadline }
+    });
+}
+
+function refuseMfaCheckFailed(res: Response) {
+    return res.status(503).json({
+        code: 'mfa_check_failed',
+        message: 'Could not verify two-factor compliance. Please try again.',
+        data: { status: 503 }
+    });
+}
+
+/**
+ * The same `enforceForApiTokens` rule, applied INSIDE every authenticator that accepts a headless
+ * credential (verifyApiTokenAndAttachUser, optionalAuth, the MCP endpoint's agentAuth) once it has
+ * resolved the token's owner. The global gate above stays as the early filter; this is the check that
+ * cannot be routed around, because it runs on the very credential that authenticated the request.
+ *
+ * Resolves true when it has already answered (403 or 503) and the caller must stop. The policy read
+ * fails OPEN like the gate's (a policy layer must not take the API down); the compliance check, once
+ * the policy applies, fails CLOSED.
+ */
+async function headlessMfaRefused(user: any, req: Request, res: Response): Promise<boolean> {
+    let policy: any;
+    try { policy = await mfa.getPolicy(); }
+    catch (e: any) { log.warn({ err: e }, '[mfa] token auth: policy read failed, skipping'); return false; }
+    if (!policy.requiredRoles.length || !policy.enforceForApiTokens) return false;
+    if (isMfaEnforceExempt(req)) return false;
+    try {
+        const status = await mfa.evaluate(user);
+        if (!status.enforced) return false;
+        refuseHeadlessMfa(res, status);
+    } catch (e: any) {
+        log.warn({ err: e }, '[mfa] token auth: compliance check failed, failing closed');
+        refuseMfaCheckFailed(res);
+    }
+    return true;
 }
 
 /**
@@ -655,6 +709,7 @@ async function verifyAndAttachUser(token: string, req: Request, res: Response, n
         if (decoded.hof) SESSION_HANDOFF.set(req, decoded.hof);
         if (typeof decoded.ses === 'string' && decoded.ses) SESSION_ID.set(req, decoded.ses);
         if (decoded.rem === false) SESSION_NOT_REMEMBERED.add(req);
+        SESSION_CLAIMS.set(req, decoded);
         req.user = user;
         noteAuthenticatedUse(req);
         next();
@@ -712,6 +767,7 @@ async function verifyApiTokenAndAttachUser(token: string, req: Request, res: Res
                 data: { status: 403 }
             });
         }
+        if (await headlessMfaRefused(user, req, res)) return;
         req.user = user;
         markHeadless(req, record);
         ApiToken.touch(record.id);
@@ -985,9 +1041,37 @@ function timingSafeStringEqual(a: string, b: string): boolean {
  * stringifies a missing token; they are not credentials.
  */
 function hasBearerCredential(req: Request): boolean {
-    const authHeader = req.get('Authorization') || '';
-    return authHeader.startsWith('Bearer ')
-        && authHeader !== 'Bearer null' && authHeader !== 'Bearer undefined';
+    return bearerToken(req) !== null;
+}
+
+/**
+ * THE Bearer credential of a request — ONE reader for every consumer (the authenticators, the MFA
+ * compliance gate, the CSRF gates, the MCP endpoint, its rate-limit bucket, logout, the live streams).
+ * Each used to slice the header its own way: some trimmed the value and some did not, so the same header
+ * could read as an agent token to one layer and as an unknown string to the next, and a check that keyed
+ * on the prefix was simply skipped. With one reader, every layer judges the very same string.
+ *
+ * Returns the trimmed value after `Bearer `, or null when the request carries no Bearer credential: no
+ * header, another scheme, an empty value, or the 'null'/'undefined' literals a browser client sends when
+ * it stringifies a missing token.
+ */
+function authorizationHeader(req: Request): unknown {
+    if (!req) return undefined;
+    if (typeof req.get === 'function') return req.get('Authorization');
+    return req.headers ? req.headers.authorization : undefined;
+}
+function bearerToken(req: Request): string | null {
+    const raw = authorizationHeader(req);
+    if (typeof raw !== 'string' || !raw.startsWith('Bearer ')) return null;
+    const value = raw.slice(7).trim();
+    if (!value || value === 'null' || value === 'undefined') return null;
+    return value;
+}
+
+/** Did the caller send an `Authorization: Bearer …` header at all (even one that carries nothing usable)? */
+function sentBearerHeader(req: Request): boolean {
+    const raw = authorizationHeader(req);
+    return typeof raw === 'string' && raw.startsWith('Bearer ');
 }
 
 // THE TWO STEPS OF SIGN-IN — the mutating routes a session cookie does not authenticate. Step one carries
@@ -1291,14 +1375,8 @@ function sessionOnly(req: Request, res: Response, next: NextFunction) {
  */
 async function authenticate(req: Request, res: Response, next: NextFunction) {
     if (handleDispatchedAgent(req, res, next)) return;
-    const authHeader = req.headers.authorization;
-    let token;
-
-    // Priority 1: Authorization header (for API clients)
-    // Check for 'null' or 'undefined' string which can happen if frontend sends localStorage.getItem('token') without check
-    if (authHeader && authHeader.startsWith('Bearer ') && authHeader !== 'Bearer null' && authHeader !== 'Bearer undefined') {
-        token = authHeader.substring(7);
-    }
+    // Priority 1: Authorization header (for API clients) — see bearerToken for what counts as one.
+    let token = bearerToken(req);
 
     // Priority 2: HttpOnly cookie (for browser clients) — always a string or null, see sessionCookie.
     if (!token) {
@@ -1372,7 +1450,61 @@ function issueQueryTicket(req: Request, path: string): string {
     const mh = SESSION_MINTED_ON.get(req);
     if (typeof mh === 'string') claims.mh = mh;
     if (sessionMfaVerified(req)) claims.amr = [MFA_AMR];
+    // The session's identity travels with the ticket, so that ending THAT session (a logout of this
+    // browser, a handoff that closes) ends the ticket and anything it opened, and a stream opened with it
+    // never outlives the session itself (`sxp`, the session's own expiry).
+    const ses = SESSION_ID.get(req);
+    if (ses) claims.ses = ses;
+    const hof = SESSION_HANDOFF.get(req);
+    if (hof) claims.hof = hof;
+    const session = SESSION_CLAIMS.get(req);
+    if (session && Number.isFinite(Number(session.exp))) claims.sxp = Number(session.exp);
     return signForSite(claims, { expiresIn: QUERY_TICKET_TTL_SECONDS });
+}
+
+/**
+ * RE-AUTHORIZATION OF A LONG-LIVED STREAM (the notification SSE). Every check `authenticate` applies runs
+ * per request, and a stream is ONE request that can stay open for hours: without this, signing out,
+ * «sign out everywhere», a password change or reset, deleting the account, revoking the API token, an
+ * expired session or a 2FA obligation taking effect left the stream delivering. Built at open time from
+ * the credential that authenticated it (never re-read from the request), it answers false when that
+ * credential would no longer be accepted, and THROWS when it cannot tell (the caller tolerates that for a
+ * bounded time). The collaboration stream does the same with its own makeRevalidate.
+ */
+function streamRevalidator(req: Request): () => Promise<boolean> {
+    const userId = Number(req.user && req.user.id);
+    // Held in this closure only, for the stream's lifetime: the token that authenticated it, so a
+    // revoked or expired token ends what it opened.
+    const rawToken = isHeadless(req) ? bearerToken(req) : null;
+    const claims = SESSION_CLAIMS.get(req) || null;
+    const headless = isHeadless(req);
+    return async (): Promise<boolean> => {
+        const user = await User.findById(userId);
+        if (!user) return false;
+        if (headless) {
+            if (!rawToken) return false;
+            const record = await ApiToken.findByRawToken(rawToken);
+            if (!record || Number(record.userId) !== userId) return false;
+        } else {
+            if (!claims) return false;
+            const now = Math.floor(Date.now() / 1000);
+            // A ticket lives a minute; what it opened lives as long as the session it was issued from.
+            const ends = claims.purpose === QUERY_TICKET_PURPOSE ? Number(claims.sxp) : Number(claims.exp);
+            if (!Number.isFinite(ends) || ends <= now) return false;
+            if (!sessionAddressStillAccepted(claims)) return false;
+            if (require('../core/network-handoff').handoffSessionRefusal(claims, user)) return false;
+            if (require('../core/session-revocation').isSessionRevoked(user, claims)) return false;
+        }
+        // The question mfaComplianceGate asks of every request (and, for a token, only under the admin's
+        // `enforceForApiTokens` opt-in). A read failure throws: inconclusive, not a pass.
+        const policy = await mfa.getPolicy();
+        if (policy && Array.isArray(policy.requiredRoles) && policy.requiredRoles.length
+            && (!headless || policy.enforceForApiTokens)) {
+            const status = await mfa.evaluate(user);
+            if (status.enforced) return false;
+        }
+        return true;
+    };
 }
 
 /**
@@ -1386,13 +1518,13 @@ function issueQueryTicket(req: Request, path: string): string {
  */
 async function authenticateAllowQuery(req: Request, res: Response, next: NextFunction) {
     if (handleDispatchedAgent(req, res, next)) return;
-    const authHeader = req.headers.authorization;
     let token;
     // Which transport carried the credential — decided by where it was found, never by its content.
     let fromQueryString = false;
 
-    if (authHeader && authHeader.startsWith('Bearer ')) {
-        token = authHeader.substring(7);
+    const bearer = bearerToken(req);
+    if (bearer) {
+        token = bearer;
     } else if (sessionCookie(req)) {
         token = sessionCookie(req);
         ensureCsrfCookie(req, res); // same backfill as authenticate() — see there
@@ -1443,12 +1575,11 @@ function refuseInvalidBearer(res: Response) {
  */
 async function optionalAuth(req: Request, res: Response, next: NextFunction) {
     if (handleDispatchedAgent(req, res, next)) return;
-    const authHeader = req.headers.authorization;
     let token;
-    const fromHeader = !!(authHeader && authHeader.startsWith('Bearer '));
+    const fromHeader = sentBearerHeader(req);
 
     if (fromHeader) {
-        token = authHeader!.substring(7).trim();
+        token = bearerToken(req);
         if (!token) return refuseInvalidBearer(res);
     } else {
         token = sessionCookie(req);
@@ -1477,6 +1608,7 @@ async function optionalAuth(req: Request, res: Response, next: NextFunction) {
             }
         })();
         if (!record || !user) return unresolved();
+        if (await headlessMfaRefused(user, req, res)) return;
         if (ApiToken.scopeAllows(record.scopes, req.method, apiResourceOf(req))) {
             req.user = user;
             markHeadless(req, record);
@@ -1899,5 +2031,12 @@ module.exports = {
     // Request-value boundary — cookies and query params are not necessarily strings.
     sanitizeCookies,
     sessionCookie,
-    queryToken
+    queryToken,
+    // ONE reader of the Authorization header for every layer that needs the Bearer value.
+    bearerToken,
+    // The headless-credential MFA rule, for authenticators outside this file (routes/mcp.ts).
+    headlessMfaRefused,
+    // Re-authorization of a long-lived stream against the credential that opened it.
+    streamRevalidator,
+    sessionIdOf
 };

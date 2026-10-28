@@ -3,7 +3,9 @@
  * Equivalent to wp-includes/class-wp-comment.php and wp-includes/comment.php
  */
 
-const { db, dbAsync } = require('../config/database');
+const { dbAsync } = require('../config/database');
+// An id no column can hold names no row: findById answers null for it (core/query-params).
+const { isStorableId } = require('../core/query-params');
 const { clampLimit, clampOffset } = require('../core/pagination');
 const { sanitizeContent } = require('../core/formatting');
 const { doAction } = require('../core/hooks');
@@ -191,6 +193,8 @@ class Comment {
      * Equivalent to get_comment()
      */
     static async findById(id: number) {
+        // An id no column can hold names no row (core/query-params isStorableId) — never a driver error.
+        if (!isStorableId(id)) return null;
         const row = await dbAsync.get('SELECT * FROM comments WHERE comment_id = ?', [id]);
         return row ? new Comment(row) : null;
     }
@@ -218,6 +222,9 @@ class Comment {
      *    above judges the commented row's OWN status, and an attachment row can be 'publish' (through
      *    PUT /posts/:id) while the entry it hangs off is one the caller may not read; each such comment
      *    carries that attachment's id. Applied here, in the clause the rows and the count share.
+     *  · `moderatorViewer: { user }` — the MODERATION list: a comment is kept only when that moderator
+     *    may moderate the entry it sits on (core/comment-scope moderatableCommentCondition — the parent's
+     *    edit gate). Holding moderate_comments says that a role moderates, not on which entries.
      */
     static _buildWhere(options: any = {}) {
         const {
@@ -230,6 +237,7 @@ class Comment {
             searchAuthorEmail = false,
             publicOnlyTypes,
             attachmentViewer,
+            moderatorViewer,
         } = options;
 
         const conditions: string[] = [];
@@ -293,6 +301,13 @@ class Comment {
             // public list asks for it.
             const { attachmentReferenceCondition } = require('../core/attachment-visibility');
             const clause = attachmentReferenceCondition(attachmentViewer.user || null, 'comments.comment_post_id', attachmentViewer);
+            conditions.push(`(${clause.sql})`);
+            params.push(...clause.params);
+        }
+
+        if (moderatorViewer) {
+            const { moderatableCommentCondition } = require('../core/comment-scope');
+            const clause = moderatableCommentCondition(moderatorViewer.user, 'comments.comment_post_id');
             conditions.push(`(${clause.sql})`);
             params.push(...clause.params);
         }

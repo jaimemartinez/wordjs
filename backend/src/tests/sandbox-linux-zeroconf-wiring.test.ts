@@ -30,7 +30,8 @@ describe('Linux floor decision', () => {
         assert.strictEqual(denied.layer, 'landlock');
         assert.strictEqual(granted.layer, 'landlock');
         assert.strictEqual(denied.denyNetwork, true);
-        assert.strictEqual(granted.denyNetwork, false);
+        // A network-granted plugin keeps the IP-socket denial too: its network is the host egress tunnel.
+        assert.strictEqual(granted.denyNetwork, true);
     });
 
     test('non-Linux platforms never claim the Linux floor', () => {

@@ -49,6 +49,9 @@ const pluginOrigins = require('../core/plugin-origins');
 // `requires.wordjs`: which WordJS a catalog entry needs (catalog annotation + the 409 before download).
 const coreRequirement = require('../core/core-requirement');
 const { recordAudit } = require('../core/audit');
+// Detached Ed25519 signatures over the catalog documents (see core/marketplace-signature).
+const catalogSig = require('../core/marketplace-signature');
+const semver = require('semver');
 
 // THE SCALAR QUERY RULE — see core/query-params.
 const { requireScalarQuery } = require('../core/query-params');
@@ -85,6 +88,86 @@ const CACHE_TTL_MS = 5 * 60 * 1000;
 const SAFE_FILE_RE = /^[A-Za-z0-9_-]+-[A-Za-z0-9][A-Za-z0-9.-]*\.zip$/;
 
 const MAX_SOURCES = 12;
+
+/**
+ * CATALOG SIGNING - the trust anchor of the official catalog.
+ *
+ * Each package is sha256-checked against its catalog entry, and that hash travels in the same index
+ * document, so the index is what actually has to be trusted. The official catalog is therefore signed
+ * (a detached `<index>.sig` next to each index file, Ed25519 over the exact bytes) and verified against
+ * the public key below, which ships with the code - not with the download.
+ *
+ * The value is the base64 SPKI public key printed by backend/scripts/generate-marketplace-signing-key.js.
+ * It is EMPTY until the project owner generates the key pair and configures the MARKETPLACE_SIGNING_KEY
+ * repository secret; while it is empty the official catalog is not verified and is reported `unsigned`
+ * (never refused), so installs keep working. Once a key is set, an official remote catalog whose
+ * signature is missing or does not verify is refused.
+ */
+const OFFICIAL_CATALOG_PUBLIC_KEY = '';
+// Test seam only (see __setOfficialCatalogKeyForTests): null = use the embedded constant.
+let officialCatalogKeyOverride: string | null = null;
+function officialCatalogKey(): string {
+    return officialCatalogKeyOverride !== null ? officialCatalogKeyOverride : OFFICIAL_CATALOG_PUBLIC_KEY;
+}
+
+/**
+ * Per-source public keys for admin-added catalogs: `{ "<source url>": "<base64 Ed25519 public key>" }`.
+ * The option NAME contains "signing" on purpose: PROTECTED_OPTION_RE in core/plugin-api.ts matches it,
+ * so no plugin can read or rewrite the keys through the options bridge (a plugin that could would be
+ * able to pin its own key for a source it also controls).
+ */
+const SOURCE_KEYS_OPTION = 'marketplace_source_signing_keys';
+
+/**
+ * Validate and merge the `keys` field of a PUT /sources body into the stored per-source key map.
+ * Only URLs in the list being saved may be keyed; an empty string or null removes a key. Returns the
+ * refusal text, or null after storing.
+ */
+async function saveSourceKeys(bodyKeys: any, cleanList: string[]): Promise<string | null> {
+    if (bodyKeys === undefined) return null;
+    if (!bodyKeys || typeof bodyKeys !== 'object' || Array.isArray(bodyKeys)) return 'keys debe ser un objeto { url: clave pública }.';
+    const allowed = new Set(cleanList.map((u) => pluginOrigins.normSource(u)));
+    const next = await readSourceKeys();
+    for (const [url, key] of Object.entries(bodyKeys)) {
+        const norm = pluginOrigins.normSource(String(url).trim().replace(/\/+$/, ''));
+        if (!allowed.has(norm)) return `La clave de "${url}" no corresponde a ninguna fuente de la lista.`;
+        if (key === null || key === '') { delete next[norm]; continue; }
+        if (!catalogSig.isValidPublicKey(key)) return `La clave pública de "${url}" no es una clave Ed25519 válida.`;
+        next[norm] = String(key).trim();
+    }
+    await updateOption(SOURCE_KEYS_OPTION, next);
+    return null;
+}
+
+async function readSourceKeys(): Promise<Record<string, string>> {
+    const raw = await getOption(SOURCE_KEYS_OPTION, null);
+    let obj: any = raw;
+    if (typeof raw === 'string' && raw.trim()) { try { obj = JSON.parse(raw); } catch { obj = null; } }
+    const out: Record<string, string> = {};
+    if (obj && typeof obj === 'object' && !Array.isArray(obj)) {
+        for (const [k, v] of Object.entries(obj)) {
+            if (typeof v === 'string' && v.trim()) out[pluginOrigins.normSource(k)] = v.trim();
+        }
+    }
+    return out;
+}
+
+/**
+ * Which key verifies a source's catalog, and whether a MISSING signature refuses it.
+ *   - the official remote catalog with the embedded key configured -> required;
+ *   - the official LOCAL dist (this checkout's own build) -> verified when a .sig is present, otherwise
+ *     reported unsigned (a developer's local build is not signed);
+ *   - any source the administrator pinned a key for -> required (pinning a key is asking for signatures);
+ *   - anything else -> no key, reported unsigned.
+ */
+function catalogSignaturePolicy(url: string, isLocal: boolean, sourceKeys: Record<string, string>): { key: string; required: boolean } {
+    const official = isOfficialSource(url, isLocal);
+    const embedded = officialCatalogKey();
+    if (official && embedded) return { key: embedded, required: !isLocal };
+    const pinned = sourceKeys[pluginOrigins.normSource(url)];
+    if (pinned) return { key: pinned, required: true };
+    return { key: '', required: false };
+}
 
 /**
  * Read the admin-configured marketplace source list (option `marketplace_sources`, a JSON array).
@@ -178,6 +261,9 @@ function isOfficialSource(url: string, isLocal: boolean): boolean {
 }
 
 const FETCH_TIMEOUT_MS = 15000;
+// FETCH_TIMEOUT_MS is an IDLE timer (no byte for that long). This bounds the whole download, redirects
+// included, so a server that trickles bytes cannot hold an install or a catalog read open indefinitely.
+const FETCH_DEADLINE_MS = 2 * 60 * 1000;
 const MAX_REDIRECTS = 5;
 
 /**
@@ -209,7 +295,8 @@ function assertSaneRemote(url: string): { devLoopback: boolean } {
  * legitimately redirects to the asset host, still works. Uses the native http/https client (not global
  * fetch, whose undici socket layer is invisible to the egress guard).
  */
-async function fetchRemote(url: string, maxBytes: number, _hops = 0): Promise<Buffer> {
+async function fetchRemote(url: string, maxBytes: number, _hops = 0, deadline = Date.now() + FETCH_DEADLINE_MS): Promise<Buffer> {
+    if (Date.now() >= deadline) throw new Error('La descarga superó el tiempo máximo permitido.');
     const { devLoopback } = assertSaneRemote(url);
     const u = new URL(url);
     if (!devLoopback) await egress.assertUrlAllowed(u.href); // throws on an internal/blocked target
@@ -232,7 +319,7 @@ async function fetchRemote(url: string, maxBytes: number, _hops = 0): Promise<Bu
                 if (_hops >= MAX_REDIRECTS) return reject(new Error('Demasiadas redirecciones.'));
                 let next: string;
                 try { next = new URL(res.headers.location, u).href; } catch { return reject(new Error('Redirección inválida.')); }
-                resolve(fetchRemote(next, maxBytes, _hops + 1));
+                resolve(fetchRemote(next, maxBytes, _hops + 1, deadline));
                 return;
             }
             if (status < 200 || status >= 300) { res.destroy(); return reject(new Error(`HTTP ${status} al descargar ${u.pathname}`)); }
@@ -248,23 +335,56 @@ async function fetchRemote(url: string, maxBytes: number, _hops = 0): Promise<Bu
         });
         req.on('error', reject);
         req.on('timeout', () => req.destroy(new Error('Tiempo de espera de descarga agotado.')));
+        const overall = setTimeout(() => {
+            const err = new Error('La descarga superó el tiempo máximo permitido.');
+            reject(err);
+            req.destroy(err);
+        }, Math.max(0, deadline - Date.now()));
+        overall.unref?.();
+        req.on('error', () => clearTimeout(overall));
+        req.on('response', (res: IncomingMessage) => res.on('close', () => clearTimeout(overall)));
         req.end();
     });
 }
 
-async function loadCatalog(source: string, isLocal: boolean, indexFile: string = INDEX_FILE): Promise<any[]> {
-    let raw: string;
+/**
+ * Read one source's index and apply the signing policy to it. The signature is checked over the exact
+ * bytes read, BEFORE they are parsed, so nothing from a catalog that fails verification is ever used.
+ * The detached `.sig` is only looked for when a key applies (an unsigned third-party catalog costs no
+ * extra request).
+ */
+async function loadCatalog(
+    source: string,
+    isLocal: boolean,
+    indexFile: string = INDEX_FILE,
+    policy: { key: string; required: boolean } = { key: '', required: false },
+): Promise<{ list: any[]; signature: 'verified' | 'unsigned' }> {
+    let bytes: Buffer;
+    let sigText: string | null = null;
     if (isLocal) {
         const idxPath = path.join(path.resolve(source), indexFile);
         if (!fs.existsSync(idxPath)) throw new Error(`No se encontró ${indexFile} en ${source}. Ejecuta "npm run build:marketplace".`);
-        raw = fs.readFileSync(idxPath, 'utf8');
+        bytes = fs.readFileSync(idxPath);
+        if (policy.key) {
+            const sigPath = idxPath + catalogSig.SIGNATURE_SUFFIX;
+            try {
+                if (fs.existsSync(sigPath) && fs.statSync(sigPath).size <= catalogSig.MAX_SIGNATURE_BYTES) sigText = fs.readFileSync(sigPath, 'utf8');
+            } catch { sigText = null; }
+        }
     } else {
-        raw = (await fetchRemote(`${source}/${indexFile}`, 2 * 1024 * 1024)).toString('utf8');
+        bytes = await fetchRemote(`${source}/${indexFile}`, 2 * 1024 * 1024);
+        if (policy.key) {
+            // A missing .sig (404) and an unreachable one are the same thing here: no signature. Whether
+            // that is acceptable is the policy's decision, not the transport's.
+            try { sigText = (await fetchRemote(`${source}/${indexFile}${catalogSig.SIGNATURE_SUFFIX}`, catalogSig.MAX_SIGNATURE_BYTES)).toString('utf8'); }
+            catch { sigText = null; }
+        }
     }
-    const parsed = JSON.parse(raw);
+    const signature = catalogSig.checkCatalogSignature(bytes, sigText, policy.key, policy.required);
+    const parsed = JSON.parse(bytes.toString('utf8'));
     const list = Array.isArray(parsed) ? parsed : (parsed.plugins || parsed.themes);
     if (!Array.isArray(list)) throw new Error('El índice del marketplace tiene un formato inválido.');
-    return list;
+    return { list, signature };
 }
 
 /**
@@ -311,9 +431,10 @@ async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: an
     const seen = new Set<string>();
     const merged: any[] = [];
     const sources: any[] = [];
+    const sourceKeys = await readSourceKeys();
     for (const s of srcs) {
         try {
-            const list = await loadCatalog(s.url, s.isLocal);
+            const { list, signature } = await loadCatalog(s.url, s.isLocal, INDEX_FILE, catalogSignaturePolicy(s.url, s.isLocal, sourceKeys));
             const official = isOfficialSource(s.url, s.isLocal);
             let added = 0;
             for (const e of list) {
@@ -329,10 +450,12 @@ async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: an
                     source: s.url,
                     official,
                     review: official ? e.review : { status: 'unreviewed' },
+                    // Whether the index this entry came from carried a verified signature.
+                    catalogSignature: signature,
                 });
                 added++;
             }
-            sources.push({ url: s.url, isLocal: s.isLocal, ok: true, count: list.length, added });
+            sources.push({ url: s.url, isLocal: s.isLocal, ok: true, count: list.length, added, signature });
         } catch (e: any) {
             sources.push({ url: s.url, isLocal: s.isLocal, ok: false, error: e && e.message });
         }
@@ -387,6 +510,10 @@ async function getCatalog(refresh = false): Promise<{ merged: any[]; sources: an
  *                         type: integer
  *                       added:
  *                         type: integer
+ *                       signature:
+ *                         type: string
+ *                         enum: [verified, unsigned]
+ *                         description: verified when the index carried a detached Ed25519 signature that verified against the key for this source (the embedded official key, or the key the administrator pinned for it). unsigned when no key applies, or the official key is not configured yet. A source whose signature is required but missing, or present but invalid, is reported with ok false instead.
  *                       error:
  *                         type: string
  *                 count:
@@ -523,11 +650,18 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
  *               id:
  *                 type: string
  *                 description: The catalog entry id.
+ *               allowDowngrade:
+ *                 type: boolean
+ *                 description: Only for an installed plugin. Replacing it with an older version (by the catalog's version or the package manifest's) is refused with 409 downgradeRefused unless this is true.
+ *               existingData:
+ *                 type: string
+ *                 enum: [adopt, discard]
+ *                 description: Only for a fresh install over data a previous uninstall kept (its data directory or tables). adopt keeps and reconnects them; discard removes them once the new package installs. Without it such an install is refused with 409 existing_plugin_data, listing what was found.
  *     responses:
  *       200:
  *         description: The pipeline result. The status is the one the install or update pipeline returns, so a refusal inside the pipeline surfaces with its own status and body.
  *       400:
- *         description: Missing id, a catalog entry naming an unsafe file or a path outside the local marketplace directory, a package over the size ceiling, a remote entry with no sha256, or a sha256 mismatch - the package is never installed unverified
+ *         description: Missing id, an existingData other than adopt or discard, a catalog entry naming an unsafe file or a path outside the local marketplace directory, a package over the size ceiling, a remote entry with no sha256, a sha256 mismatch - the package is never installed unverified - or catalogSlugMismatch, an archive that would install under a different slug than the catalog entry's id
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
@@ -535,7 +669,7 @@ router.get('/catalog', authenticate, isAdmin, asyncHandler(async (req: Request, 
  *       404:
  *         description: No such id in the catalog, or the local package file is missing
  *       409:
- *         description: core_version_too_old - the entry or the package's manifest requires a newer WordJS (requires.wordjs) than this install runs; nothing is downloaded or replaced. The body names requires, minimum and current. An update can also be refused for its origin (see /marketplace/update).
+ *         description: core_version_too_old - the entry or the package's manifest requires a newer WordJS (requires.wordjs) than this install runs; nothing is downloaded or replaced. The body names requires, minimum and current. An update can also be refused for its origin (see /marketplace/update), with downgradeRefused when the package is older than the installed version and allowDowngrade was not sent, or with existing_plugin_data when a fresh install finds data a previous uninstall kept and existingData was not sent.
  *       502:
  *         description: The catalog could not be read, or the package could not be downloaded
  */
@@ -642,7 +776,74 @@ async function fetchVerifiedPackage(entry: any): Promise<{ buf?: Buffer; status?
     return { buf };
 }
 
+/**
+ * Is `candidate` a LOWER version than `current`? Proper semver precedence (the `semver` package, the
+ * same one core/core-requirement uses) when both parse; otherwise the updater's tolerant comparator,
+ * which reads an unparseable version as 0.0.0 — so a version string that is not semver can never pass
+ * for a newer one.
+ */
+function isLowerVersion(candidate: unknown, current: unknown): boolean {
+    const a = String(candidate == null ? '' : candidate).trim();
+    const b = String(current == null ? '' : current).trim();
+    if (!b) return false; // nothing installed to compare against
+    const va = semver.valid(a, { loose: true });
+    const vb = semver.valid(b, { loose: true });
+    if (va && vb) return semver.lt(va, vb);
+    return require('../core/updater').compareVersions(a || '0.0.0', b) < 0;
+}
+
+/**
+ * The version the package's OWN manifest declares (`<slug>/manifest.json`), or null when it cannot be
+ * read. This, not the catalog's label, is what would actually be installed. Only the one small entry is
+ * inflated (a manifest larger than 1 MiB is treated as unreadable), so this adds no decompression surface.
+ */
+function packageManifestVersion(buf: Buffer, slug: string): string | null {
+    try {
+        const AdmZip = require('adm-zip');
+        const entry = new AdmZip(buf).getEntry(`${slug}/manifest.json`);
+        if (!entry || entry.isDirectory || !(entry.header && entry.header.size <= 1024 * 1024)) return null;
+        const m = JSON.parse(entry.getData().toString('utf8'));
+        return m && m.version != null ? String(m.version) : null;
+    } catch {
+        return null;
+    }
+}
+
+/**
+ * Refuse replacing an installed plugin with an OLDER version unless the administrator asked for exactly
+ * that (`allowDowngrade: true`). Rolling a plugin back reinstates whatever its earlier releases fixed, so
+ * it must be a deliberate act and never the side effect of a catalog that lists an older build. Both the
+ * catalog's version and the package manifest's are checked; either one being lower is a downgrade.
+ * Returns the HTTP refusal, or null to proceed.
+ */
+function downgradeRefusal(entry: any, buf: Buffer, slug: string, installedVersion: unknown, allowDowngrade: boolean): { status: number; body: any } | null {
+    if (allowDowngrade) return null;
+    const packageVersion = packageManifestVersion(buf, slug);
+    const lower = [entry && entry.version, packageVersion].find((v) => v != null && String(v).trim() && isLowerVersion(v, installedVersion));
+    if (lower === undefined) return null;
+    return {
+        status: 409,
+        body: {
+            error: `Refused: '${slug}' ${String(installedVersion)} is installed and this package is version ${String(lower)}, which is older. `
+                + 'Installing an older version is only done on explicit request (allowDowngrade: true).',
+            code: 'downgradeRefused',
+            installedVersion: String(installedVersion),
+            packageVersion: String(lower),
+        },
+    };
+}
+
+/** `allowDowngrade` is a strict boolean: anything else present in the body is a malformed request. */
+function readAllowDowngrade(body: any): { ok: true; value: boolean } | { ok: false } {
+    const v = body ? body.allowDowngrade : undefined;
+    if (v === undefined) return { ok: true, value: false };
+    if (typeof v !== 'boolean') return { ok: false };
+    return { ok: true, value: v };
+}
+
 const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) => {
+    const allow = readAllowDowngrade(req.body);
+    if (!allow.ok) return res.status(400).json({ error: 'allowDowngrade must be true or false.' });
     const found = await findCatalogEntry((req.body || {}).id);
     if (!found.entry) return res.status(found.status as number).json(found.body);
     const entry = found.entry;
@@ -662,7 +863,21 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
     // (mkdtemp) inside the app's own os-tmp instead, and the write below is an EXCLUSIVE create at 0600.
     // Landing it in os-tmp is also what lets installPluginFromZip PROVE containment on what it deletes.
     const slug = String(entry.id);
-    const installedNow = (await getAllPlugins()).some((p: any) => String(p.slug || p.id) === slug);
+    const installedPlugin = (await getAllPlugins()).find((p: any) => String(p.slug || p.id) === slug);
+    const installedNow = !!installedPlugin;
+    if (installedPlugin) {
+        const refusal = downgradeRefusal(entry, buf, slug, installedPlugin.version, allow.value);
+        if (refusal) {
+            await recordAudit(req.user && req.user.id, 'marketplace.update', 'plugin', slug, applyAuditDetail(entry, { ok: false, status: refusal.status }));
+            return res.status(refusal.status).json(refusal.body);
+        }
+    }
+    // Data a previous uninstall kept (data/ and tables) is adopted or discarded only on the admin's
+    // explicit answer; without one the install answers 409 existing_plugin_data, as an upload does.
+    const existingData = req.body && (req.body.existingData === 'adopt' || req.body.existingData === 'discard') ? req.body.existingData : undefined;
+    if (req.body && req.body.existingData !== undefined && !existingData) {
+        return res.status(400).json({ error: 'existingData must be "adopt" or "discard".' });
+    }
     const origin = { source: String(entry.source || ''), catalogId: slug, version: entry.version != null ? String(entry.version) : null };
     const tmp = createInstallTmp();
     try {
@@ -676,7 +891,22 @@ const handleMarketplaceApply = asyncHandler(async (req: Request, res: Response) 
             return res.status(result.status).json(result.body);
         }
         // Fresh install — then record where it came from so future updates are bound to this source.
-        const result = await installPluginFromZip(tmp.zipPath, file, undefined, req.user && req.user.id);
+        //
+        // The installed slug is PINNED to the catalog entry's id, exactly as the update path pins it: the
+        // admin chose an entry, the origin is recorded under that entry's id, and the package must install
+        // as that same plugin. Without the pin the archive's own root folder would decide which plugin
+        // directory it lands in, so the provenance recorded below could describe a different plugin from
+        // the one actually installed.
+        const result = await installPluginFromZip(tmp.zipPath, file, slug, req.user && req.user.id, { existingData });
+        if (!result.ok && result.body && result.body.expectedSlug === slug && result.body.intendedSlug) {
+            // The pipeline words this refusal for the update path; say what it means for an install.
+            result.body = {
+                ...result.body,
+                error: `Refused: the catalog lists this package as '${slug}', but the archive installs '${result.body.intendedSlug}'. `
+                    + `A catalog package must install as the entry it is listed under (its zip's root folder must be '${slug}').`,
+                code: 'catalogSlugMismatch',
+            };
+        }
         if (result.ok) { try { await pluginOrigins.setPluginOrigin(slug, origin); } catch { /* non-fatal */ } }
         await recordAudit(req.user && req.user.id, 'marketplace.install', 'plugin', slug, applyAuditDetail(entry, result));
         return res.status(result.status).json(result.body);
@@ -707,11 +937,14 @@ router.post('/install', authenticate, isAdmin, handleMarketplaceApply);
  *               id:
  *                 type: string
  *                 description: The catalog entry id.
+ *               allowDowngrade:
+ *                 type: boolean
+ *                 description: Only for an installed plugin. Replacing it with an older version (by the catalog's version or the package manifest's) is refused with 409 downgradeRefused unless this is true.
  *     responses:
  *       200:
  *         description: The pipeline result. The status is the one the install or update pipeline returns, so a refusal inside the pipeline surfaces with its own status and body.
  *       400:
- *         description: Missing id, a catalog entry naming an unsafe file, a package over the size ceiling, a remote entry with no sha256, or a sha256 mismatch - the package is never installed unverified
+ *         description: Missing id, a catalog entry naming an unsafe file, a package over the size ceiling, a remote entry with no sha256, a sha256 mismatch - the package is never installed unverified - or catalogSlugMismatch, an archive that would install under a different slug than the catalog entry's id
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
@@ -719,7 +952,7 @@ router.post('/install', authenticate, isAdmin, handleMarketplaceApply);
  *       404:
  *         description: No such id in the catalog, or the local package file is missing
  *       409:
- *         description: core_version_too_old - the entry or the package's manifest requires a newer WordJS (requires.wordjs) than this install runs; nothing is downloaded or replaced. The body names requires, minimum and current. An update can also be refused for its origin (see /marketplace/update).
+ *         description: core_version_too_old - the entry or the package's manifest requires a newer WordJS (requires.wordjs) than this install runs; nothing is downloaded or replaced. The body names requires, minimum and current. An update can also be refused for its origin (see /marketplace/update), or with downgradeRefused when the package is older than the installed version and allowDowngrade was not sent.
  *       502:
  *         description: The catalog could not be read, or the package could not be downloaded
  */
@@ -758,6 +991,9 @@ router.post('/update', authenticate, isAdmin, handleMarketplaceApply);
  *               confirmSourceChange:
  *                 type: boolean
  *                 description: Required true for reinstall.
+ *               allowDowngrade:
+ *                 type: boolean
+ *                 description: Taking an older version than the installed one is refused with 409 downgradeRefused unless this is true.
  *     responses:
  *       200:
  *         description: Applied. The body is the update result plus mode, keptData, previousSource, newSource, previousGrants and grants.
@@ -785,6 +1021,8 @@ router.post('/adopt', authenticate, isAdmin, asyncHandler(async (req: Request, r
     if (b.confirmSourceChange !== undefined && typeof b.confirmSourceChange !== 'boolean') return res.status(400).json({ error: 'confirmSourceChange must be true or false.' });
     // Keeping the data is never assumed when the source changes: the administrator says which.
     if (mode === 'reinstall' && typeof b.keepData !== 'boolean') return res.status(400).json({ error: 'A reinstall from another source must say whether to keep the plugin data (keepData).', code: 'keepDataRequired' });
+    const allow = readAllowDowngrade(b);
+    if (!allow.ok) return res.status(400).json({ error: 'allowDowngrade must be true or false.' });
 
     // What is granted here is what an administrator approved in the consent dialog: a token read no dialog.
     if (b.grants.length && refusePluginGrantByToken(req, res, b.grants)) return;
@@ -793,11 +1031,18 @@ router.post('/adopt', authenticate, isAdmin, asyncHandler(async (req: Request, r
     if (!found.entry) return res.status(found.status as number).json(found.body);
     const entry = found.entry;
     const slug = String(entry.id);
-    if (!(await getAllPlugins()).some((p: any) => String(p.slug || p.id) === slug)) {
+    const installedPlugin = (await getAllPlugins()).find((p: any) => String(p.slug || p.id) === slug);
+    if (!installedPlugin) {
         return res.status(404).json({ error: `Plugin '${slug}' is not installed: install it instead.` });
     }
     const pkg = await fetchVerifiedPackage(entry);
     if (!pkg.buf) return res.status(pkg.status as number).json(pkg.body);
+    // Same downgrade rule as /marketplace/update: adopting a catalog entry never silently rolls back.
+    const refusal = downgradeRefusal(entry, pkg.buf, slug, installedPlugin.version, allow.value);
+    if (refusal) {
+        await recordAudit(req.user && req.user.id, 'marketplace.adopt', 'plugin', slug, { ...applyAuditDetail(entry, { ok: false, status: refusal.status }), mode });
+        return res.status(refusal.status).json(refusal.body);
+    }
 
     const origin = { source: String(entry.source || ''), catalogId: slug, version: entry.version != null ? String(entry.version) : null };
     const keepData = mode === 'adopt' ? true : b.keepData === true;
@@ -848,6 +1093,11 @@ router.post('/adopt', authenticate, isAdmin, asyncHandler(async (req: Request, r
  *                   type: string
  *                 usingDefault:
  *                   type: boolean
+ *                 keys:
+ *                   type: object
+ *                   additionalProperties:
+ *                     type: string
+ *                   description: The Ed25519 public key pinned per source URL. A source with a pinned key must serve a valid detached signature or its catalog is refused.
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
@@ -872,6 +1122,11 @@ router.post('/adopt', authenticate, isAdmin, asyncHandler(async (req: Request, r
  *               reset:
  *                 type: boolean
  *                 description: When true the configured list is deleted and the fallback chain applies again.
+ *               keys:
+ *                 type: object
+ *                 additionalProperties:
+ *                   type: string
+ *                 description: Optional. Pins (or, with an empty string, unpins) the Ed25519 public key of a source in this list, as base64 (raw 32 bytes or SPKI DER) or PEM. Shared between the plugin and theme lists, keyed by URL.
  *     responses:
  *       200:
  *         description: The configured sources, the built-in default and whether the default is in use
@@ -888,6 +1143,11 @@ router.post('/adopt', authenticate, isAdmin, asyncHandler(async (req: Request, r
  *                   type: string
  *                 usingDefault:
  *                   type: boolean
+ *                 keys:
+ *                   type: object
+ *                   additionalProperties:
+ *                     type: string
+ *                   description: The Ed25519 public key pinned per source URL. A source with a pinned key must serve a valid detached signature or its catalog is refused.
  *       400:
  *         description: sources is not an array, or one of the URLs is not an acceptable remote
  *       401:
@@ -897,7 +1157,7 @@ router.post('/adopt', authenticate, isAdmin, asyncHandler(async (req: Request, r
  */
 router.get('/sources', authenticate, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
     const configured = await readConfiguredSources();
-    res.json({ configured: configured || [], default: DEFAULT_REMOTE, usingDefault: configured === null });
+    res.json({ configured: configured || [], default: DEFAULT_REMOTE, usingDefault: configured === null, keys: await readSourceKeys() });
 }));
 
 router.put('/sources', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
@@ -907,7 +1167,7 @@ router.put('/sources', authenticate, isAdmin, asyncHandler(async (req: Request, 
         // This is distinct from saving an EMPTY list, which is honored as "no sources at all".
         await deleteOption('marketplace_sources');
         catalogCache = null;
-        return res.json({ configured: [], default: DEFAULT_REMOTE, usingDefault: true });
+        return res.json({ configured: [], default: DEFAULT_REMOTE, usingDefault: true, keys: await readSourceKeys() });
     }
     const arr = body.sources;
     if (!Array.isArray(arr)) return res.status(400).json({ error: 'sources debe ser un arreglo de URLs.' });
@@ -923,10 +1183,13 @@ router.put('/sources', authenticate, isAdmin, asyncHandler(async (req: Request, 
         if (!clean.includes(s)) clean.push(s);
         if (clean.length >= MAX_SOURCES) break;
     }
+    const keyError = await saveSourceKeys(body.keys, clean);
+    if (keyError) return res.status(400).json({ error: keyError });
     await updateOption('marketplace_sources', clean);
     catalogCache = null; // force a fresh merge on the next browse
+    themesCatalogCache = null; // the key map is shared with the theme list
     // An explicitly saved list — even an empty one — is never "the default": [] = no sources.
-    res.json({ configured: clean, default: DEFAULT_REMOTE, usingDefault: false });
+    res.json({ configured: clean, default: DEFAULT_REMOTE, usingDefault: false, keys: await readSourceKeys() });
 }));
 
 // ============================== THEME MARKETPLACE ==============================
@@ -986,6 +1249,11 @@ async function resolveThemeSources(): Promise<{ url: string; isLocal: boolean }[
  *                   type: string
  *                 usingDefault:
  *                   type: boolean
+ *                 keys:
+ *                   type: object
+ *                   additionalProperties:
+ *                     type: string
+ *                   description: The Ed25519 public key pinned per source URL. A source with a pinned key must serve a valid detached signature or its catalog is refused.
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
@@ -1010,6 +1278,11 @@ async function resolveThemeSources(): Promise<{ url: string; isLocal: boolean }[
  *               reset:
  *                 type: boolean
  *                 description: When true the configured list is deleted and the fallback chain applies again.
+ *               keys:
+ *                 type: object
+ *                 additionalProperties:
+ *                   type: string
+ *                 description: Optional. Pins (or, with an empty string, unpins) the Ed25519 public key of a source in this list, as base64 (raw 32 bytes or SPKI DER) or PEM. Shared between the plugin and theme lists, keyed by URL.
  *     responses:
  *       200:
  *         description: The configured sources, the built-in default and whether the default is in use
@@ -1026,6 +1299,11 @@ async function resolveThemeSources(): Promise<{ url: string; isLocal: boolean }[
  *                   type: string
  *                 usingDefault:
  *                   type: boolean
+ *                 keys:
+ *                   type: object
+ *                   additionalProperties:
+ *                     type: string
+ *                   description: The Ed25519 public key pinned per source URL. A source with a pinned key must serve a valid detached signature or its catalog is refused.
  *       401:
  *         description: Not logged in (rest_not_logged_in)
  *       403:
@@ -1035,7 +1313,7 @@ async function resolveThemeSources(): Promise<{ url: string; isLocal: boolean }[
  */
 router.get('/themes/sources', authenticate, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
     const configured = await readConfiguredThemeSources();
-    res.json({ configured: configured || [], default: DEFAULT_REMOTE, usingDefault: configured === null });
+    res.json({ configured: configured || [], default: DEFAULT_REMOTE, usingDefault: configured === null, keys: await readSourceKeys() });
 }));
 
 router.put('/themes/sources', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
@@ -1043,7 +1321,7 @@ router.put('/themes/sources', authenticate, isAdmin, asyncHandler(async (req: Re
     if (body.reset === true) {
         await deleteOption('marketplace_theme_sources');
         themesCatalogCache = null;
-        return res.json({ configured: [], default: DEFAULT_REMOTE, usingDefault: true });
+        return res.json({ configured: [], default: DEFAULT_REMOTE, usingDefault: true, keys: await readSourceKeys() });
     }
     const arr = body.sources;
     if (!Array.isArray(arr)) return res.status(400).json({ error: 'sources debe ser un arreglo de URLs.' });
@@ -1057,9 +1335,12 @@ router.put('/themes/sources', authenticate, isAdmin, asyncHandler(async (req: Re
         if (!clean.includes(s)) clean.push(s);
         if (clean.length >= MAX_SOURCES) break;
     }
+    const keyError = await saveSourceKeys(body.keys, clean);
+    if (keyError) return res.status(400).json({ error: keyError });
     await updateOption('marketplace_theme_sources', clean);
     themesCatalogCache = null;
-    res.json({ configured: clean, default: DEFAULT_REMOTE, usingDefault: false });
+    catalogCache = null; // the key map is shared with the plugin list
+    res.json({ configured: clean, default: DEFAULT_REMOTE, usingDefault: false, keys: await readSourceKeys() });
 }));
 
 let themesCatalogCache: { key: string; at: number; merged: any[]; sources: any[] } | null = null;
@@ -1073,18 +1354,19 @@ async function getThemesCatalog(refresh = false): Promise<{ merged: any[]; sourc
     const seen = new Set<string>();
     const merged: any[] = [];
     const sources: any[] = [];
+    const sourceKeys = await readSourceKeys();
     for (const s of srcs) {
         try {
-            const list = await loadCatalog(s.url, s.isLocal, THEMES_INDEX_FILE);
+            const { list, signature } = await loadCatalog(s.url, s.isLocal, THEMES_INDEX_FILE, catalogSignaturePolicy(s.url, s.isLocal, sourceKeys));
             let added = 0;
             for (const e of list) {
                 const id = String(e.id || '');
                 if (!id || seen.has(id)) continue;
                 seen.add(id);
-                merged.push({ ...e, source: s.url });
+                merged.push({ ...e, source: s.url, catalogSignature: signature });
                 added++;
             }
-            sources.push({ url: s.url, isLocal: s.isLocal, ok: true, count: list.length, added });
+            sources.push({ url: s.url, isLocal: s.isLocal, ok: true, count: list.length, added, signature });
         } catch (e: any) {
             sources.push({ url: s.url, isLocal: s.isLocal, ok: false, error: e && e.message });
         }
@@ -1139,6 +1421,10 @@ async function getThemesCatalog(refresh = false): Promise<{ merged: any[]; sourc
  *                         type: integer
  *                       added:
  *                         type: integer
+ *                       signature:
+ *                         type: string
+ *                         enum: [verified, unsigned]
+ *                         description: verified when the index carried a detached Ed25519 signature that verified against the key for this source (the embedded official key, or the key the administrator pinned for it). unsigned when no key applies, or the official key is not configured yet. A source whose signature is required but missing, or present but invalid, is reported with ok false instead.
  *                       error:
  *                         type: string
  *                 count:
@@ -1324,3 +1610,18 @@ module.exports = router;
 // booting a database to reach it.
 module.exports.isOfficialSource = isOfficialSource;
 module.exports.isNewerVersion = isNewerVersion;
+module.exports.isLowerVersion = isLowerVersion;
+module.exports.catalogSignaturePolicy = catalogSignaturePolicy;
+module.exports.OFFICIAL_CATALOG_PUBLIC_KEY = OFFICIAL_CATALOG_PUBLIC_KEY;
+/**
+ * TEST SEAM ONLY: stand in for the embedded official public key (null restores the constant). Lets the
+ * tests exercise the "official key configured" policy while the shipped constant is still empty. Drops
+ * both catalog caches so the next read applies the new key.
+ */
+module.exports.__setOfficialCatalogKeyForTests = (key: string | null): void => {
+    officialCatalogKeyOverride = key;
+    catalogCache = null;
+    themesCatalogCache = null;
+};
+
+module.exports._fetchRemote = fetchRemote; // tests: the download bounds, driven directly

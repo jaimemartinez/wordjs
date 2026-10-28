@@ -18,6 +18,7 @@ import type { Metadata } from 'next';
 import type { Post } from './api';
 import { THEME_CONTRACT } from '@/generated/visual-contract.generated';
 import { HERMETIC_BACKEND_BASE, isHermeticBuild } from '../../hermetic-build.js';
+import { resolveRevalidateSecret } from './revalidateSecret';
 
 const THEME_ASSET_NAME = new RegExp(THEME_CONTRACT.assetNamePattern);
 
@@ -346,6 +347,34 @@ interface ServerFetchOptions {
 }
 
 /**
+ * MULTISITE RELAY PROOF. The gateway believes the X-Forwarded-Host of these reads (which site to
+ * render) only from a registered frontend node that also proves it is one — an address is shared by
+ * every process on this machine, a reverse proxy in front of the gateway included. The proof is an
+ * HMAC of a fixed label under the cluster's revalidate secret (gateway/src/host-edge.js relayProof
+ * computes the same; the vector is pinned in both test suites). Null when no secret is available:
+ * the gateway then judges these reads by their Host, as it did for any unproven peer.
+ */
+const RELAY_PROOF_LABEL = 'wordjs-frontend-relay-v1';
+let relayProofCache: { value: string | null; checkedAt: number } = { value: null, checkedAt: 0 };
+export function relayProofFor(secret: string | null | undefined): string | null {
+    if (typeof secret !== 'string' || secret.length < 16) return null;
+    return require('crypto').createHmac('sha256', secret).update(RELAY_PROOF_LABEL).digest('hex');
+}
+function relayProof(): string | null {
+    if (isHermeticBuild()) return null;
+    if (relayProofCache.value) return relayProofCache.value;
+    if (Date.now() - relayProofCache.checkedAt < 5000) return null;
+    let value: string | null = null;
+    try {
+        value = relayProofFor(resolveRevalidateSecret());
+    } catch {
+        value = null;
+    }
+    relayProofCache = { value, checkedAt: Date.now() };
+    return value;
+}
+
+/**
  * Fetch JSON from the backend during SSR. Returns null on any non-2xx or network error so callers can
  * render a not-found / fallback state instead of throwing a 500 for the whole page.
  */
@@ -417,6 +446,11 @@ export async function serverResponse(endpoint: string, options: ServerFetchOptio
             headers['x-forwarded-host'] = pub.host;
             headers['x-forwarded-proto'] = pub.proto;
         }
+    }
+
+    if (headers['x-forwarded-host']) {
+        const proof = relayProof();
+        if (proof) headers['x-wordjs-relay'] = proof;
     }
 
     // Per-user reads (cookie-forwarded) must NEVER be cached/shared → no-store. Public reads opt into
@@ -497,6 +531,8 @@ export interface PortalAppInfo {
     description?: string;
     backgroundColor?: string;
     themeColor?: string;
+    /** Public URL of the home-screen icon (a PNG under the plugin's public/ folder, 512x512). */
+    icon?: string;
 }
 export interface PortalSubPageInfo {
     title?: string;

@@ -221,6 +221,33 @@ test('the reading/writing/discussion settings are validated, and the dead keys a
     }
 });
 
+test('robots.txt leaves /_next/ crawlable and serves the admin\'s own rules, validated', async () => {
+    const before = (await request(app).get(`${B}/seo/robots.txt`)).text;
+    assert.doesNotMatch(before, /_next/, 'the CSS/JS the pages render with must stay fetchable');
+    assert.match(before, /Disallow: \/api\//);
+    assert.doesNotMatch(before, /Custom rules/, 'nothing extra until an admin writes some');
+
+    assert.strictEqual((await putSettings({ robots_txt_extra: 'User-agent: GPTBot\r\nDisallow: /\r\n\r\n# drafts\nDisallow: /borradores/' })).status, 200);
+    const robots = (await request(app).get(`${B}/seo/robots.txt`)).text;
+    assert.match(robots, /# Custom rules[^\n]*\nUser-agent: GPTBot\nDisallow: \/\n\n# drafts\nDisallow: \/borradores\/\n$/);
+    assert.match(robots, /Sitemap: /, 'the built-in lines stay');
+
+    assert.strictEqual((await putSettings({ robots_txt_extra: 'Dissalow: /x' })).status, 400, 'a misspelt field is refused');
+    assert.strictEqual((await putSettings({ robots_txt_extra: 'just some text' })).status, 400);
+    assert.strictEqual((await putSettings({ robots_txt_extra: 'Disallow: /a\u0007' })).status, 400, 'no control characters');
+    assert.strictEqual((await putSettings({ robots_txt_extra: 'Disallow: /x\n'.repeat(201) })).status, 400, 'line ceiling');
+    assert.strictEqual((await putSettings({ robots_txt_extra: 5 })).status, 400);
+
+    await putSettings({ blog_public: '0' });
+    assert.match((await request(app).get(`${B}/seo/robots.txt`)).text, /^User-agent: \*\nDisallow: \/\n$/, '«discourage» wins over every custom rule');
+    await putSettings({ blog_public: '1' });
+
+    assert.ok(!('robots_txt_extra' in (await request(app).get(`${B}/settings`)).body), 'admin-only: not in the public settings');
+    assert.strictEqual((await request(app).get(`${B}/settings/all`).set(bearer('admin'))).body.robots_txt_extra, 'User-agent: GPTBot\nDisallow: /\n\n# drafts\nDisallow: /borradores/');
+    assert.strictEqual((await putSettings({ robots_txt_extra: '' })).status, 200);
+    assert.doesNotMatch((await request(app).get(`${B}/seo/robots.txt`)).text, /Custom rules/);
+});
+
 test('the posts page must be a published page other than the front page', async () => {
     const home = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ type: 'page', title: 'Front', status: 'publish' });
     const blog = await request(app).post(`${B}/posts`).set(bearer('admin')).send({ type: 'page', title: 'Blog', status: 'publish' });
@@ -501,16 +528,28 @@ test('the automatic excerpt keeps a space between blocks (FALLOS 142)', () => {
 });
 
 test('Admin › Auditoría sets how long the audit log is kept, and only to a window the screen offers', async () => {
+    // The window has its own API: keeping the log for a SHORTER time re-authenticates (routes/audit.ts).
+    const putAudit = (body: any) => request(app).put(`${B}/audit/settings`).set(bearer('admin')).send(body);
     for (const ok of ['90', '180', '365', '730', '0']) {
-        assert.strictEqual((await putSettings({ audit_retention_days: ok })).status, 200, `${ok} is offered`);
+        assert.strictEqual((await putAudit({ retentionDays: ok, currentPassword: PASSWORD })).status, 200, `${ok} is offered`);
         assert.strictEqual(String(await require('../core/options').getOption('audit_retention_days')), ok);
     }
     for (const bad of ['30', '-1', 'forever', '365.5', '']) {
-        assert.strictEqual((await putSettings({ audit_retention_days: bad })).status, 400, `${JSON.stringify(bad)} is refused`);
+        assert.strictEqual((await putAudit({ retentionDays: bad, currentPassword: PASSWORD })).status, 400, `${JSON.stringify(bad)} is refused`);
     }
+    // Shortening it without the password is refused; keeping it longer needs none.
+    assert.strictEqual((await putAudit({ retentionDays: '365', currentPassword: PASSWORD })).status, 200);
+    assert.strictEqual((await putAudit({ retentionDays: '90' })).status, 403, 'a shorter window asks for the password');
+    assert.strictEqual(String(await require('../core/options').getOption('audit_retention_days')), '365');
+    assert.strictEqual((await putAudit({ retentionDays: '730' })).status, 200, 'a longer window does not');
+    assert.strictEqual((await putAudit({ retentionDays: '0' })).status, 200, 'and neither does keeping it for ever');
+    // The generic settings writers no longer change it.
+    assert.strictEqual((await request(app).put(`${B}/settings/audit_retention_days`).set(bearer('admin')).send({ value: '90' })).status, 400);
+    await putSettings({ audit_retention_days: '90' });
+    assert.strictEqual(String(await require('../core/options').getOption('audit_retention_days')), '0', 'the bulk save skips it');
     const all = await request(app).get(`${B}/settings/all`).set(bearer('admin'));
     assert.strictEqual(String(all.body.audit_retention_days), '0', 'the admin payload carries it back to the screen');
     const pub = await request(app).get(`${B}/settings`);
     assert.strictEqual(pub.body.audit_retention_days, undefined, 'never in the public settings');
-    await putSettings({ audit_retention_days: '365' });
+    await putAudit({ retentionDays: '365', currentPassword: PASSWORD });
 });

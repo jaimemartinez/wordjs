@@ -16,8 +16,9 @@
  * Also optional, for a portal with sub-pages of its own (/portal/<slug>/<page>):
  *   - `pages`: { "<page>": { title?, private?, app? } } — the <head> of one sub-page: its own title; `private`
  *     (a personal page: never indexed, never stored, no Referer leaves it); `app` { name, shortName?,
- *     description?, backgroundColor?, themeColor? } makes it installable to a phone's home screen (the core
+ *     description?, backgroundColor?, themeColor?, icon? } makes it installable to a phone's home screen (the core
  *     serves its web app manifest at /portal/<slug>/app.webmanifest?page=<page>, scoped to that sub-page);
+ *     `icon` is a PNG under the plugin's public/ folder (512x512), served by the static /plugins mount;
  *   - `serviceWorker`: a plain .js file under client/, served as-is at /portal/<slug>/sw.js (its scope can be
  *     the portal or any sub-page of it) — e.g. to show Web Push notifications;
  *   - `file`: one of the plugin's PUBLIC GET routes ("/public/…") that turns a short-lived ticket (?d=) into
@@ -55,6 +56,9 @@ const PORTAL_RESERVED_PAGES = ['file'];
 const PORTAL_APP_NAME_MAX = 60;
 const PORTAL_APP_SHORT_NAME_MAX = 30;
 const PORTAL_APP_DESCRIPTION_MAX = 200;
+/** The home-screen icon: a .png under the plugin's public/ folder; no segment starts with a dot (no "..", no dotfile). */
+const PORTAL_APP_ICON_RE = /^(?:\.\/)?public\/(?:[A-Za-z0-9_-][A-Za-z0-9_.-]*\/){0,7}[A-Za-z0-9_-][A-Za-z0-9_.-]*\.png$/;
+const PORTAL_APP_FIELDS = ['name', 'shortName', 'description', 'backgroundColor', 'themeColor', 'icon'];
 
 /** A head text (a title, an app name): non-empty, bounded, nothing that could carry markup. */
 const isHeadText = (v: unknown, max: number): v is string => typeof v === 'string' && !!v.trim() && v.length <= max && !/[<>]/.test(v);
@@ -70,7 +74,7 @@ function pageProblems(name: string, page: any): string[] {
     if (page.private !== undefined && typeof page.private !== 'boolean') out.push(`${at}.private must be true or false.`);
     if (page.app !== undefined) {
         const app = page.app;
-        if (!isPlainObject(app)) out.push(`${at}.app must be an object { name, shortName?, description?, backgroundColor?, themeColor? }.`);
+        if (!isPlainObject(app)) out.push(`${at}.app must be an object { name, shortName?, description?, backgroundColor?, themeColor?, icon? }.`);
         else {
             if (!isHeadText(app.name, PORTAL_APP_NAME_MAX)) out.push(`${at}.app.name must be a non-empty string of at most ${PORTAL_APP_NAME_MAX} characters, without < or >.`);
             if (app.shortName !== undefined && !isHeadText(app.shortName, PORTAL_APP_SHORT_NAME_MAX)) out.push(`${at}.app.shortName must be a non-empty string of at most ${PORTAL_APP_SHORT_NAME_MAX} characters, without < or >.`);
@@ -78,7 +82,8 @@ function pageProblems(name: string, page: any): string[] {
             for (const key of ['backgroundColor', 'themeColor']) {
                 if (app[key] !== undefined && (typeof app[key] !== 'string' || !PORTAL_THEME_COLOR_RE.test(app[key]))) out.push(`${at}.app.${key} must be a hex colour such as "#2563eb".`);
             }
-            for (const key of Object.keys(app)) if (!['name', 'shortName', 'description', 'backgroundColor', 'themeColor'].includes(key)) out.push(`${at}.app.${key} is not a known field.`);
+            if (app.icon !== undefined && (typeof app.icon !== 'string' || !PORTAL_APP_ICON_RE.test(app.icon))) out.push(`${at}.app.icon must be a .png file under public/ (e.g. "public/icon-512.png").`);
+            for (const key of Object.keys(app)) if (!PORTAL_APP_FIELDS.includes(key)) out.push(`${at}.app.${key} is not a known field.`);
         }
     }
     return out;
@@ -140,15 +145,16 @@ function validatePortalPage(manifest: any): string[] {
 
 /**
  * What the /portal/<slug> page puts in its <head>, from a VALID declaration (validatePortalPage): only the
- * optional fields that are set, never anything else from the manifest.
+ * optional fields that are set, never anything else from the manifest. An app's icon is given as its public
+ * URL on the static /plugins mount, so only when the caller names the plugin FOLDER (that mount's key).
  */
-type PortalApp = { name: string; shortName?: string; description?: string; backgroundColor?: string; themeColor?: string };
+type PortalApp = { name: string; shortName?: string; description?: string; backgroundColor?: string; themeColor?: string; icon?: string };
 type PortalSubPage = { title?: string; private?: boolean; app?: PortalApp };
 type PortalHead = {
     title?: string; themeColor?: string; viewportFit?: string;
     pages?: Record<string, PortalSubPage>; serviceWorker?: true; file?: true;
 };
-function portalPageHead(manifest: any): PortalHead {
+function portalPageHead(manifest: any, folder?: string): PortalHead {
     const page = (manifest && manifest.frontend && manifest.frontend.portalPage) || {};
     const out: PortalHead = {};
     if (typeof page.title === 'string') out.title = page.title;
@@ -167,6 +173,9 @@ function portalPageHead(manifest: any): PortalHead {
                 const app: PortalApp = { name: p.app.name };
                 for (const key of ['shortName', 'description', 'backgroundColor', 'themeColor'] as const) {
                     if (typeof p.app[key] === 'string') app[key] = p.app[key];
+                }
+                if (typeof p.app.icon === 'string' && folder && PLUGIN_FOLDER_RE.test(folder)) {
+                    app.icon = `/plugins/${folder}/${p.app.icon.replace(/^\.\//, '')}`;
                 }
                 one.app = app;
             }

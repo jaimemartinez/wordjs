@@ -23,6 +23,11 @@ export type HealthCheck = {
     message: string;
     fix?: { href: string; label: string; labelKey?: string };
     /**
+     * A one-click fix the panel runs for the administrator: POST `endpoint` (under /api/v1) with `body`,
+     * then the report is run again. For the fixes that need nothing but a decision.
+     */
+    action?: { endpoint: string; label: string; labelKey?: string; body?: Record<string, string> };
+    /**
      * Catalogue keys for the panel's own languages: `titleKey` names the title, `messageKey` the exact
      * message variant, `vars` its dynamic parts ({name} placeholders). `title`/`message`/`fix.label` stay the
      * English text for every other consumer of GET /health/site.
@@ -46,6 +51,8 @@ const FIX = {
     certificates: { href: '/admin/security', label: 'Certificates', labelKey: 'siteHealth.fixLabel.certificates' },
     securityServer: { href: '/admin/security', label: 'Security → Server', labelKey: 'siteHealth.fixLabel.securityServer' },
     webhooks: { href: '/admin/webhooks', label: 'Webhooks', labelKey: 'siteHealth.fixLabel.webhooks' },
+    duplicates: { href: '/admin/database-integrity', label: 'Duplicate records', labelKey: 'siteHealth.fixLabel.duplicates' },
+    audit: { href: '/admin/audit', label: 'Audit', labelKey: 'siteHealth.fixLabel.audit' },
 } as const;
 
 /**
@@ -158,6 +165,16 @@ async function checkDatabase(): Promise<HealthCheck[]> {
         if (!fts) out.push({ id: 'database.search', group: 'database', status: 'warn', title: 'Search index', message: 'The full-text search index is missing, so search is slower and does not ignore accents. Restart WordJS to build it.' });
     }
     if (driver === 'postgres' || driver === 'mysql') {
+        // Each plugin's queries — its DDL included — run under its own database user, so the database itself
+        // keeps it to its own tables. When that user could not be created (the site's database user lacks
+        // CREATE ROLE / CREATE USER or GRANT OPTION), the plugin falls back to the SQL guard alone.
+        const missing = require('./plugin-db-isolation').degradedPrincipals();
+        if (missing.length) {
+            const plugins = missing.map((m: any) => m.slug).join(', ');
+            out.push(check('database.pluginIsolation', 'database', 'warn', 'missing', 'Plugin database isolation',
+                `These plugins run without their own database user, so only WordJS's SQL checks keep them to their own tables: ${plugins}. Give the database user WordJS connects with the right to create users (Postgres: CREATEROLE; MySQL/MariaDB: CREATE USER and GRANT OPTION) and restart WordJS.`,
+                { plugins }));
+        }
         const tool = driver === 'postgres' ? 'pg_dump' : 'mysqldump';
         const available = await require('./db-dump').isToolAvailable(tool);
         out.push(available
@@ -248,6 +265,7 @@ async function checkBackground(): Promise<HealthCheck[]> {
     out.push(degraded
         ? check('background.plugins', 'background', 'warn', 'degraded', 'Plugin isolation', 'Plugins run, but without the operating system’s extra confinement on this host. Your host may need a newer kernel or the platform’s sandbox enabled.')
         : check('background.plugins', 'background', 'ok', 'ok', 'Plugin isolation', 'Plugins run isolated from the site and from each other.'));
+    out.push(...pluginSandboxChecks());
     const outbox = await SystemHealth.checkContentOutbox();
     const dead = Number(outbox && outbox.dead) || 0;
     out.push(dead > 0
@@ -262,6 +280,37 @@ async function checkBackground(): Promise<HealthCheck[]> {
         ? check('background.restart', 'background', 'warn', 'manual', 'Restarting by itself', 'Nothing here restarts WordJS: after a database move, a restore or a network switch you will have to restart it by hand. Start it with npm start, the monolith, Docker or systemd.')
         : check('background.restart', 'background', 'ok', 'ok', 'Restarting by itself', `WordJS restarts itself when a change needs it (${restart}).`, { mode: restart }));
     return out;
+}
+
+/**
+ * What the plugin sandbox needs an administrator to know or decide:
+ *   · Windows: secret paths every AppContainer could read because of the install folder's ACL, when WordJS
+ *     could not change it itself;
+ *   · every platform: plugins refused because their files changed since WordJS installed them.
+ * Network needs nothing here: no plugin has a network of its own, and the host egress tunnel applies each
+ * plugin's policy on every platform.
+ */
+function pluginSandboxChecks(): HealthCheck[] {
+    const out: HealthCheck[] = [];
+    if (process.platform === 'win32') {
+        const win = require('./sandbox-windows');
+        const exposure = win.getSecretExposure();
+        if (exposure && exposure.checked && exposure.exposed.length) {
+            out.push(check('security.pluginSecrets', 'security', 'fail', 'exposed', 'Plugin access to secrets',
+                `Every plugin sandbox on this server can read ${exposure.exposed.length} folder(s) or file(s) that hold secrets, because of how the install folder's permissions are set, and WordJS could not change them. Plugins are not started until this is fixed: run, as an administrator, icacls <path> /inheritance:d and then icacls <path> /remove:g *S-1-15-2-1 *S-1-15-2-2 for each one, or move WordJS out of C:\\Program Files.`,
+                { count: exposure.exposed.length }));
+        }
+    }
+    for (const slug of require('./plugin-integrity').listIntegrityMismatches()) {
+        out.push(withAction(check('background.pluginFiles', 'background', 'warn', 'changed', 'Plugin files',
+            `The files of the plugin ${slug} changed since WordJS installed it, so it was not started. Update or reinstall it from Plugins; if you changed them yourself, accept them.`, { slug }),
+        { endpoint: '/health/sandbox/plugin-files/accept', label: 'Accept these files', labelKey: 'siteHealth.action.acceptPluginFiles', body: { slug } }));
+    }
+    return out;
+}
+
+function withAction(c: HealthCheck, action: NonNullable<HealthCheck['action']>): HealthCheck {
+    return { ...c, action: { ...action } };
 }
 
 /**
@@ -295,6 +344,52 @@ async function checkEdge(): Promise<HealthCheck[]> {
     return out;
 }
 
+/**
+ * The uniqueness rules the database enforces (core/unique-integrity). A rule whose unique index could not
+ * be built — stored rows repeat a login, an email or a slug — is a warning that leads to the screen where
+ * an administrator chooses which row keeps the value.
+ */
+async function checkUniqueRules(): Promise<HealthCheck> {
+    const rules = await require('./unique-integrity').uniqueIntegrityStatus();
+    const open = rules.filter((r: any) => !r.enforced);
+    if (!open.length) return check('database.unique', 'database', 'ok', 'ok', 'Unique logins, emails and slugs', 'The database itself enforces that logins, email addresses and slugs are unique.');
+    const names = open.map((r: any) => r.id).join(', ');
+    const groups = open.reduce((n: number, r: any) => n + (Number(r.duplicateGroups) || 0), 0);
+    return groups > 0
+        ? check('database.unique', 'database', 'warn', 'duplicates', 'Unique logins, emails and slugs', `${groups} value(s) are stored more than once (${names}), so the database cannot enforce that rule yet. Choose which record keeps each value; the others get a new one and nothing is deleted.`, { count: groups, rules: names }, FIX.duplicates)
+        : check('database.unique', 'database', 'warn', 'missing', 'Unique logins, emails and slugs', `The unique index for ${names} is missing although nothing repeats. Build it from Duplicate records.`, { rules: names }, FIX.duplicates);
+}
+
+/** The audit log's hash chain (core/audit-chain) and its copy outside the site (core/audit-export). */
+async function checkAuditLog(): Promise<HealthCheck[]> {
+    const chain = require('./audit-chain');
+    await chain.sealPending();
+    const r = await chain.verifyAuditChain({ maxMs: 5000 });
+    const out: HealthCheck[] = [];
+    if (!r.ok && r.firstBreak) {
+        const why: Record<string, string> = {
+            altered: 'its content was changed', gap: 'the entry before it is missing',
+            link: 'it does not link to the entry before it', start: 'the oldest entries do not match what retention removed',
+        };
+        const reason = r.firstBreak.reason;
+        out.push(check('security.auditChain', 'security', 'fail', `broken.${reason}`, 'Audit log integrity', `The audit log's hash chain breaks at entry ${r.firstBreak.seq}: ${why[reason]}. Entries were changed or removed outside WordJS; compare with the external copy.`, { seq: r.firstBreak.seq ?? '' }, FIX.audit));
+    } else if (!r.complete) {
+        out.push(check('security.auditChain', 'security', 'info', 'partial', 'Audit log integrity', `The first ${r.checked} entries of the audit log match their hash chain; the rest were not checked in time. Admin → Audit checks all of them.`, { count: r.checked }, FIX.audit));
+    } else {
+        out.push(check('security.auditChain', 'security', 'ok', 'ok', 'Audit log integrity', `Every entry of the audit log (${r.checked}) matches its hash chain.`, { count: r.checked }));
+    }
+    const ex = await require('./audit-export').exportStatus();
+    const target = ex.config.mode === 'webhook' ? ex.config.url : `${ex.config.host}:${ex.config.port}`;
+    if (ex.config.mode === 'off') {
+        out.push(check('security.auditExport', 'security', 'info', 'off', 'Copy of the audit log', 'The audit log is kept only in this database. Send a copy to a syslog server or a webhook, so what it records cannot be erased from here.', undefined, FIX.audit));
+    } else if (ex.lastError) {
+        out.push(check('security.auditExport', 'security', 'warn', 'failing', 'Copy of the audit log', `The copy to ${target} is failing (${ex.lastError}); ${ex.behind} entr(ies) are waiting and are sent when it answers again.`, { target, error: ex.lastError, count: ex.behind }, FIX.audit));
+    } else {
+        out.push(check('security.auditExport', 'security', 'ok', 'ok', 'Copy of the audit log', `Every entry is copied to ${target}.`, { target }));
+    }
+    return out;
+}
+
 /** Every check, in screen order. `req` lets the proxy check judge the request that asked. */
 async function runSiteHealth(req: any): Promise<{ checks: HealthCheck[]; summary: Record<HealthStatus, number>; at: string; host: string }> {
     const groups = await Promise.all([
@@ -303,9 +398,11 @@ async function runSiteHealth(req: any): Promise<{ checks: HealthCheck[]; summary
         safe('storage.folders', 'storage', 'Folders WordJS writes to', checkFolders),
         safe('storage.disk', 'storage', 'Free disk space', checkDisk),
         safe('database.reachable', 'database', 'Database', checkDatabase),
+        safe('database.unique', 'database', 'Unique logins, emails and slugs', checkUniqueRules),
         safe('mail.transport', 'mail', 'Sending email', checkMail),
         safe('security.tls', 'security', 'HTTPS', checkTls),
         safe('security.proxy', 'security', 'Reverse proxy', () => checkProxy(req)),
+        safe('security.auditChain', 'security', 'Audit log integrity', checkAuditLog),
         safe('background.cron', 'background', 'Scheduled tasks', checkBackground),
         safe('background.cluster', 'background', 'Servers', checkEdge),
     ]);
@@ -315,4 +412,4 @@ async function runSiteHealth(req: any): Promise<{ checks: HealthCheck[]; summary
     return { checks, summary, at: new Date().toISOString(), host: os.hostname() };
 }
 
-module.exports = { runSiteHealth, checkProxy, checkDisk, checkEdge };
+module.exports = { runSiteHealth, checkProxy, checkDisk, checkEdge, checkUniqueRules, checkAuditLog, pluginSandboxChecks };

@@ -169,6 +169,36 @@ describe('revoking assets:write', () => {
             assert.deepStrictEqual(await listed(), [SRC]);
             await perms.setGrants(SLUG, [], { adminDecision: true });
         });
+
+        // The public pages' Content-Security-Policy allows the third-party origins a script DECLARES
+        // (frontend/src/lib/contentSecurityPolicy.ts), so only a bare https origin may be declared — through
+        // the producer, and again on the way out for a row someone else wrote.
+        it('a script declares the https origins it loads from; nothing else is accepted or emitted', async () => {
+            await updateOption('active_plugins', [SLUG]);
+            await perms.setGrants(SLUG, ['assets:write'], { adminDecision: true });
+            const { createPluginApi } = require('../core/plugin-api');
+            const { runWithContext } = require('../core/plugin-context');
+            const enqueue = (origins: any) => runWithContext(SLUG, () => createPluginApi(SLUG).assets.enqueueScript({ handle: 't', src: 'public/t.js', origins }));
+            for (const bad of [['https:'], ['*'], ['http://stats.example.com'], ['https://stats.example.com/x.js'], ['https://u:p@stats.example.com'],
+                ["https://a.example.com; script-src *"], ['https://*.example.com'], 'https://stats.example.com', ['a', 'b', 'c', 'd', 'e'].map((h) => `https://${h}.example.com`)]) {
+                await assert.rejects(enqueue(bad), /origin/, JSON.stringify(bad));
+            }
+            await enqueue(['https://Stats.Example.com:8443/', 'https://plausible.io']);
+            let res = await request(app).get('/api/v1/plugins/assets');
+            assert.deepStrictEqual(res.body.scripts.map((s: any) => s.origins), [['https://stats.example.com:8443', 'https://plausible.io']]);
+
+            // A registry row written by anything else is read through the same rule.
+            const store = (await getOption('plugin_assets', {})) || {};
+            store[SLUG][0].origins = ['https:', 'https://ok.example.com', "'unsafe-eval'"];
+            await updateOption('plugin_assets', store);
+            res = await request(app).get('/api/v1/plugins/assets');
+            assert.deepStrictEqual(res.body.scripts.map((s: any) => s.origins), [['https://ok.example.com']]);
+
+            await enqueue(undefined);
+            res = await request(app).get('/api/v1/plugins/assets');
+            assert.deepStrictEqual(res.body.scripts.map((s: any) => s.origins), [[]]);
+            await perms.setGrants(SLUG, [], { adminDecision: true });
+        });
     });
 
     describe('the frontend cache follows the list', () => {

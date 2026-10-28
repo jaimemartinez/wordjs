@@ -22,6 +22,7 @@ import { Suspense } from "react";
 import { inter } from "@/app/fonts";
 import "@/app/globals.css";
 import { SystemFontsLoader } from "@/components/SystemFontsLoader";
+import UserContentAnchors from "@/components/UserContentAnchors";
 import HostNotAllowedNotice from "@/components/HostNotAllowedNotice";
 import { ModalProvider } from "@/contexts/ModalContext";
 import { AnalyticsTracker } from '@/components/AnalyticsTracker';
@@ -136,6 +137,7 @@ export default async function RootDocument({
                 <ModalProvider>
                     <HostNotAllowedNotice canonical={canonical} documentLang={lang} />
                     <SystemFontsLoader />
+                    <UserContentAnchors />
                     {/* AnalyticsTracker uses useSearchParams → must be Suspense-wrapped to not
                         bail out static prerendering of every page. */}
                     <Suspense fallback={null}>

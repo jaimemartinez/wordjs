@@ -215,6 +215,8 @@ async function createSite(input: CreateSiteInput) {
     if (!adminUsername || adminUsername.length > 60) throw codedError('network_invalid_admin', 'The administrator username is required (at most 60 characters).');
     if (!adminEmail || adminEmail.length > 254 || !/^[^\s@]+@[^\s@]+$/.test(adminEmail)) throw codedError('network_invalid_admin', 'A valid administrator email is required.');
     if (adminPassword.length < 8) throw codedError('network_weak_password', 'The administrator password must be at least 8 characters.');
+    // bcrypt reads 72 BYTES at most (models/User passwordTooLong).
+    if (Buffer.byteLength(adminPassword, 'utf8') > 72) throw codedError('network_weak_password', 'The administrator password must not exceed 72 bytes (about 72 plain letters; accented letters count as 2 and emoji as 4).');
     const address = assertHostAvailable(input.url);
 
     const record = await network.insertSite({ slug, url: address.url, hostname: address.hostname });

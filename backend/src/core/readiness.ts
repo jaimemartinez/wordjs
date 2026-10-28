@@ -113,3 +113,35 @@ export function createReadinessProbe(deps: ReadinessDeps): () => Promise<Readine
         return inflight;
     };
 }
+
+/**
+ * The database half of the probe, for /health: the same TTL cache, shared in-flight check and deadline,
+ * without the install/boot gates (/health answered before installation and during boot, and still does).
+ * Resolves 'ok', 'error' or 'timeout'.
+ */
+export function createHealthProbe(deps: Pick<ReadinessDeps, 'checkDatabase' | 'onError' | 'ttlMs' | 'timeoutMs' | 'now'>): () => Promise<string> {
+    const probe = createReadinessProbe({ ...deps, isInstalled: () => true, isBooted: () => true });
+    return async () => {
+        const { body } = await probe();
+        const checks = body.checks as { db?: unknown } | undefined;
+        return checks && typeof checks.db === 'string' ? checks.db : 'error';
+    };
+}
+
+let sharedHealth: (() => Promise<string>) | null = null;
+
+/**
+ * The one database health verdict the public health routes answer from (root /health and GET
+ * /api/v1/health): a cached probe with the readiness deadline, so neither route's cost follows the rate
+ * at which it is asked.
+ */
+export function databaseHealth(): Promise<string> {
+    if (!sharedHealth) {
+        sharedHealth = createHealthProbe({
+            checkDatabase: (opts) => require('./system-health').checkDatabase(opts),
+            timeoutMs: readinessTimeoutMs(process.env),
+            onError: (err) => require('./module-logger').moduleLogger('core/readiness').warn({ err }, 'health: database check failed'),
+        });
+    }
+    return sharedHealth();
+}

@@ -57,6 +57,39 @@ function pluginPublicUrl(slug: string, relPath: any): string {
     return `/plugins/${slug}/${clean}`;
 }
 
+/**
+ * The third-party ORIGINS a public script loads code from (an analytics tag's provider): the public
+ * pages' Content-Security-Policy allows exactly these on top of the site itself, instead of every https
+ * host. Each must be a bare https origin — scheme, host and optional port, nothing else — and a script
+ * may name at most MAX_SCRIPT_ORIGINS of them. Anything else is refused (or, on the way out, dropped).
+ */
+const MAX_SCRIPT_ORIGINS = 4;
+const HTTPS_ORIGIN = /^https:\/\/[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?(?:\.[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?)+(?::[0-9]{1,5})?$/;
+function scriptOrigin(raw: any): string | null {
+    if (typeof raw !== 'string' || raw.length > 300) return null;
+    let u: URL;
+    try { u = new URL(raw.trim()); } catch { return null; }
+    if (u.protocol !== 'https:' || u.username || u.password || (u.pathname !== '/' && u.pathname !== '') || u.search || u.hash) return null;
+    return HTTPS_ORIGIN.test(u.origin) ? u.origin : null;
+}
+function scriptOrigins(list: any, strict: boolean): string[] {
+    if (list === undefined || list === null) return [];
+    if (!Array.isArray(list) || list.length > MAX_SCRIPT_ORIGINS) {
+        if (strict) throw new Error(`origins must be a list of at most ${MAX_SCRIPT_ORIGINS} https origins.`);
+        return [];
+    }
+    const out: string[] = [];
+    for (const raw of list) {
+        const o = scriptOrigin(raw);
+        if (!o) {
+            if (strict) throw new Error(`Invalid script origin "${String(raw).slice(0, 80)}" — an https origin such as "https://stats.example.com".`);
+            continue;
+        }
+        if (!out.includes(o)) out.push(o);
+    }
+    return out;
+}
+
 /** Register (or replace, by handle) a script/style for a plugin. */
 async function enqueue(slug: string, kind: 'script' | 'style', spec: any): Promise<{ success: true; src: string }> {
     spec = spec || {};
@@ -65,7 +98,7 @@ async function enqueue(slug: string, kind: 'script' | 'style', spec: any): Promi
     const url = pluginPublicUrl(slug, spec.src);
     const entry = kind === 'style'
         ? { kind: 'style', handle, src: url, media: typeof spec.media === 'string' ? spec.media.slice(0, 64) : 'all' }
-        : { kind: 'script', handle, src: url, inFooter: !!spec.inFooter, strategy: (spec.strategy === 'async' || spec.strategy === 'defer') ? spec.strategy : '' };
+        : { kind: 'script', handle, src: url, inFooter: !!spec.inFooter, strategy: (spec.strategy === 'async' || spec.strategy === 'defer') ? spec.strategy : '', origins: scriptOrigins(spec.origins, true) };
     await asHost(async () => {
         const store = (await getOption(OPT, {})) || {};
         const list = Array.isArray(store[slug]) ? store[slug] : [];
@@ -116,10 +149,10 @@ async function getActiveAssets(): Promise<{ scripts: any[]; styles: any[] }> {
             if (typeof e.src !== 'string' || !e.src.startsWith(prefix)) continue;
             if (!isPluginServedRelPath(e.src.slice(prefix.length))) continue;
             if (e.kind === 'style') styles.push({ handle: `${slug}:${e.handle}`, src: e.src, media: e.media || 'all' });
-            else scripts.push({ handle: `${slug}:${e.handle}`, src: e.src, inFooter: !!e.inFooter, strategy: e.strategy || '' });
+            else scripts.push({ handle: `${slug}:${e.handle}`, src: e.src, inFooter: !!e.inFooter, strategy: e.strategy || '', origins: scriptOrigins(e.origins, false) });
         }
     }
     return { scripts, styles };
 }
 
-module.exports = { enqueue, clearAssets, getActiveAssets };
+module.exports = { enqueue, clearAssets, getActiveAssets, scriptOrigins, MAX_SCRIPT_ORIGINS };

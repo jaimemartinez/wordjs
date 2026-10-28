@@ -9,7 +9,7 @@
  * Driven through the REAL plugin module, like mail-server-send-rate: a stub relay decides each recipient's
  * fate from its local part (bounce… = 550, later… = 421, anything else is accepted).
  */
-import { test, describe } from 'node:test';
+import { test, describe, mock } from 'node:test';
 import assert from 'node:assert';
 import fs from 'fs';
 import path from 'path';
@@ -35,12 +35,13 @@ class FakeSMTPServer {
 type Boot = {
     provider: (msg: any) => Promise<any>; sent: any[]; db: any; options: Record<string, string>;
     routes: Map<string, { opts: any; handler: any }>; tick: () => Promise<void>; plugin: any;
-    transports: Map<string, any>; relay: { acceptLater: boolean };
+    transports: Map<string, any>; relay: { acceptLater: boolean; slow: Array<() => void> };
 };
 
 async function boot(extra: Record<string, string> = {}): Promise<Boot> {
     const sent: any[] = [];
-    const relay = { acceptLater: false };
+    // `slow…` recipients hang until the test calls one of relay.slow (a remote MX that does not answer).
+    const relay = { acceptLater: false, slow: [] as Array<() => void> };
     const nodemailer = {
         createTransport() {
             return {
@@ -49,6 +50,7 @@ async function boot(extra: Record<string, string> = {}): Promise<Boot> {
                     const to = String(m.to || '');
                     if (to.startsWith('bounce')) throw Object.assign(new Error('550 5.1.1 No such user'), { responseCode: 550 });
                     if (to.startsWith('later') && !relay.acceptLater) throw Object.assign(new Error('421 4.7.0 Try again later'), { responseCode: 421 });
+                    if (to.startsWith('slow')) await new Promise<void>(resolve => relay.slow.push(resolve));
                     sent.push(m);
                     return { response: '250 2.0.0 Ok: queued' };
                 },
@@ -239,7 +241,7 @@ describe('retention', () => {
             let s = await call(b, 'post /settings', { body: { mail_system_sent_retention: '7' } });
             assert.strictEqual(s.status, 200, JSON.stringify(s.body));
             assert.strictEqual(s.body.systemSentPurged, 1);
-            assert.strictEqual(b.options.mail_system_sent_retention, '7');
+            assert.strictEqual(b.options.mail_server_mail_system_sent_retention, '7');
             assert.deepStrictEqual((await logRows(b)).map((r: any) => r.subject), ['today']);
             assert.strictEqual((await call(b, 'get /settings')).body.mail_system_sent_retention, '7');
 
@@ -314,6 +316,109 @@ describe('access and content', () => {
             assert.strictEqual(p2.total, 6);
             assert.strictEqual(p2.items.length, 2);
             assert.strictEqual(p2.items[1].subject, 'Invoice 1', 'newest first');
+        } finally { b.plugin.deactivate(); }
+    });
+});
+
+// mail-server 3.3.1 — the host kills an isolated plugin whose call outlives its 30 s RPC timeout, so every
+// call into the plugin answers within a budget (20 s; 10 s for «Retry now») and a slow delivery goes on in
+// the background. Timers are mocked: `settle` lets the plugin reach the hanging SMTP call, then jumps.
+async function settle() { for (let i = 0; i < 60; i++) await new Promise(r => setImmediate(r)); }
+async function within<T>(p: Promise<T>, ms: number): Promise<T> {
+    await settle();
+    mock.timers.tick(ms);
+    return await p;
+}
+const emailRow = (b: Boot, id: number) => b.db.get(`SELECT * FROM ${PREFIX}received_emails WHERE id = ?`, [id]);
+
+describe('answers within the host budget', () => {
+    test('a site message to a server that does not answer is accepted, and its outcome lands later', async () => {
+        const b = await boot();
+        mock.timers.enable({ apis: ['setTimeout'] });
+        try {
+            const r: any = await within(b.provider({ to: 'slow@example.org', subject: 'slow one', text: 'x' }), 20000);
+            assert.deepStrictEqual({ success: r.success, pending: r.pending }, { success: true, pending: true });
+            let [row] = await logRows(b);
+            assert.strictEqual(row.status, 'queued', 'still going out');
+            b.relay.slow.shift()!();
+            await settle();
+            [row] = await logRows(b);
+            assert.strictEqual(row.status, 'delivered', 'the background delivery wrote its outcome');
+        } finally { mock.timers.reset(); b.plugin.deactivate(); }
+    });
+
+    test('«Retry now» answers 202 while a slow attempt goes on, re-armed for the queue; a second click starts nothing', async () => {
+        const b = await boot();
+        try {
+            await b.provider({ to: 'later@example.org', subject: 'try again', text: 'x' });
+            const id = Number((await logRows(b))[0].email_id);
+            await b.db.run(`UPDATE ${PREFIX}received_emails SET to_address = 'slow@example.org' WHERE id = ?`, [id]);
+
+            mock.timers.enable({ apis: ['setTimeout'] });
+            const first = await within(call(b, 'post /admin/queue/:id/retry', { params: { id: String(id) } }), 10000);
+            assert.strictEqual(first.status, 202, JSON.stringify(first.body));
+            assert.strictEqual(first.body.pending, true);
+            const row = await emailRow(b, id);
+            assert.strictEqual(row.delivery_status, 'retry', 'shown as retrying');
+            assert.ok(Date.parse(row.next_attempt_at) > Date.now() + 10 * 60 * 1000, 'the queue picks it up later if this attempt is lost');
+
+            const again = await call(b, 'post /admin/queue/:id/retry', { params: { id: String(id) } });
+            assert.strictEqual(again.status, 202);
+            assert.strictEqual(b.relay.slow.length, 1, 'one delivery in flight, not two');
+
+            b.relay.slow.shift()!();
+            await settle();
+            assert.strictEqual((await emailRow(b, id)).delivery_status, 'sent');
+            assert.strictEqual((await logRows(b))[0].status, 'delivered');
+        } finally { mock.timers.reset(); b.plugin.deactivate(); }
+    });
+
+    test('a quick verdict is still reported as such', async () => {
+        const b = await boot();
+        try {
+            await b.provider({ to: 'later@example.org', subject: 'try again', text: 'x' });
+            const id = Number((await logRows(b))[0].email_id);
+            b.relay.acceptLater = true;
+            const r = await call(b, 'post /admin/queue/:id/retry', { params: { id: String(id) } });
+            assert.strictEqual(r.status, 200, JSON.stringify(r.body));
+            assert.strictEqual(r.body.success, true);
+        } finally { b.plugin.deactivate(); }
+    });
+});
+
+describe('the queue', () => {
+    test('a final failure is not queued; a retry is', async () => {
+        const b = await boot();
+        try {
+            await b.provider({ to: 'bounce@example.org', subject: 'nobody home', text: 'x' });
+            await b.provider({ to: 'later@example.org', subject: 'try again', text: 'x' });
+            const q = await call(b, 'get /admin/queue');
+            assert.strictEqual(q.status, 200);
+            assert.deepStrictEqual(q.body.items.map((i: any) => i.subject), ['try again']);
+            const failed = (await logRows(b)).find((r: any) => r.subject === 'nobody home');
+            const d = await call(b, 'get /admin/system-sent/:id', { params: { id: String(failed.id) } });
+            assert.deepStrictEqual(d.body.queue, { id: Number(failed.email_id), status: 'failed' }, 'still retried from the log');
+        } finally { b.plugin.deactivate(); }
+    });
+
+    test('a logged message whose first delivery was cut off is put back in the queue, then delivered', async () => {
+        const b = await boot();
+        try {
+            await b.provider({ to: 'a@example.org', subject: 'cut off', text: 'x' });
+            await b.provider({ to: 'b@example.org', subject: 'still young', text: 'x' });
+            // What a worker stopped mid-SMTP leaves: the log says «queued», the row has no delivery state.
+            await b.db.run(`UPDATE ${T_LOG} SET status = 'queued', created_at = ? WHERE subject = 'cut off'`, [sqlDate(new Date(Date.now() - 20 * 60000))]);
+            await b.db.run(`UPDATE ${T_LOG} SET status = 'queued', created_at = ? WHERE subject = 'still young'`, [sqlDate(new Date(Date.now() - 2 * 60000))]);
+            await b.db.run(`UPDATE ${PREFIX}received_emails SET delivery_status = NULL`);
+            await b.tick(); // re-queued (due now)…
+            await b.tick(); // …and sent
+            const rows = await logRows(b);
+            const cut = rows.find((r: any) => r.subject === 'cut off');
+            const young = rows.find((r: any) => r.subject === 'still young');
+            assert.strictEqual(young.status, 'queued', 'a delivery that may still be running is left alone');
+            assert.strictEqual((await emailRow(b, Number(young.email_id))).delivery_status, null);
+            assert.strictEqual(cut.status, 'delivered', 'the interrupted one went back to the queue and out');
+            assert.strictEqual(b.sent.filter(m => m.subject === 'cut off').length, 2, 'sent again');
         } finally { b.plugin.deactivate(); }
     });
 });

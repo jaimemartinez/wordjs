@@ -132,6 +132,19 @@ function requiredRoleForPath(url) {
  * @returns {string|null} the target origin, or null when nothing may serve it (caller → 502/404)
  */
 function resolveTarget(registry, url) {
+    const picked = resolveUpstream(registry, url);
+    return picked ? picked.target : null;
+}
+
+/**
+ * resolveTarget, plus the ROLE the chosen group serves as — the certificate CN the upstream must
+ * present. The proxy verifies the upstream's identity against THIS role, not against "any cluster
+ * identity": a node holding a frontend certificate must not be able to answer a request the gateway
+ * sends to the backend, even from a network position between the two.
+ *
+ * @returns {{target: string, role: string|null}|null}
+ */
+function resolveUpstream(registry, url) {
     const path = requestPath(url);
     const role = requiredRoleForPath(path);
     const entries = Array.from(registry.entries()).sort((a, b) => b[0].length - a[0].length);
@@ -177,9 +190,27 @@ function resolveTarget(registry, url) {
         if (final.length === 0) return null;
         const target = final[(group.index || 0) % final.length];
         group.index = (group.index || 0) + 1;
-        return target;
+        return { target, role: derived || declared || null };
     }
     return null;
+}
+
+/**
+ * Has `role` ever registered with this gateway? True as soon as the registry holds a group of that
+ * role — EMPTY groups included: the health sweep and the panel's "remove node" empty a group, they
+ * never delete it, and the registry (empty groups too) is persisted across restarts. That is what
+ * keeps the pre-install loopback bootstrap from engaging again once the service has registered:
+ * an outage is answered 503, never by whatever is listening on the local port.
+ */
+function roleEverRegistered(registry, role) {
+    if (!registry || typeof registry.forEach !== 'function') return false;
+    let seen = false;
+    registry.forEach((group, prefix) => {
+        if (seen || !group) return;
+        const declared = typeof group.name === 'string' ? group.name : null;
+        if ((prefixOwner(prefix) || declared) === role) seen = true;
+    });
+    return seen;
 }
 
 /**
@@ -234,5 +265,7 @@ module.exports = {
     isNextOwnedApiPath,
     requiredRoleForPath,
     resolveTarget,
+    resolveUpstream,
+    roleEverRegistered,
     hydrateRegistry,
 };

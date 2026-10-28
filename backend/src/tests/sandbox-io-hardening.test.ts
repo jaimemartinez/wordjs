@@ -40,6 +40,9 @@ const OUTSIDE = path.join(os.tmpdir(), `wjs-ioguard-outside-${process.pid}.txt`)
 // An executable payload planted in a writable data dir (os-tmp) — must not be require()-able by a plugin.
 const OSTMP_PAYLOAD = path.join(OS_TMP, `wjs-harden-payload-${process.pid}.js`);
 
+// Where the plugin writes: its data folder, the one writable place it has without a grant.
+const data = path.join(dir, 'data');
+
 function expectEACCES(fn: () => void): any {
     try { fn(); } catch (e: any) { return e; }
     assert.fail('expected the guarded fs op to throw, but it succeeded');
@@ -51,7 +54,9 @@ before(() => {
     fs.mkdirSync(dir, { recursive: true });
     fs.mkdirSync(OS_TMP, { recursive: true });
     fs.writeFileSync(path.join(dir, 'manifest.json'), JSON.stringify({ name: SLUG, permissions: [] }));
-    fs.writeFileSync(path.join(dir, 'data.txt'), 'owndata');
+    // The plugin's data folder: a link out of its read-only code folder (core/plugin-own-data).
+    require('../core/plugin-own-data').prepareOwnDataLink(path.resolve(__dirname, '..', '..'), SLUG);
+    fs.writeFileSync(path.join(data, 'data.txt'), 'owndata');
     fs.writeFileSync(OUTSIDE, 'PRETEND-SECRET');
     fs.writeFileSync(OSTMP_PAYLOAD, "module.exports = 'PWNED';");
     // A plugin's OWN modules — legitimate to require. Written by the host here.
@@ -61,67 +66,72 @@ before(() => {
 
 after(() => {
     fs.rmSync(dir, { recursive: true, force: true });
+    try { fs.rmSync(require('../core/sandbox-paths').ownDataDir(path.resolve(__dirname, '..', '..'), SLUG), { recursive: true, force: true }); } catch { /* best effort */ }
     try { fs.rmSync(OUTSIDE, { force: true }); } catch { /* best effort */ }
     try { fs.rmSync(OSTMP_PAYLOAD, { force: true }); } catch { /* best effort */ }
 });
 
 // ---- Fix #2: executable-extension write block ----
 
-test('#2 a plugin CANNOT write a .js file into its own dir', () => {
+test('#2 a plugin CANNOT write a .js file into its own data, nor into its read-only code dir', () => {
     runWithContext(SLUG, () => {
-        const e = expectEACCES(() => fs.writeFileSync(path.join(dir, 'evil.js'), 'x'));
+        assert.strictEqual(expectEACCES(() => fs.writeFileSync(path.join(dir, 'evil.txt'), 'x')).code, 'EACCES');
+    });
+    assert.ok(!fs.existsSync(path.join(dir, 'evil.txt')), 'the code dir took no file');
+    runWithContext(SLUG, () => {
+        const e = expectEACCES(() => fs.writeFileSync(path.join(data, 'evil.js'), 'x'));
         assert.strictEqual(e.code, 'EACCES');
     });
-    assert.ok(!fs.existsSync(path.join(dir, 'evil.js')), 'evil.js must not have been created');
+    assert.ok(!fs.existsSync(path.join(data, 'evil.js')), 'evil.js must not have been created');
 });
 
-test('#2 a plugin CAN still write a .json data file into its own dir (no regression)', () => {
+test('#2 a plugin CAN still write a .json data file into its own data (no regression)', () => {
     runWithContext(SLUG, () => {
-        fs.writeFileSync(path.join(dir, 'cache.json'), '{"ok":true}');
+        fs.writeFileSync(path.join(data, 'cache.json'), '{"ok":true}');
     });
-    assert.ok(fs.existsSync(path.join(dir, 'cache.json')));
+    assert.ok(fs.existsSync(path.join(data, 'cache.json')));
 });
 
 test('#2 write-.txt-then-rename-to-.js is blocked on the rename destination', () => {
     runWithContext(SLUG, () => {
-        fs.writeFileSync(path.join(dir, 'stager.txt'), "module.exports='x';"); // allowed: data file
-        const e = expectEACCES(() => fs.renameSync(path.join(dir, 'stager.txt'), path.join(dir, 'stager.js')));
+        fs.writeFileSync(path.join(data, 'stager.txt'), "module.exports='x';"); // allowed: data file
+        const e = expectEACCES(() => fs.renameSync(path.join(data, 'stager.txt'), path.join(data, 'stager.js')));
         assert.strictEqual(e.code, 'EACCES');
     });
-    assert.ok(!fs.existsSync(path.join(dir, 'stager.js')), 'stager.js must not exist');
+    assert.ok(!fs.existsSync(path.join(data, 'stager.js')), 'stager.js must not exist');
 });
 
 // ---- Fix #1: copyFile / hard-link confinement (both ends) ----
 
 test('#1 copyFile to a .js destination is blocked (copy-then-rename trick closed)', () => {
     runWithContext(SLUG, () => {
-        const e = expectEACCES(() => fs.copyFileSync(path.join(dir, 'data.txt'), path.join(dir, 'copied.js')));
+        const e = expectEACCES(() => fs.copyFileSync(path.join(data, 'data.txt'), path.join(data, 'copied.js')));
         assert.strictEqual(e.code, 'EACCES');
     });
-    assert.ok(!fs.existsSync(path.join(dir, 'copied.js')));
+    assert.ok(!fs.existsSync(path.join(data, 'copied.js')));
 });
 
 test('#1 copyFile FROM an out-of-zone source is blocked (exfil / read-confinement closed)', () => {
     runWithContext(SLUG, () => {
-        const e = expectEACCES(() => fs.copyFileSync(OUTSIDE, path.join(dir, 'imported.txt')));
+        const e = expectEACCES(() => fs.copyFileSync(OUTSIDE, path.join(data, 'imported.txt')));
         assert.strictEqual(e.code, 'EACCES');
     });
-    assert.ok(!fs.existsSync(path.join(dir, 'imported.txt')), 'the out-of-zone file must not have been copied in');
+    assert.ok(!fs.existsSync(path.join(data, 'imported.txt')), 'the out-of-zone file must not have been copied in');
 });
 
-test('#1 copyFile within the plugin dir to a data-file destination still works (no regression)', () => {
+test('#1 copyFile within the plugin data to a data-file destination still works (no regression)', () => {
     runWithContext(SLUG, () => {
-        fs.copyFileSync(path.join(dir, 'data.txt'), path.join(dir, 'data-copy.txt'));
+        fs.copyFileSync(path.join(data, 'data.txt'), path.join(data, 'data-copy.txt'));
     });
-    assert.strictEqual(fs.readFileSync(path.join(dir, 'data-copy.txt'), 'utf8'), 'owndata');
+    assert.strictEqual(fs.readFileSync(path.join(data, 'data-copy.txt'), 'utf8'), 'owndata');
 });
 
 test('#1 hard link FROM an out-of-zone source is blocked (link-then-read exfil closed)', () => {
     runWithContext(SLUG, () => {
-        const e = expectEACCES(() => fs.linkSync(OUTSIDE, path.join(dir, 'linked.txt')));
+        const e = expectEACCES(() => fs.linkSync(OUTSIDE, path.join(data, 'linked.txt')));
         assert.strictEqual(e.code, 'EACCES');
     });
-    assert.ok(!fs.existsSync(path.join(dir, 'linked.txt')));
+    assert.ok(!fs.existsSync(path.join(data, 'linked.txt')));
 });
 
 // ---- Fix #3: require() confinement away from writable data dirs ----
@@ -150,7 +160,7 @@ test('#4 a plugin CANNOT open an out-of-zone file for reading (arbitrary-read by
 
 test('#4 a plugin CAN still open its OWN data file for reading (no regression)', () => {
     runWithContext(SLUG, () => {
-        const fd = fs.openSync(path.join(dir, 'data.txt'), 'r');
+        const fd = fs.openSync(path.join(data, 'data.txt'), 'r');
         assert.ok(fd >= 0);
         fs.closeSync(fd);
     });

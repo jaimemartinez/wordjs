@@ -114,8 +114,14 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
         fs.writeFileSync(path.join(probeDir, 'client', 'admin', 'admin.css'), '.admin{}');
         // A junction/symlink from the plugin's own dir back to itself: the lexical walk-around.
         try { fs.symlinkSync(probeDir, path.join(probeDir, 'self'), 'junction'); } catch { /* unprivileged FS */ }
+        // What every launch does first: the plugin's data/ moves to its own data directory behind a link
+        // (core/plugin-own-data), so its code folder is read-only and data/ stays its private storage.
+        require('../core/plugin-own-data').prepareOwnDataLink(path.dirname(PLUGINS_ROOT), PROBE);
     });
-    after(() => { try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch { /* best effort */ } });
+    after(() => {
+        try { fs.rmSync(probeDir, { recursive: true, force: true }); } catch { /* best effort */ }
+        try { fs.rmSync(require('../core/sandbox-paths').ownDataDir(path.dirname(PLUGINS_ROOT), PROBE), { recursive: true, force: true }); } catch { /* best effort */ }
+    });
 
     // The /plugins mount serves a plugin's files only while it is ACTIVE (and its dist/ output only while
     // it is granted browser:script) — core/plugin-serving; covered against a real database in
@@ -492,6 +498,17 @@ describe('#3 — /plugins publishes an allowlist, not the plugin tree', () => {
 describe('#3 twin — /themes publishes an allowlist too, and the theme cannot write it', () => {
     const THEME = 'default';
     const themeDir = path.join(THEMES_ROOT, THEME);
+    // What the theme's launch does first: its data/ is a link to its own data directory.
+    let linkMadeHere = false;
+    before(() => {
+        linkMadeHere = !fs.existsSync(path.join(themeDir, 'data'));
+        require('../core/plugin-own-data').prepareOwnDataLink(path.dirname(THEMES_ROOT), `theme:${THEME}`);
+    });
+    after(() => {
+        if (!linkMadeHere) return;
+        try { require('../core/plugin-own-data').detachOwnDataLink(themeDir); } catch { /* best effort */ }
+        try { fs.rmSync(require('../core/sandbox-paths').ownDataDir(path.dirname(THEMES_ROOT), `theme:${THEME}`), { recursive: true, force: true }); } catch { /* best effort */ }
+    });
 
     it('serves a theme\'s assets and compositions', async () => {
         for (const p of [`/themes/${THEME}/style.css`, `/themes/${THEME}/theme.json`]) {
@@ -555,8 +572,10 @@ describe('#3 twin — /themes publishes an allowlist too, and the theme cannot w
             // A sibling theme's directory was never its own — and neither is uploads/.
             assert.strictEqual(isPathSafe(path.join(THEMES_ROOT, 'gaceta', 'x.dat'), true), false);
             assert.strictEqual(isPathSafe(path.join(UPLOADS_ROOT, 'x.dat'), true), false);
-            // Unpublished private storage in its own dir stays writable (no over-block).
-            assert.strictEqual(isPathSafe(path.join(themeDir, 'cache.dat'), true), true);
+            // Unpublished private storage stays writable (no over-block): the theme's data/ folder.
+            assert.strictEqual(isPathSafe(path.join(themeDir, 'data', 'cache.dat'), true), true);
+            // …and its code folder itself is read-only, published or not.
+            assert.strictEqual(isPathSafe(path.join(themeDir, 'cache.dat'), true), false);
         });
     });
 });
@@ -642,11 +661,11 @@ describe('#21 — POST /analytics/track has its own per-IP bucket', () => {
 });
 
 describe("the backend's own Content-Security-Policy", () => {
-    it("grants script-src 'self' and 'unsafe-inline', and never 'unsafe-eval'", async () => {
+    it("grants script-src 'self' alone: no 'unsafe-inline', never 'unsafe-eval'", async () => {
         // Another mount-order property of index.ts, and the reason this file boots the real app: the
         // helmet header is written before any router, so no suite that builds its own express() can
-        // see it. The backend serves exactly ONE HTML page (Swagger UI at `${API}/docs`, whose
-        // bootstrap is an inline <script>) — 'unsafe-inline' is for that and nothing else, and the
+        // see it. The backend serves exactly ONE HTML page (Swagger UI at `${API}/docs`), whose scripts
+        // are all files — asserted below on the HTML swagger-ui-express generates — and the
         // "some CMS themes/plugins" that once justified 'unsafe-eval' do not exist: a theme ships no
         // JavaScript, and a plugin's admin bundle is executed by the frontend under ITS header.
         const res = await request(app).get(API);
@@ -662,8 +681,13 @@ describe("the backend's own Content-Security-Policy", () => {
         const sources = String(directive).split(/\s+/).slice(1);
 
         assert.ok(sources.includes("'self'"), `script-src must keep 'self': ${directive}`);
-        assert.ok(sources.includes("'unsafe-inline'"),
-            `script-src must keep 'unsafe-inline' for the swagger-ui bootstrap: ${directive}`);
+        assert.ok(!sources.includes("'unsafe-inline'"), `no inline script is needed: ${directive}`);
+        // The reason it may go: the Swagger page swagger-ui-express builds has no inline <script>.
+        const html = require('swagger-ui-express').generateHTML({ openapi: '3.0.0', info: { title: 't', version: '1' }, paths: {} },
+            { customCss: 'body{}', customSiteTitle: 't', swaggerOptions: { requestInterceptor: (r: any) => r } });
+        const scripts = String(html).match(/<script\b[^>]*>/gi) || [];
+        assert.ok(scripts.length >= 2, html);
+        for (const tag of scripts) assert.match(tag, /\bsrc=/, `an inline <script> on the Swagger page: ${tag}`);
         assert.ok(!sources.includes("'unsafe-eval'"),
             `nothing this origin serves builds code from a string: ${directive}`);
     });

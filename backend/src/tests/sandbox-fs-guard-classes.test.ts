@@ -41,16 +41,21 @@ const SLUG = `fsclass-test-${process.pid}`;
 const dir = path.join(PLUGINS_DIR, SLUG);
 const NEXT_DIR = path.resolve(ROOT_DIR, '../frontend/.next');
 
-// A plugin writing inside its OWN dir needs no grant — that is exactly the situation the audit is
-// about (io-guard leaves it writable, and only the disk quota bounds it), so each case gets a real
-// plugin directory with an empty manifest.
+// A plugin writing its OWN data needs no grant — that is exactly the situation the audit is about (only
+// the disk quota bounds it), so each case gets a real plugin directory with an empty manifest and its
+// `data` link to the own data directory (core/plugin-own-data), which is where a plugin writes.
 const madeDirs: string[] = [];
 function pluginDirFor(slug: string): string {
     const d = path.join(PLUGINS_DIR, slug);
     fs.mkdirSync(d, { recursive: true });
     fs.writeFileSync(path.join(d, 'manifest.json'), JSON.stringify({ name: slug, permissions: [] }));
-    madeDirs.push(d);
+    require('../core/plugin-own-data').prepareOwnDataLink(ROOT_DIR, slug);
+    madeDirs.push(d, require('../core/sandbox-paths').ownDataDir(ROOT_DIR, slug));
     return d;
+}
+/** Where a plugin writes without a grant: `<its dir>/data`, the link to its own data directory. */
+function dataDirFor(slug: string): string {
+    return path.join(pluginDirFor(slug), 'data');
 }
 before(() => { pluginDirFor(SLUG); });
 after(() => {
@@ -260,7 +265,7 @@ const METERED: Array<{ name: string; expect: number; setup?: (base: string) => v
 for (const m of METERED) {
     test(`fs.promises ${m.name} is charged to the disk quota EXACTLY once`, async () => {
         const slug = `${SLUG}-q-${METERED.indexOf(m)}`;
-        const zone = path.join(pluginDirFor(slug), 'zone');
+        const zone = path.join(dataDirFor(slug), 'zone');
         fs.mkdirSync(zone, { recursive: true });
         // Fixtures are created by the HOST (no plugin context => unmetered), so the only thing charged to
         // this slug's window is the one call under test.
@@ -279,9 +284,9 @@ for (const m of METERED) {
     });
 }
 
-test('the plugin journey still works: it writes, appends and reads inside its own dir with no grant', async () => {
+test('the plugin journey still works: it writes, appends and reads its own data with no grant', async () => {
     const slug = `${SLUG}-journey`;
-    const zone = path.join(pluginDirFor(slug), 'journey');
+    const zone = path.join(dataDirFor(slug), 'journey');
     fs.mkdirSync(zone, { recursive: true });
     await runWithContext(slug, async () => {
         const fsp = (secureFs as any).promises;
@@ -295,7 +300,7 @@ test('the plugin journey still works: it writes, appends and reads inside its ow
 
 test('an unmeasurable (stream/iterable) fs.promises write is still refused — the meter cannot see it', async () => {
     const slug = `${SLUG}-stream`;
-    const sdir = pluginDirFor(slug);
+    const sdir = dataDirFor(slug);
     await runWithContext(slug, async () => {
         const fsp = (secureFs as any).promises;
         await assert.rejects(() => fsp.writeFile(path.join(sdir, 'stream.txt'), (function* () { yield 'a'; })()),

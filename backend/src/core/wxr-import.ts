@@ -205,11 +205,11 @@ const parser = new XMLParser({
     parseTagValue: false,        // keep everything as strings; we parse ints explicitly
     parseAttributeValue: false,
     trimValues: true,
-    // SECURITY: processEntities: false disables recursive entity expansion (Billion Laughs DoS). WXR
-    // only uses the standard HTML entities (&amp; &lt; &gt; &quot; &apos;) which htmlEntities covers
-    // without allowing user-defined DTD entities. fast-xml-parser is JS-pure so external entities are
-    // inherently inert, but fail-closed on internal expansion is defense in depth.
-    processEntities: false,
+    // Entities in TEXT nodes are decoded (a title `A &amp; B` is `A & B`, an attachment URL's `&amp;` is
+    // `&`); CDATA is never touched, so content:encoded keeps its markup exactly as exported. There are
+    // no user-defined entities to expand: parseWxr refuses any document with a DOCTYPE before parsing,
+    // so only the XML five, the HTML named entities and numeric references exist (no Billion Laughs).
+    processEntities: true,
     htmlEntities: true,
     // CDATA is merged into the element's text value (default) — exactly what we want for
     // content:encoded / titles.
@@ -308,6 +308,10 @@ interface WxrParsed {
 }
 
 function parseWxr(xml: string): WxrParsed {
+    // A WordPress export never carries a DTD; one that does is the only way to declare entities of its own.
+    if (/<!DOCTYPE/i.test(String(xml))) {
+        throw new Error('Not a valid WordPress WXR file (a DOCTYPE declaration is not allowed).');
+    }
     const doc = parser.parse(xml);
     const channel = doc?.rss?.channel;
     if (!channel) {

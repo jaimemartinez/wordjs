@@ -116,3 +116,38 @@ describe("ContentTable — trash", () => {
         expect(translations.en["table.deleteForever.one"]).toContain("cannot be undone");
     });
 });
+
+/**
+ * A TRASHED ENTRY OPENS A «RESTORE» SCREEN, NOT THE EDITOR. The backend refuses every write to a trashed
+ * entry (409 rest_post_trashed) until POST /posts/:id/restore; an editor opened on one could only lead to a
+ * save that fails. Both editors (posts and pages) branch on the loaded status before drawing the editor,
+ * and the screen's Restore button calls the dedicated endpoint.
+ */
+describe("the editor on a trashed entry", () => {
+    it("renders the Restore screen with its message, in the panel's language", async () => {
+        const { I18nProvider } = await import("@/contexts/I18nContext");
+        const { default: EditorTrashedNotice } = await import("../EditorTrashedNotice");
+        const html = renderToStaticMarkup(
+            <I18nProvider initialLanguage="en">
+                <EditorTrashedNotice postId={7} onRestored={() => {}} onBack={() => {}} />
+            </I18nProvider>,
+        );
+        expect(html).toContain("This entry is in the trash");
+        expect(html).toContain("Restore it to edit it.");
+        expect(html).toContain("Restore");
+    });
+
+    it("both editors show it for a trashed entry before the editor is drawn", async () => {
+        const fs = await import("node:fs");
+        const path = await import("node:path");
+        for (const [file, load] of [["../../app/admin/posts/[id]/page.tsx", "loadPost"], ["../../app/admin/pages/[id]/page.tsx", "loadPage"]]) {
+            const src = fs.readFileSync(path.resolve(__dirname, file), "utf8");
+            const notice = src.indexOf("<EditorTrashedNotice");
+            expect(notice, file).toBeGreaterThan(0);
+            expect(src.slice(notice - 200, notice), file).toContain("if (trashed &&");
+            expect(src, file).toContain('setTrashed(');
+            expect(src.slice(notice, notice + 200), file).toContain(`onRestored={${load}}`);
+            expect(notice, file).toBeLessThan(src.indexOf("<VersoEditor"));
+        }
+    });
+});

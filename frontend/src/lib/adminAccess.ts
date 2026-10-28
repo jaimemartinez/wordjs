@@ -98,8 +98,9 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     { href: "/admin/settings/backups", label: "nav.backups", icon: "fa-box-archive", cap: "manage_options", networkAdminOnMainSite: true },
     { href: "/admin/security", label: "nav.security", icon: "fa-lock", cap: "manage_options" },
     // Site Health (backend core/site-health, GET /health/site): the install's diagnostics with fix links.
-    // The main site's on a network, like the certificates and server settings it points at.
-    { href: "/admin/site-health", label: "nav.siteHealth", icon: "fa-heart-pulse", cap: "manage_options", mainSiteOnly: true },
+    // The main site's on a network, like the certificates and server settings it points at — and, like
+    // them, the network administrators' (backend routes/index.ts networkAdminOnMainSite).
+    { href: "/admin/site-health", label: "nav.siteHealth", icon: "fa-heart-pulse", cap: "manage_options", mainSiteOnly: true, networkWide: true },
     // Servers (backend routes/cluster.ts): the nodes the gateway knows, join tokens, removal: the network's.
     { href: "/admin/cluster", label: "nav.cluster", icon: "fa-server", cap: "manage_options", mainSiteOnly: true, networkWide: true },
     // Updates (backend routes/update.ts): newer releases, their notes, the one-click update: the network's.
@@ -110,6 +111,9 @@ export const CORE_MENU_ITEMS: AdminMenuItem[] = [
     { href: "/admin/audit", label: "nav.audit", icon: "fa-clipboard-list", cap: "manage_options" },
     { href: "/admin/hooks", label: "nav.hooks", icon: "fa-microscope", cap: "manage_options", mainSiteOnly: true, networkWide: true },
     { href: "/admin/db-migration", label: "nav.dbMigration", icon: "fa-database", cap: "manage_options", mainSiteOnly: true, networkWide: true },
+    // Duplicate records (backend routes/database-integrity.ts): the unique rules this site's database
+    // enforces, and resolving the stored duplicates that keep one from being enforced. Every site has its own.
+    { href: "/admin/database-integrity", label: "nav.databaseIntegrity", icon: "fa-clone", cap: "manage_options" },
     // Outgoing webhooks — admin only (they can exfiltrate content changes), mirrors the backend isAdmin gate.
     { href: "/admin/webhooks", label: "nav.webhooks", icon: "fa-bolt", cap: "manage_options" },
     // Multisite: the network screen (the sites of the network) — network administrators, main site only.

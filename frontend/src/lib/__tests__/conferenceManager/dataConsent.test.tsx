@@ -1278,3 +1278,69 @@ describe('conference-manager 2.36.20 — «Cierre de inscripciones»', () => {
         expect(page).toContain('<div className="flex flex-wrap items-center gap-2 mt-1" data-capacity-edit={loc.id}>');
     });
 });
+
+describe('conference-manager 2.36.21 — rename a locality', () => {
+    const tx = (_k: string, fb: string) => fb;
+    it('the card shows the name with a pencil for whoever manages localities, and only for them', async () => {
+        const { LocationName } = await import('../../../../../marketplace/plugins/conference-manager/client/admin/LocationName');
+        const html = renderToStaticMarkup(<LocationName loc={{ id: 7, name: 'Chocó' }} canEdit tx={tx} addToast={() => {}} onSaved={() => {}} />);
+        expect(html).toContain('Chocó');
+        expect(html).toContain('data-location-rename="7"');
+        expect(html).toContain('aria-label="Editar nombre"');
+        expect(renderToStaticMarkup(<LocationName loc={{ id: 7, name: 'Chocó' }} canEdit={false} tx={tx} addToast={() => {}} onSaved={() => {}} />)).not.toContain('data-location-rename');
+    });
+    it('wired on the «Localidades» card; the editor wraps, uses no breakpoint class and no required bubble; strings in every language', () => {
+        expect(src('client/admin/page.tsx')).toContain('<LocationName loc={loc} canEdit={canManage}');
+        const comp = src('client/admin/LocationName.tsx');
+        expect(comp).toContain('flex flex-wrap items-center gap-2');
+        expect(comp).not.toMatch(/\b(sm|md|lg|xl):(hidden|block|flex|grid|inline)\b/);
+        expect(comp).not.toMatch(/\brequired\b/);
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of ['loc.rename.edit', 'loc.rename.label', 'loc.rename.saved', 'loc.rename.empty'])
+            expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+});
+
+describe('conference-manager 2.36.22 — cupos totals and the family groups in the admin edit form', () => {
+    it('capacityTotals sums the cupos of the localities with a limit, the seats taken everywhere and what is still free', async () => {
+        const { capacityTotals } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/locationFilter');
+        expect(capacityTotals([
+            { capacity: 50, inscribed: 12 }, { capacity: '30', inscribed: 35 }, { capacity: null, inscribed: 7 }, { capacity: 0, inscribed: 0 },
+        ])).toEqual({ assigned: 80, inscribed: 54, available: 38, unlimited: 2 });
+        expect(capacityTotals([])).toEqual({ assigned: 0, inscribed: 0, available: 0, unlimited: 0 });
+    });
+    it('groupsAmong lists one locality\'s groups (case-insensitive, trimmed), without the cancelled and without the person edited', async () => {
+        const { groupsAmong } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/GroupPicker');
+        const rows = [
+            { id: 1, location_id: 3, family_group: 'Familia Ochoa', first_name: 'Ana' },
+            { id: 2, location_id: 3, family_group: ' familia ochoa ', first_name: 'Luis' },
+            { id: 3, location_id: 3, family_group: 'Esquivel', first_name: 'Lina' },
+            { id: 4, location_id: 9, family_group: 'Otra', first_name: 'Rita' },
+            { id: 5, location_id: 3, family_group: 'Baja', first_name: 'Eva', status: 'cancelled' },
+            { id: 6, location_id: 3, family_group: '', first_name: 'Sin' },
+        ];
+        const g = groupsAmong(rows, 'family_group', '3', (r) => r.first_name, 2);
+        expect(g.map((x) => [x.name, x.count, x.members!.map((m) => m.name)])).toEqual([['Esquivel', 1, ['Lina']], ['Familia Ochoa', 1, ['Ana']]]);
+        expect(groupsAmong(rows, 'family_group', null, (r) => r.first_name)).toEqual([]);
+    });
+    it('the picker renders the field, with no required bubble', async () => {
+        const { GroupPicker } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/GroupPicker');
+        const html = renderToStaticMarkup(<GroupPicker field={{ name: 'family_group', is_required: 1 }} value="Esquivel" onChange={() => {}}
+            groups={[{ name: 'Esquivel', count: 2, members: [{ id: 1, name: 'Lina' }, { id: 2, name: 'Lily' }] }]} />);
+        expect(html).toContain('data-field="family_group"');
+        expect(html).toContain('En «Esquivel» (2):');
+        expect(html).toContain('Lina, Lily');
+        expect(html).not.toContain('required');
+    });
+    it('wired: «Localidades» shows the totals, the admin form and the portal share the picker; strings in every language', () => {
+        const page = src('client/admin/page.tsx');
+        expect(page).toContain('data-locations-totals=""');
+        expect(page).toContain('groupsAmong(inscriptions, field.name, formData.location_id, nameOf, editId)');
+        const portal = src('client/portal/CoordinatorPortal.tsx');
+        expect(portal).toContain('import { GroupPicker } from "../lib/GroupPicker"');
+        expect(portal).not.toContain('function GroupPicker(');
+        expect(src('client/lib/GroupPicker.tsx')).not.toMatch(/\b(sm|md|lg|xl):(hidden|block|flex|grid|inline)\b/);
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of ['loc.totals.assigned', 'loc.totals.inscribed', 'loc.totals.available', 'loc.totals.unlimited',
+            'group.pick.location', 'group.pick.placeholder', 'group.pick.empty', 'group.pick.person', 'group.pick.people', 'group.pick.create', 'group.pick.in'])
+            expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+});

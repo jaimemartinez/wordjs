@@ -53,6 +53,8 @@ function fakeProfileApi(platform: string) {
             deleteProfile: async (name: string) => { calls.deleted.push(name); return true; },
             revoke: async (sid: string, dirs: string[]) => { calls.revoked.push({ sid, dirs }); return true; },
             grantIsCached: () => true,
+            // Retirement revokes every candidate zone that exists (not only where a marker proves a grant).
+            exists: () => true,
         },
     };
 }

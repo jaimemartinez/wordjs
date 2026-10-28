@@ -10,3 +10,10 @@
 if (!process.env.NODE_ENV) {
     process.env.NODE_ENV = 'development';
 }
+
+// The source-only Windows plugin worker cannot be provisioned into an AppContainer within development
+// deadlines; this is the explicit development opt-in that lets it run without one (core/plugin-isolate
+// sourceWorkerExempt). Never honoured with NODE_ENV=production.
+if (process.env.NODE_ENV !== 'production' && !process.env.WORDJS_DEV_SANDBOX_EXEMPT) {
+    process.env.WORDJS_DEV_SANDBOX_EXEMPT = '1';
+}

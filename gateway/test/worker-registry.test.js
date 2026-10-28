@@ -207,7 +207,7 @@ test('SOURCE GATE: the worker builds its registry ONLY through the normalizer', 
         );
     }
     assert.ok(!/\{\s*\.\.\.v\s*,/.test(WORKER_SRC), 'a spread of a persisted/broadcast group is back in the worker');
-    assert.ok(WORKER_SRC.includes('routing.resolveTarget(workerRegistry'), 'the worker still routes with the map it hydrated');
+    assert.ok(WORKER_SRC.includes('routing.resolveUpstream(workerRegistry'), 'the worker still routes with the map it hydrated');
 });
 
 test('SOURCE GATE: the primary pushes its derived view at every worker that comes online', () => {

@@ -12,6 +12,8 @@ import UserMfaReset from "./UserMfaReset";
 import AccountCapabilityToggles, { grantedMap } from "./AccountCapabilityToggles";
 import { useRoleOptions } from "@/lib/useRoleOptions";
 import { useI18n } from "@/contexts/I18nContext";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
+import { passwordTooLong } from "@/lib/passwordRules";
 
 /**
  * A field label of this dialog. gray-500 (4.8:1 on white): the labels and the helper text were gray-400,
@@ -43,6 +45,9 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
     const isOwn = !isNew && currentUser != null && Number(currentUser.id) === Number(userId);
     const [loaded, setLoaded] = useState<{ email: string; personalEmail: string }>({ email: "", personalEmail: "" });
     const [currentPassword, setCurrentPassword] = useState("");
+    // Creating a privileged account, promoting one, or changing ANOTHER privileged account's password or
+    // address: the server asks the administrator to confirm with their own password (and a code with 2FA).
+    const stepUp = useMfaStepUp();
 
     const [formData, setFormData] = useState<{
         username: string; email: string; displayName: string; role: string;
@@ -97,18 +102,25 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
             await alert(t('account.pwTooShort'));
             return;
         }
+        if (formData.password && passwordTooLong(formData.password)) {
+            await alert(t('password.tooLong'));
+            return;
+        }
         setSaving(true);
 
         try {
             if (userId && user !== "new") {
-                await usersApi.update(userId, isOwn ? withSudoProof(loaded, formData, currentPassword) : formData);
+                await usersApi.update(userId, isOwn ? withSudoProof(loaded, formData, currentPassword) : { ...formData, ...stepUp.payload() });
                 setCurrentPassword("");
             } else {
-                await usersApi.create(formData);
+                await usersApi.create({ ...formData, ...stepUp.payload() });
             }
+            stepUp.reset();
             onSuccess();
             onClose();
         } catch (error) {
+            // Asked for the confirmation fields: they are on screen now, the next Save sends them.
+            if (stepUp.absorb(error)) return;
             console.error("Failed to save user:", error);
             await alert(userSaveErrorText(error, t));
         } finally {
@@ -239,6 +251,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                                 />
                             </div>
                         )}
+                        <MfaStepUpFields stepUp={stepUp} />
                     </form>
 
                     {/* Outside the <form>: this acts on the SAVED account immediately, it is not part of

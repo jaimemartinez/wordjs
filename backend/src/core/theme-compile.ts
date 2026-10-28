@@ -106,6 +106,19 @@ const SEED_RE = /^#[0-9a-fA-F]{6}$/;
 const SEED_KEYS = ['primary', 'secondary', 'bg', 'text'];
 const MAX_TOKEN_VALUE: number = THEME_CONTRACT.tokens.maxValueLength;
 const MAX_DECL_VALUE = 300;
+// Functions that take a bare string as an IMAGE ADDRESS (not only url()).
+const IMAGE_STRING_FUNCTIONS = new Set(['image-set', '-webkit-image-set', 'cross-fade', '-webkit-cross-fade', 'image', 'src']);
+// The value functions accepted next to a var() token reference — the property matcher cannot judge such a
+// value (css-tree does not match trees containing var()), so its functions are allowlisted instead.
+const VAR_PATH_FUNCTIONS = new Set([
+  'var', 'calc', 'min', 'max', 'clamp',
+  'rgb', 'rgba', 'hsl', 'hsla', 'hwb', 'lab', 'lch', 'oklab', 'oklch', 'color', 'color-mix',
+  'linear-gradient', 'radial-gradient', 'conic-gradient',
+  'repeating-linear-gradient', 'repeating-radial-gradient', 'repeating-conic-gradient',
+  'translate', 'translatex', 'translatey', 'translate3d', 'rotate', 'scale', 'scalex', 'scaley', 'skew', 'skewx', 'skewy',
+  'cubic-bezier', 'steps', 'minmax', 'repeat', 'fit-content',
+  'blur', 'brightness', 'contrast', 'drop-shadow', 'grayscale', 'saturate', 'opacity', 'invert', 'sepia', 'hue-rotate',
+]);
 const MAX_DECLARATIONS = 2000;
 const MAX_THEME_JSON = 256 * 1024;
 
@@ -559,6 +572,17 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
 
   // --- styles: token-vs-declaration resolution -----------------------------------------
 
+  // A url() is this theme's own asset when the path the BROWSER resolves — dot segments and their
+  // percent-encoded spellings (`%2e%2e`) collapsed, against a same-origin base — is under
+  // /themes/<slug>/, and the address is a plain path (no scheme, no host, no encoded separator).
+  function isOwnThemeAsset(u: string): boolean {
+    if (!u.startsWith(`/themes/${slug}/`) || u.includes('..') || u.includes('\\') || /%(?:2e|2f|5c)/i.test(u)) return false;
+    try {
+      const resolved = new URL(u, 'https://theme.invalid');
+      return resolved.origin === 'https://theme.invalid' && resolved.pathname.startsWith(`/themes/${slug}/`);
+    } catch { return false; }
+  }
+
   function validateDeclaration(prop: string, rawValue: string, p: string): string | null {
     if (prop.startsWith('--')) {
       error('PROPERTY_UNKNOWN', p, 'custom properties are only writable through "tokens" or token-resolving style keys');
@@ -573,6 +597,12 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
       error('VALUE_TOO_LONG', p, `value is ${rawValue.length} chars (cap: ${MAX_DECL_VALUE})`);
       return null;
     }
+    // A CSS escape (`\75 rl(`, `\2e\2e`) spells a function name or a path that the checks below would
+    // read as something else than the browser does. A theme value never needs one.
+    if (rawValue.includes('\\')) {
+      error('VALUE_INVALID', p, 'CSS escapes (\\) are not allowed in a theme value');
+      return null;
+    }
     let ast: any;
     try {
       ast = csstree.parse(rawValue, { context: 'value' });
@@ -585,11 +615,25 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
       visit: 'Url',
       enter(node: any) {
         const u = String(node.value);
-        if (badUrl === null && (u.includes('..') || u.includes('\\') || !u.startsWith(`/themes/${slug}/`))) badUrl = u;
+        if (badUrl === null && !isOwnThemeAsset(u)) badUrl = u;
       }
     });
     if (badUrl !== null) {
       error('URL_FORBIDDEN', p, `url(${badUrl}) — only this theme's own /themes/${slug}/ assets are allowed`);
+      return null;
+    }
+    // image-set() / cross-fade() also take a bare STRING as an image address (`image-set("x.png" 1x)`),
+    // which is no Url node. A theme writes url() there, where the check above applies.
+    let stringImage = false;
+    csstree.walk(ast, {
+      visit: 'Function',
+      enter(node: any) {
+        if (!IMAGE_STRING_FUNCTIONS.has(String(node.name).toLowerCase())) return;
+        csstree.walk(node, { visit: 'String', enter() { stringImage = true; } });
+      }
+    });
+    if (stringImage) {
+      error('URL_FORBIDDEN', p, `${prop}: write image addresses inside image-set()/cross-fade() as url(/themes/${slug}/…)`);
       return null;
     }
     // TOKEN REFERENCES. A theme's whole vocabulary is the --wjs-* contract, so `color:
@@ -625,6 +669,20 @@ function compileTheme(dirOrSlug: string, opts: CompileOpts = {}): CompileResult 
           error('TOKEN_UNKNOWN', p, `var(${ref}) is not a token in the contract${suggestion ? ` — did you mean ${suggestion}?` : ''}`, suggestion);
           return null;
         }
+      }
+      // The property matcher is skipped for this value, so nothing else judges its OTHER functions:
+      // only the value functions a theme uses are accepted next to a token reference.
+      let badFn: string | null = null;
+      csstree.walk(ast, {
+        visit: 'Function',
+        enter(node: any) {
+          const fn = String(node.name).toLowerCase();
+          if (badFn === null && !VAR_PATH_FUNCTIONS.has(fn)) badFn = fn;
+        }
+      });
+      if (badFn !== null) {
+        error('VALUE_INVALID', p, `${badFn}() is not allowed in a value that references a token`);
+        return null;
       }
       // Every reference checked; the surrounding value already parsed as CSS and passed the url() guard.
       return csstree.generate(ast);

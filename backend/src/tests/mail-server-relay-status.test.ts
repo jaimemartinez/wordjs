@@ -44,18 +44,27 @@ interface Boot {
     verify?: (transportOptions: any) => Promise<any>;
     siteDomain?: string;
     smtpListen?: (handlers: any, opts: any) => Promise<any>;
+    dns?: Record<string, (name: string) => Promise<any>>;
+    // A direct-to-MX connection (port 25): what the remote server does. Unset = the relay double answers.
+    direct?: (opts: any) => Promise<any>;
+    interfaces?: Record<string, any[]>;
 }
 
 async function boot(cfg: Boot) {
     const transports: any[] = [];
     const relaySends: any[] = [];
+    const directAttempts: string[] = [];
     const mxLookups: string[] = [];
     const nodemailer = {
         createTransport(opts: any) {
             transports.push(opts);
             return {
                 verify: cfg.verify ? () => cfg.verify!(opts) : (async () => true),
-                async sendMail(m: any) { relaySends.push(m); return { response: '250 2.0.0 Ok: queued' }; },
+                async sendMail(m: any) {
+                    if (opts.port === 25 && cfg.direct) { directAttempts.push(opts.host); return cfg.direct(opts); }
+                    relaySends.push(m);
+                    return { response: '250 2.0.0 Ok: queued' };
+                },
             };
         },
     };
@@ -65,6 +74,7 @@ async function boot(cfg: Boot) {
         if (spec === 'smtp-server') return { SMTPServer: FakeSMTPServer };
         if (spec === 'nodemailer') return nodemailer;
         if (spec === 'dns') return dnsDouble;
+        if (spec === 'os' && cfg.interfaces) return { ...require('os'), networkInterfaces: () => cfg.interfaces };
         if (spec.startsWith('.')) return require(path.resolve(PLUGIN_DIR, spec));
         return require(spec);
     };
@@ -72,6 +82,7 @@ async function boot(cfg: Boot) {
         moduleObj.exports, requireShim, moduleObj, PLUGIN_SRC, PLUGIN_DIR);
     const plugin = moduleObj.exports;
 
+    let provider: any = null;
     const options: Record<string, any> = { smtp_listen_port: '25', mail_undo_send_seconds: '0', ...(cfg.options || {}) };
     const routes = new Map<string, (req: any, res: any) => any>();
     const domain = cfg.siteDomain || 'acme.example';
@@ -91,15 +102,15 @@ async function boot(cfg: Boot) {
         },
         http: { route(method: string, sub: string, _opts: any, handler: any) { routes.set(`${method} ${sub}`, handler); } },
         adminMenu: { add() { /* not under test */ } },
-        provideMail() { /* not under test */ },
+        provideMail(fn: any) { provider = fn; },
         notify: Object.assign(async () => { /* not under test */ }, { registerTransport() { } }),
-        dns: { resolveMx: dnsBridge('MX'), resolveTxt: dnsBridge('TXT'), resolve4: dnsBridge('A'), resolve6: dnsBridge('AAAA'), resolve: dnsBridge('ANY') },
+        dns: { resolveMx: dnsBridge('MX'), resolveTxt: dnsBridge('TXT'), resolve4: dnsBridge('A'), resolve6: dnsBridge('AAAA'), resolve: dnsBridge('ANY'), ...(cfg.dns || {}) },
         ...(cfg.smtpListen ? { smtp: { listen: cfg.smtpListen } } : {}),
     };
     await plugin.init(bridge);
     await new Promise((r) => setImmediate(r));
 
-    const call = async (method: string, sub: string, body: any = {}) => {
+    const call = async (method: string, sub: string, body: any = {}, params: any = {}) => {
         const out: any = { status: 200, body: undefined };
         const res: any = {
             status(s: number) { out.status = s; return res; },
@@ -108,10 +119,10 @@ async function boot(cfg: Boot) {
         };
         const handler = routes.get(`${method} ${sub}`);
         assert.ok(handler, `the plugin no longer registers ${method.toUpperCase()} ${sub}; update this suite`);
-        await handler!({ query: {}, params: {}, body, cookies: {}, user: ADMIN, headers: {} }, res);
+        await handler!({ query: {}, params, body, cookies: {}, user: ADMIN, headers: {} }, res);
         return out;
     };
-    return { plugin, call, transports, relaySends, mxLookups, options };
+    return { plugin, call, transports, relaySends, mxLookups, options, directAttempts, provider: (m: any) => provider(m) };
 }
 
 test('a relay the sandbox refuses is reported as unavailable, and mail is queued — never sent direct-to-MX', async () => {
@@ -274,7 +285,7 @@ test('relay settings saved by another process take effect at the next delivery (
         assert.match(r.body.failed[0].error, /^Relay unavailable: /);
 
         // Another process clears the relay: only the shared setting changes here.
-        b.options.mail_server = '';
+        b.options.mail_server_mail_server = '';
         const lookupsBefore = b.mxLookups.length;
         r = await b.call('post', '/test', { to: 'someone@example.org' });
         assert.doesNotMatch(String(r.body.failed && r.body.failed[0] && r.body.failed[0].error), /Relay unavailable/, JSON.stringify(r.body));
@@ -287,11 +298,152 @@ test('relay settings saved by another process take effect at the next delivery (
 test('a relay configured by another process is used at the next delivery', async () => {
     const b = await boot({});
     try {
-        b.options.mail_server = 'relay.lan';
-        b.options.mail_port = '587';
+        b.options.mail_server_mail_server = 'relay.lan';
+        b.options.mail_server_mail_port = '587';
         const r = await b.call('post', '/test', { to: 'someone@example.org' });
         assert.strictEqual(r.body.success, true, JSON.stringify(r.body));
         assert.strictEqual(r.body.delivered[0].via, 'relay');
         assert.strictEqual(b.relaySends.length, 1);
+    } finally { b.plugin.deactivate(); }
+});
+
+test('the DNS tab covers every public address mail leaves from, IPv4 and IPv6', async () => {
+    const V4 = '93.184.215.14';
+    const V6 = '2606:2800:21f:cb07::25';
+    const none = async () => { throw Object.assign(new Error('queryAaaa ENODATA'), { code: 'ENODATA' }); };
+    const answers: Record<string, string[]> = { 'mail.acme.example': [V4], 'acme.example': [V4] };
+    const b = await boot({
+        interfaces: {
+            eth0: [
+                { address: V4, family: 'IPv4', internal: false },
+                // Written in full: the check must compare it with DNS answers in their short form.
+                { address: '2606:2800:021f:cb07:0000:0000:0000:0025', family: 'IPv6', internal: false },
+                { address: 'fe80::1', family: 'IPv6', internal: false },
+            ],
+        },
+        dns: {
+            resolveMx: async () => [{ exchange: 'mail.acme.example', priority: 10 }],
+            resolveTxt: async (name: string) => (name === 'acme.example' ? [[`v=spf1 a mx ip4:${V4} ~all`]] : name === '_dmarc.acme.example' ? [['v=DMARC1; p=none']] : []),
+            resolve4: async (name: string) => answers[name] || [],
+            resolve6: none,
+            resolve: async (name: string) => answers[name] || [],
+        },
+    });
+    try {
+        const records = (await b.call('get', '/security/dns-records')).body.records;
+        assert.strictEqual(records.a.value, V4);
+        assert.strictEqual(records.aaaa.type, 'AAAA');
+        assert.strictEqual(records.aaaa.value, V6, 'detected, in its short form');
+        assert.ok(records.spf.value.includes(`ip4:${V4}`) && /ip6:2606:2800/.test(records.spf.value), records.spf.value);
+        assert.strictEqual(records.ptr.addresses.length, 2, 'a reverse record for each address; link-local is not one');
+
+        const check = (await b.call('get', '/security/dns-check')).body.results;
+        assert.strictEqual(check.aaaa.status, 'missing', 'the mail host has no AAAA yet');
+        const [v4, v6] = check.senders;
+        assert.deepStrictEqual({ host: v4.host, spf: v4.spf, helo: v4.helo }, { host: 'ok', spf: 'pass', helo: 'ok' });
+        assert.strictEqual(v6.family, 6);
+        assert.deepStrictEqual({ host: v6.host, spf: v6.spf, helo: v6.helo }, { host: 'missing', spf: 'softfail', helo: 'mismatch' },
+            'the IPv6 address is not covered: no AAAA, SPF does not name it, the HELO name does not point back');
+
+        answers['mail.acme.example'] = [V4];
+        const withV6 = await boot({
+            interfaces: { eth0: [{ address: V6, family: 'IPv6', internal: false }] },
+            dns: {
+                resolveMx: async () => [{ exchange: 'mail.acme.example', priority: 10 }],
+                resolveTxt: async (name: string) => (name === 'acme.example' ? [[`v=spf1 mx ip6:${V6} ~all`]] : []),
+                resolve4: async () => [],
+                resolve6: async (name: string) => (name === 'mail.acme.example' || name === 'acme.example' ? ['2606:2800:21f:cb07::25'] : []),
+                resolve: async () => [],
+            },
+        });
+        try {
+            const r = (await withV6.call('get', '/security/dns-check')).body.results;
+            assert.strictEqual(r.aaaa.status, 'ok');
+            assert.deepStrictEqual(r.senders.map((x: any) => [x.host, x.spf, x.helo]), [['ok', 'pass', 'ok']]);
+        } finally { withV6.plugin.deactivate(); }
+    } finally { b.plugin.deactivate(); }
+});
+
+// --- Outbound port 25 that gives no reply (a provider filter or rate limit) ------------------------------
+// Hostinger rate-limits outbound port 25 and a failed Gmail delivery used to dial every MX on both families:
+// up to 10 connections per message, enough to keep the limit engaged. Now a delivery stops after two MX
+// hosts gave no reply, direct delivery pauses, and in «fallback» mode the relay takes the message.
+
+const GMAIL_MX = ['gmail-smtp-in.l.google.com', 'alt1.gmail-smtp-in.l.google.com', 'alt2.gmail-smtp-in.l.google.com', 'alt3.gmail-smtp-in.l.google.com'];
+const timeoutDns = {
+    resolveMx: async () => GMAIL_MX.map((exchange, i) => ({ exchange, priority: i * 10 })),
+    resolveTxt: async () => [],
+    resolve4: async (name: string) => [`142.250.31.${10 + Math.max(0, GMAIL_MX.indexOf(name))}`],
+    resolve6: async () => { throw Object.assign(new Error('queryAaaa ENODATA'), { code: 'ENODATA' }); },
+    resolve: async () => [],
+};
+const noReply = async () => { throw Object.assign(new Error('Connection timeout'), { code: 'ETIMEDOUT' }); };
+
+test('no reply on port 25: two MX hosts at most, then direct delivery pauses and mail waits without spending retries', async () => {
+    const b = await boot({ dns: timeoutDns, direct: noReply });
+    try {
+        await b.provider({ to: 'a@gmail.com', subject: 'first', text: 'x' });
+        assert.strictEqual(b.directAttempts.length, 2, `two MX hosts, not four: ${b.directAttempts.join(', ')}`);
+        const settings = (await b.call('get', '/settings')).body;
+        assert.ok(settings.direct_paused_until && Date.parse(settings.direct_paused_until) > Date.now(), 'paused, and the screen says until when');
+
+        const r = await b.provider({ to: 'b@gmail.com', subject: 'second', text: 'x' });
+        assert.strictEqual(b.directAttempts.length, 2, 'no connection while paused');
+        assert.strictEqual(r.queued, true, JSON.stringify(r));
+        const q = (await b.call('get', '/admin/queue')).body.items;
+        const second = q.find((i: any) => i.subject === 'second');
+        assert.ok(second && Number(second.paced) === 1, 'it waits like the sending rate (not a delivery attempt)');
+        assert.strictEqual(Number(second.delivery_attempts), 0);
+
+        // «Retry now» while paused: it waits again, and says so — not «Delivered».
+        const first = q.find((i: any) => i.subject === 'first');
+        const retry = await b.call('post', '/admin/queue/:id/retry', {}, { id: String(first.id) });
+        assert.strictEqual(retry.status, 202, JSON.stringify(retry.body));
+        assert.strictEqual(retry.body.waiting, true);
+        assert.notStrictEqual(retry.body.message, 'Delivered.');
+        assert.strictEqual(b.directAttempts.length, 2, 'still no connection while paused');
+    } finally { b.plugin.deactivate(); }
+});
+
+test('«only when direct delivery fails»: a relay set as backup takes the message, and the paused ones go straight to it', async () => {
+    const b = await boot({ dns: timeoutDns, direct: noReply, options: { mail_server: 'relay.lan', mail_port: '587', mail_relay_mode: 'fallback' } });
+    try {
+        const settings = (await b.call('get', '/settings')).body;
+        assert.strictEqual(settings.mail_relay_mode, 'fallback');
+        const r1 = await b.provider({ to: 'a@gmail.com', subject: 'first', text: 'x' });
+        assert.strictEqual(r1.success, true, JSON.stringify(r1));
+        assert.strictEqual(b.directAttempts.length, 2, 'direct first');
+        assert.strictEqual(b.relaySends.length, 1, 'then the backup relay');
+
+        const r2 = await b.provider({ to: 'b@gmail.com', subject: 'second', text: 'x' });
+        assert.strictEqual(r2.success, true);
+        assert.strictEqual(b.directAttempts.length, 2, 'paused: no direct attempt');
+        assert.strictEqual(b.relaySends.length, 2);
+    } finally { b.plugin.deactivate(); }
+});
+
+test('«always» keeps the relay as the only path, and the mode only takes its two values', async () => {
+    const b = await boot({ dns: timeoutDns, direct: noReply, options: { mail_server: 'relay.lan', mail_port: '587' } });
+    try {
+        assert.strictEqual((await b.call('get', '/settings')).body.mail_relay_mode, 'always');
+        await b.provider({ to: 'a@gmail.com', subject: 'x', text: 'x' });
+        assert.strictEqual(b.directAttempts.length, 0, 'never direct');
+        assert.strictEqual(b.relaySends.length, 1);
+        await b.call('post', '/settings', { mail_relay_mode: 'sometimes' });
+        assert.strictEqual((await b.call('get', '/settings')).body.mail_relay_mode, 'always');
+    } finally { b.plugin.deactivate(); }
+});
+
+test('a mail server that replies (even «try later») is not «no reply»: direct delivery is not paused', async () => {
+    const replyThenSilence = async (opts: any) => {
+        if (opts.host === '142.250.31.10') throw Object.assign(new Error('421 4.7.0 Try again later'), { responseCode: 421 });
+        return noReply();
+    };
+    const b = await boot({ dns: timeoutDns, direct: replyThenSilence });
+    try {
+        await b.provider({ to: 'a@gmail.com', subject: 'first', text: 'x' });
+        assert.strictEqual((await b.call('get', '/settings')).body.direct_paused_until, null, 'the first MX answered: our port 25 works');
+        await b.provider({ to: 'b@gmail.com', subject: 'second', text: 'x' });
+        assert.ok(b.directAttempts.length > 2, 'the second message is still tried directly');
     } finally { b.plugin.deactivate(); }
 });

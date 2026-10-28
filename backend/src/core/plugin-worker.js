@@ -36,16 +36,15 @@ const path = require('path');
 const IS_WORKER = !!parentPort;
 const cfg = IS_WORKER ? (workerData || {}) : JSON.parse(process.argv[2] || '{}');
 // Per-spawn frame nonce (see plugin-isolate.ts): the host authenticates every inbound control frame by
-// this secret. Read it into a CLOSURE, then SCRUB it from the places plugin code can read — process.argv
-// (fork: the cfg blob lives at argv[2], which plugin code can read) and the parsed cfg object — so a plugin
-// that writes raw bytes to the inherited IPC fd can never produce a frame the host will accept. Plugin code
-// never sees this binding; only this file's `send` (below) stamps frames with it.
-const FRAME_NONCE = (cfg && cfg.frameNonce) || '';
-try { delete cfg.frameNonce; } catch { /* frozen — best effort */ }
-// Rewrite argv[2] to the cfg WITHOUT the nonce (do not blank it: io-guard re-reads argv[2] for its own
-// fsRead/fsWrite/storage config on load — see io-guard.ts). Plugin code that reads process.argv[2] now
-// gets everything except the secret.
-try { if (!IS_WORKER && typeof process.argv[2] === 'string') process.argv[2] = JSON.stringify(cfg); } catch { /* frozen argv — best effort */ }
+// this secret. It is NOT in argv — the kernel keeps its own copy of the command line (`ps`,
+// /proc/self/cmdline) that no rewrite of process.argv reaches — but in the FIRST message the host sends on
+// the channel, which this file consumes before any plugin code is loaded (see `nonceReady` and onMessage
+// below). It lives only in this closure, so a plugin that writes raw bytes to the inherited IPC fd can never
+// produce a frame the host will accept. Frames this file emits before it arrives wait in `preNonce`.
+let FRAME_NONCE = '';
+const preNonce = [];
+let nonceArrived;
+const nonceReady = new Promise((resolve) => { nonceArrived = resolve; });
 // THE WORKER'S OWN CHANNEL, captured before secure-require wraps process.send. Plugin code gets a
 // guarded process.send that refuses; the worker keeps the original, so only code in this file can
 // emit control frames (ready / fatal / register). See secure-require PROC_BLOCKED for why.
@@ -54,8 +53,21 @@ const _post = IS_WORKER ? parentPort.postMessage.bind(parentPort) : (m) => { try
 // Stamp every outbound frame with the per-spawn nonce so the host accepts it as worker-origin. Plugin code
 // cannot read FRAME_NONCE (closure-only, scrubbed from argv/cfg above), so a frame it writes directly to
 // the IPC fd is unstamped and the host drops it. (IPC-FORGE)
-const send = (m) => _post((m && typeof m === 'object' && FRAME_NONCE) ? { ...m, __wjn: FRAME_NONCE } : m);
+const send = (m) => {
+    if (!FRAME_NONCE) { if (preNonce.length < 64) preNonce.push(m); return; }
+    _post((m && typeof m === 'object') ? { ...m, __wjn: FRAME_NONCE } : m);
+};
 const onMessage = IS_WORKER ? (cb) => parentPort.on('message', cb) : (cb) => process.on('message', cb);
+// The host's first message carries the nonce. Taken once; nothing else is handled until it has arrived.
+function acceptFrameNonce(msg) {
+    if (FRAME_NONCE) return false;
+    if (msg && msg.kind === 'wjs-frame-nonce' && typeof msg.nonce === 'string' && msg.nonce.length >= 16) {
+        FRAME_NONCE = msg.nonce;
+        for (const m of preNonce.splice(0)) send(m);
+        nonceArrived();
+    }
+    return true;
+}
 
 const { slug, entryFile, coreDir } = cfg;
 
@@ -164,6 +176,8 @@ Object.defineProperty(global, '__WORDJS_PLUGIN_ALLOWED_HOSTS__', { value: Object
 // reloads. Immutable so a plugin can't clear it.
 Object.defineProperty(global, '__WORDJS_PLUGIN_EGRESS_DENY_ALL__', { value: !!cfg.egressDenyAll, writable: false, configurable: false, enumerable: false });
 const netAllowed = !!global.__WORDJS_PLUGIN_NETWORK__;
+// The egress tunnel client (network-granted plugins only); the host's `net` frames are handed to it.
+let netTunnel = null;
 if (!netAllowed) {
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
         try {
@@ -187,12 +201,17 @@ if (!netAllowed) {
             if (global.__WORDJS_PLUGIN_EGRESS_DENY_ALL__) eg.setDenyAllEgress();
             else eg.setAllowedHosts(global.__WORDJS_PLUGIN_ALLOWED_HOSTS__);
         } catch { /* best-effort */ }
+        // This child has NO direct network at the kernel layer: every connection goes through the host's
+        // egress tunnel (core/egress-tunnel), which decides and opens the real destination. The tunnel
+        // client answers dns.lookup through the host and runs tls.connect over a tunnelled socket.
+        const tunnel = require(path.join(coreDir, 'egress-tunnel-client'));
+        tunnel.installChildTunnel(send);
+        netTunnel = tunnel;
         // PRIMARY enforcement: patch net.Socket.prototype.connect so EVERY outbound TCP connection in
-        // this child is validated AT THE REAL CONNECT against the resolved IP — covers raw net/tls,
-        // http/https (incl. custom agent/createConnection), the net.Stream alias, prototype-chain
-        // bypasses, AND the connect that undici (global fetch / WebSocket / EventSource) performs. This
-        // closes redirect-to-private and DNS-rebinding at the socket layer (the actual IP is checked).
-        eg.installChildNetGuard();
+        // this child is checked at the connect and then carried by the tunnel — covers raw net/tls,
+        // http/https (incl. custom agent/createConnection), a bare net.Socket, the net.Stream alias,
+        // prototype-chain bypasses, AND the connect that undici (global fetch / WebSocket) performs.
+        eg.installChildNetGuard(tunnel.connectViaTunnel);
         // Same chokepoint for UDP: patch dgram.Socket.prototype.send/.connect in place. Covers EVERY way
         // a plugin obtains a dgram socket — createSocket, `new dgram.Socket()`, AND `await import('dgram')`
         // (the ESM loader bypasses the CJS require proxy, but all instances share this one patched
@@ -621,11 +640,16 @@ function replyTooLarge(v) {
 }
 
 onMessage(async (msg) => {
+    if (acceptFrameNonce(msg)) return;
     if (msg.kind === 'reply') {
         const p = pending.get(msg.id);
         if (!p) return;
         pending.delete(msg.id);
         msg.ok ? p.resolve(msg.value) : p.reject(new Error(msg.error));
+    } else if (msg.kind === 'net') {
+        // The host side of a tunnelled connection or name lookup. The plugin's socket callbacks run from
+        // here, so they run as the plugin.
+        if (netTunnel) runWithContext(slug, () => netTunnel.handleHostFrame(msg));
     } else if (msg.kind === 'invoke') {
         // Host is firing a hook/filter callback that lives in this isolate.
         const cb = callbacks.get(msg.cbId);
@@ -745,8 +769,16 @@ onMessage(async (msg) => {
     }
 });
 
-// Load + initialize the plugin inside its context.
+// Load + initialize the plugin inside its context — only once the host's frame nonce has arrived, so no
+// plugin code ever runs in a process that could still be handed it.
 (async () => {
+    const nonceTimer = setTimeout(() => {
+        try { process.stderr.write(`[sandbox] plugin '${slug}': the host never sent the IPC frame nonce
+`); } catch { /* stderr gone */ }
+        hardExit(1);
+    }, 30000);
+    await nonceReady;
+    clearTimeout(nonceTimer);
     try {
         // Fail-closed attribution: from here on, any code in this worker with no ALS context and no
         // plugin stack frame (the entry's top-level, or a detached setImmediate/queueMicrotask/

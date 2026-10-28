@@ -22,11 +22,25 @@ const { spawn } = require('child_process');
 const path = require('path');
 const fs = require('fs');
 
-// Prefer the COMPILED build (no ts-node in production). `npm run build` emits dist/index.js;
-// if it exists we run that. Otherwise fall back to ts-node (dev / not-yet-built convenience).
+// Run the COMPILED build. `npm run build` emits dist/index.js. This supervisor is the production entry
+// point (`npm start`, the service units, the release bundle), so a missing dist/ is a failed or skipped
+// build, never a reason to run the TypeScript sources: the source-mode worker is launched without the
+// production sandbox flags, so a silent fallback here would start every plugin with weaker confinement.
+// Source mode is for development and needs an explicit opt-in (WORDJS_ALLOW_SOURCE=1, never with
+// NODE_ENV=production); `npm run dev` is the usual way to run the sources.
 const DIST_ENTRY = path.join(__dirname, 'dist', 'index.js');
 const TS_ENTRY = path.join(__dirname, 'src', 'index.ts');
-const RUN_COMPILED = fs.existsSync(DIST_ENTRY);
+
+/** 'compiled', 'source' or 'refuse', from whether dist/ exists and the environment. Pure, for the tests. */
+function chooseEntry(distExists, env) {
+    if (distExists) return 'compiled';
+    const e = env || {};
+    if (e.WORDJS_ALLOW_SOURCE === '1' && e.NODE_ENV !== 'production') return 'source';
+    return 'refuse';
+}
+
+const ENTRY_MODE = chooseEntry(fs.existsSync(DIST_ENTRY), process.env);
+const RUN_COMPILED = ENTRY_MODE === 'compiled';
 const APP_ARGS = RUN_COMPILED ? [DIST_ENTRY] : ['-r', 'ts-node/register', TS_ENTRY];
 // A crash is restarted after a delay that doubles with each crash in a row (1 s, 2 s, 4 s … capped at
 // MAX_BACKOFF_MS) and goes back to 1 s once the app has stayed up for STABLE_AFTER_MS. The supervisor
@@ -94,7 +108,7 @@ function startApp() {
     });
 }
 
-module.exports = { backoffMs, MAX_BACKOFF_MS, STABLE_AFTER_MS };
+module.exports = { backoffMs, chooseEntry, MAX_BACKOFF_MS, STABLE_AFTER_MS };
 
 /** Pass a termination signal on to the app and stop with it. */
 function installSignalForwarding() {
@@ -110,6 +124,13 @@ function installSignalForwarding() {
 
 // Start the loop (not when a test requires the file for backoffMs).
 if (require.main === module) {
+    if (ENTRY_MODE === 'refuse') {
+        console.error('\n✖ WordJS: backend/dist/index.js is missing, so there is no compiled build to run.');
+        console.error('  Run `npm run build` in backend/ (an update whose build failed leaves it missing) and start again.');
+        console.error('  To run the TypeScript sources for development, use `npm run dev`.\n');
+        process.exit(1);
+    }
+    if (ENTRY_MODE === 'source') console.warn('⚠️  Supervisor: running the TypeScript sources (WORDJS_ALLOW_SOURCE=1). Development only.');
     installSignalForwarding();
     startApp();
 }

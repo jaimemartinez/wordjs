@@ -49,7 +49,17 @@ function stripSqlComments(sql: string): string {
             continue;
         }
         if (c === '-' && sql[i + 1] === '-') { while (i < n && sql[i] !== '\n' && sql[i] !== '\r') i++; continue; } // Postgres ends `--` at \n OR \r
-        if (c === '/' && sql[i + 1] === '*') { i += 2; while (i < n && !(sql[i] === '*' && sql[i + 1] === '/')) i++; i += 2; continue; }
+        // Postgres block comments NEST (`/* a /* b */ c */` is ONE comment): count the depth instead of
+        // closing at the first `*/`, which would hand ` c */` back as code.
+        if (c === '/' && sql[i + 1] === '*') {
+            let depth = 1; i += 2;
+            while (i < n && depth > 0) {
+                if (sql[i] === '/' && sql[i + 1] === '*') { depth++; i += 2; continue; }
+                if (sql[i] === '*' && sql[i + 1] === '/') { depth--; i += 2; continue; }
+                i++;
+            }
+            continue;
+        }
         out += c; i++;
     }
     return out;
@@ -191,6 +201,11 @@ function safeIdent(name: string): string {
         throw new Error(`unsafe SQL identifier for plugin role isolation: ${JSON.stringify(name)}`);
     }
     return m[0];
+}
+
+/** A LIKE pattern for "starts with prefix": `_` and `%` are wildcards in LIKE, so the literal ones are escaped. */
+function likePrefix(prefix: string): string {
+    return String(prefix).replace(/[\\%_]/g, (m) => '\\' + m) + '%';
 }
 
 // SQLSTATEs / socket codes meaning "the server or the network closed this connection" — a database
@@ -535,14 +550,59 @@ class PostgresDriver extends DatabaseDriverInterface {
         // membership is harmless — the role holds strictly FEWER privileges than the admin pool user.
         await this.pool.query(`GRANT ${r} TO CURRENT_USER`);
     }
-    /** GRANT the role CRUD on every existing wjp_<prefix> table + USAGE on their serial sequences. */
-    async grantPluginPrefix(role: string, prefix: string) {
-        const r = escapeIdentifier(safeIdent(role));
+    /**
+     * GRANT the role CRUD on every existing wjp_<prefix> table + USAGE on their serial sequences.
+     * `owns(name)` says whether a table under the prefix really belongs to this plugin: one plugin's prefix
+     * can be the start of another's (wjp_event_ ⊂ wjp_event_tickets_), and those tables are not its own.
+     */
+    async grantPluginPrefix(role: string, prefix: string, owns: (table: string) => boolean = () => true) {
+        safeIdent(role);
         safeIdent(prefix); // a wjp_<slug>_ prefix is itself a valid identifier (trailing _ is fine) — validate it
-        const tbls = await this.pool.query(`SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE $1`, [prefix + '%']);
-        for (const row of tbls.rows) { const tn = escapeIdentifier(safeIdent(row.tablename)); await this.pool.query(`GRANT SELECT, INSERT, UPDATE, DELETE ON ${tn} TO ${r}`); }
-        const seqs = await this.pool.query(`SELECT sequence_name FROM information_schema.sequences WHERE sequence_schema=current_schema() AND sequence_name LIKE $1`, [prefix + '%']);
-        for (const row of seqs.rows) { const sn = escapeIdentifier(safeIdent(row.sequence_name)); await this.pool.query(`GRANT USAGE, SELECT ON SEQUENCE ${sn} TO ${r}`); }
+        const tbls = await this.pool.query(`SELECT tablename FROM pg_tables WHERE schemaname=current_schema() AND tablename LIKE $1`, [likePrefix(prefix)]);
+        for (const row of tbls.rows) {
+            if (!owns(String(row.tablename))) continue;
+            await this.grantPluginTable(role, String(row.tablename));
+        }
+    }
+    /**
+     * Let the role run its plugin's DDL itself (core/plugin-db-isolation runDdl): CREATE on the schema, and
+     * OWNERSHIP of the plugin's existing tables and views (ALTER/DROP/CREATE INDEX need the owner). What the
+     * role creates afterwards it owns from the start. The database then judges every DDL statement by the
+     * role's own rights — a view or a CREATE TABLE … AS SELECT over a table the role cannot read fails.
+     */
+    async enablePluginDdl(role: string, prefix: string, owns: (table: string) => boolean = () => true) {
+        const r = escapeIdentifier(safeIdent(role));
+        safeIdent(prefix);
+        await this.pool.query(`GRANT CREATE ON SCHEMA ${escapeIdentifier(await this.currentSchema())} TO ${r}`);
+        const rels = await this.pool.query(
+            `SELECT c.relname AS name, c.relkind AS kind FROM pg_class c
+               JOIN pg_namespace n ON n.oid = c.relnamespace
+              WHERE n.nspname = current_schema() AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+                AND c.relname LIKE $1 AND pg_get_userbyid(c.relowner) <> $2`,
+            [likePrefix(prefix), safeIdent(role)]);
+        for (const row of rels.rows) {
+            const name = String(row.name);
+            if (!owns(name)) continue;
+            const kw = row.kind === 'v' ? 'VIEW' : row.kind === 'm' ? 'MATERIALIZED VIEW' : row.kind === 'f' ? 'FOREIGN TABLE' : 'TABLE';
+            await this.pool.query(`ALTER ${kw} ${escapeIdentifier(safeIdent(name))} OWNER TO ${r}`);
+        }
+    }
+    /** Hand ONE table the plugin just created through the host (createTable) to its role. */
+    async ownPluginTable(role: string, table: string) {
+        await this.pool.query(`ALTER TABLE ${escapeIdentifier(safeIdent(table))} OWNER TO ${escapeIdentifier(safeIdent(role))}`);
+    }
+    /** Run one DDL statement AS the role (SET ROLE on a pinned client), translated like run() translates it. */
+    async runDdlAsRole(role: string, sql: string, params: any[] = []) {
+        const r = escapeIdentifier(safeIdent(role));
+        const client = await this.pool.connect();
+        try {
+            await client.query(`SET ROLE ${r}`);
+            const res = await client.query(this.normalizeSql(translateSql(sql)), params);
+            return { lastID: 0, changes: res.rowCount || 0 };
+        } finally {
+            try { await client.query('RESET ROLE'); } catch { /* the client is discarded on release anyway */ }
+            client.release();
+        }
     }
     /**
      * GRANT the role CRUD on ONE newly-created table (called right after createTable) AND USAGE on the
@@ -570,6 +630,9 @@ class PostgresDriver extends DatabaseDriverInterface {
     /** Drop the plugin's role on uninstall (best-effort; its tables are dropped separately). */
     async dropPluginRole(role: string) {
         const r = escapeIdentifier(safeIdent(role));
+        // The role OWNS the plugin's tables (enablePluginDdl). Dropping the role must not take them with it —
+        // whether they go is the uninstall's own choice, made before this — so hand them back first.
+        try { await this.pool.query(`REASSIGN OWNED BY ${r} TO CURRENT_USER`); } catch { /* role may own nothing */ }
         try { await this.pool.query(`DROP OWNED BY ${r}`); } catch { /* role may own nothing */ }
         await this.pool.query(`DROP ROLE IF EXISTS ${r}`);
     }
@@ -661,6 +724,7 @@ module.exports.PostgresDriver = PostgresDriver;
 // Exported for unit tests of the dialect translation.
 module.exports.translateSql = translateSql;
 module.exports.translateCreateTable = translateCreateTable;
+module.exports.stripSqlComments = stripSqlComments;
 module.exports.isConnectionLost = isConnectionLost;
 module.exports.PG_TEXT_NOW = PG_TEXT_NOW;
 module.exports.attachPoolErrorHandlers = attachPoolErrorHandlers;

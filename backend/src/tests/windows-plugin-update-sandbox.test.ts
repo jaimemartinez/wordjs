@@ -45,6 +45,9 @@ function recorder(opts: { platform?: string; legacyDirs?: string[] } = {}) {
             grantIsCached: () => true,
             legacyDeepGrant: (_sid: string, dir: string) => legacy.has(path.resolve(dir).toLowerCase()),
             forgetGrants: (sid: string, dir: string) => { calls.forgotten.push({ sid, dir }); },
+            exists: () => true,
+            generation: () => null,
+            forgetGeneration: () => { /* recorded by the retirement suite */ },
         },
     };
 }

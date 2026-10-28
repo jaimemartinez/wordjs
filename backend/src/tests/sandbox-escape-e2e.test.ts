@@ -125,15 +125,17 @@ const UNGRANTED_INIT = `
   wordjs.http.route('get', '/fs-write', (req, res) => {
     const fsm = require('fs'); const p = require('path'); const q = req.query || {};
     const out = {};
-    // A non-exec write in the plugin's OWN dir IS allowed — precondition proving the launder/exec blocks below
-    // are the exec-extension rule, not a blanket own-dir write denial.
-    out.ownTxtWrite = (() => { try { fsm.writeFileSync(p.join(__dirname, 'payload.txt'), 'x'); return true; } catch { return false; } })();
-    out.execWrite = (() => { try { fsm.writeFileSync(p.join(__dirname, 'pwn.js'), 'x'); return false; } catch { return true; } })();
-    out.copyLaunder = (() => { try { fsm.copyFileSync(p.join(__dirname, 'payload.txt'), p.join(__dirname, 'copied.js')); return false; } catch { return true; } })();
+    // A non-exec write in the plugin's OWN data IS allowed — precondition proving the launder/exec blocks below
+    // are the exec-extension rule, not a blanket write denial. Its code dir takes no write at all.
+    const own = p.join(__dirname, 'data');
+    out.ownTxtWrite = (() => { try { fsm.writeFileSync(p.join(own, 'payload.txt'), 'x'); return true; } catch { return false; } })();
+    out.codeDirWrite = (() => { try { fsm.writeFileSync(p.join(__dirname, 'payload.txt'), 'x'); return false; } catch { return true; } })();
+    out.execWrite = (() => { try { fsm.writeFileSync(p.join(own, 'pwn.js'), 'x'); return false; } catch { return true; } })();
+    out.copyLaunder = (() => { try { fsm.copyFileSync(p.join(own, 'payload.txt'), p.join(own, 'copied.js')); return false; } catch { return true; } })();
     out.outWrite = q.out ? (() => { try { fsm.writeFileSync(q.out, 'x'); return false; } catch { return true; } })() : null; // benign, out of zone -> zone rule
     // symlink to an IN-ZONE own-dir target: the zone would allow the path, so only link-denial (or, on
     // Windows, the unprivileged-symlink EPERM) can block it — isolating the link rule.
-    out.symlink = (() => { try { fsm.symlinkSync(p.join(__dirname, 'manifest.json'), p.join(__dirname, 'link.txt')); return false; } catch { return true; } })();
+    out.symlink = (() => { try { fsm.symlinkSync(p.join(own, 'payload.txt'), p.join(own, 'link.txt')); return false; } catch { return true; } })();
     res.json(out);
   });
 
@@ -526,10 +528,10 @@ describe('sandbox escape — filesystem (ungranted fixture, real fork)', () => {
         allTrue(r, ['inZoneDb', 'inZoneConfig', 'outOfZoneBenign', 'promises', 'stream']);
         if (r.realDb !== null) assert.strictEqual(r.realDb, true, 'the real configured DB file must be unreadable from the fork');
     });
-    test('cannot WRITE: executable code, launder txt→js, out-of-zone, or symlink', async () => {
+    test('cannot WRITE: its own code dir, executable code, launder txt→js, out-of-zone, or symlink', async () => {
         const r = await probe(UNGRANTED, 'fs-write', `?out=${encodeURIComponent(benignOutOfZoneWrite)}`);
-        assert.strictEqual(r.ownTxtWrite, true, 'a plugin CAN write a non-exec file in its own dir (precondition for the launder/exec tests)');
-        allTrue(r, ['execWrite', 'copyLaunder', 'outWrite', 'symlink']);
+        assert.strictEqual(r.ownTxtWrite, true, 'a plugin CAN write a non-exec file in its own data (precondition for the launder/exec tests)');
+        allTrue(r, ['codeDirWrite', 'execWrite', 'copyLaunder', 'outWrite', 'symlink']);
         assert.ok(!fs.existsSync(benignOutOfZoneWrite), 'the out-of-zone write must not have landed on disk');
     });
 });

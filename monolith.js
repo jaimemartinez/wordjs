@@ -427,7 +427,14 @@ async function main() {
     if (!dev && fs.existsSync(distEntry)) {
         backendTree = path.join(BACKEND, 'dist');
         backendApp = require(distEntry);
+    } else if (!dev) {
+        // Production never runs the TypeScript sources: their plugin worker starts without the production
+        // sandbox flags. A missing dist/ is a build that failed or never ran.
+        throw new Error('backend/dist/index.js is missing: run `npm run build:mono` (or `npm run build` in backend/) before `node monolith.js prod`.');
     } else {
+        // Development: the explicit opt-in that lets the source-only Windows plugin worker run without an
+        // AppContainer (backend core/plugin-isolate sourceWorkerExempt; never with NODE_ENV=production).
+        if (process.env.NODE_ENV !== 'production' && !process.env.WORDJS_DEV_SANDBOX_EXEMPT) process.env.WORDJS_DEV_SANDBOX_EXEMPT = '1';
         require(require.resolve('ts-node/register', { paths: [BACKEND] }));
         backendTree = path.join(BACKEND, 'src');
         backendApp = require(path.join(BACKEND, 'src', 'index.ts'));

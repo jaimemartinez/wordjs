@@ -532,11 +532,13 @@ function deliverDirect(origin: string, body: string, secret: string, cfg: any, i
  * the caller can degrade to TTL instead of throwing. Exported for tests.
  */
 function gatewayPurgeOptions(cfg: any, target: { host: string; port: number }, byteLength: number): any {
-    // Same builder as the direct leg (clusterTlsOptions) — no CN allowlist here on purpose: this leg
-    // dials the gateway by the very host its certificate is issued for, so Node's default hostname
-    // verification is the stronger check.
+    // Same builder as the direct leg (clusterTlsOptions). Hostname verification stays — this leg dials
+    // the gateway by the very host its certificate is issued for — and the certificate must ALSO name
+    // the gateway: every cluster certificate carries the loopback SANs, so the hostname alone would
+    // accept another node answering on the gateway's internal port.
     const tls = clusterTlsOptions(cfg);
     if (!tls) return null;
+    tls.checkServerIdentity = require('./cert-manager').checkGatewayIdentity;
     return {
         protocol: 'https:',
         method: 'POST',
@@ -699,6 +701,8 @@ const SETTINGS_OPTIONS = new Set([
     // Settings → Reading: the posts page, date/time formats and search-engine visibility all change how
     // already-rendered public pages look or what their <head> says.
     'page_for_posts', 'date_format', 'time_format', 'blog_public',
+    // The admin's own robots.txt rules: the public /robots.txt route caches on the 'settings' tag.
+    'robots_txt_extra',
     'site_chrome_header', 'site_chrome_footer', 'site_chrome_announcement',
     // These two land on <html> itself, so a change repaints every cached page — and being absent here
     // is worse than it sounds: switching a site to Arabic would have left every already-rendered page

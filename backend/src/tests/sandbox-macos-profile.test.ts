@@ -60,7 +60,9 @@ describe('SBPL profile skeleton', () => {
 
     test('process descendants inherit confinement without wildcard operations, Mach access, or inbound network', () => {
         const p = build();
-        assert.ok(p.includes('(allow process-exec)'), 'bwrap-equivalent descendants may exec inside the same domain');
+        assert.ok(p.includes(`(allow process-exec
+    (literal "${NODE}"))`), 'descendants may exec, but only as the installed Node image');
+        assert.ok(!/\(allow process-exec\s*\)/.test(p), 'exec is never granted without a path filter');
         assert.ok(p.includes('(allow process-fork)'), 'descendants must inherit the Seatbelt domain');
         assert.ok(!/\(allow process-exec\*\)/.test(p), 'interpreter and related wildcard operations stay denied');
         assert.ok(p.includes('(allow signal (target same-sandbox))'));
@@ -74,7 +76,7 @@ describe('SBPL profile skeleton', () => {
         const p = build();
         assert.ok(p.includes(`(allow file-read* file-map-executable (literal "${NODE}"))`));
         assert.ok(!p.includes('(allow file-map-executable)'), 'executable mappings must always carry a path filter');
-        assert.ok(p.indexOf('(deny default)') < p.indexOf('(allow process-exec)'),
+        assert.ok(p.indexOf('(deny default)') < p.indexOf('(allow process-exec'),
             'deny-default must precede the inherited process-tree carve-out');
     });
 
@@ -150,8 +152,8 @@ describe('SBPL profile skeleton', () => {
         assert.doesNotMatch(source, /prepareSeatbeltRuntime|armSeatbeltBootstrap|WORDJS_SEATBELT_BOOTSTRAP/);
         assert.match(isolateSource, /nodePath: process\.execPath/,
             'production must use the installed runtime directly under Seatbelt');
-        assert.strictEqual((source.match(/readOnlyDirs: \[\]/g) || []).length, 2,
-            'both probe policy shapes must avoid unnecessary application-code read grants');
+        assert.strictEqual((source.match(/readOnlyDirs: \[\]/g) || []).length, 1,
+            'the probe profile (one shape: no network for any plugin) must avoid unnecessary application-code read grants');
         assert.match(isolateSource, /auditProfile\(profile\)[\s\S]*profileProblems\.length > 0[\s\S]*throw new Error/,
             'production must fail closed when the independent profile audit reports a violation');
     });
@@ -206,7 +208,10 @@ describe('network policy', () => {
 
     test('a network-granted plugin gets outbound and DNS, and still no inbound', () => {
         const p = build({ denyNetwork: false });
-        assert.ok(/\(allow network-outbound\)/.test(p), 'a network-granted plugin must be able to connect out');
+        assert.ok(/\(allow network-outbound \(remote tcp "\*:443"\)\)/.test(p), 'a network-granted plugin must be able to connect out');
+        assert.ok(!/\(allow network-outbound\)/.test(p), 'outbound always names its ports');
+        assert.ok(p.indexOf('(deny network-outbound (remote ip "localhost:*"))') > p.lastIndexOf('(allow network-outbound'),
+            'loopback is denied AFTER every outbound allow, so it wins');
         assert.ok(!/\(deny network\*\)/.test(p), 'the blanket network denial must not be emitted here');
         assert.ok(/resolv\.conf/.test(p), 'DNS configuration must be readable so getaddrinfo works');
         assert.ok(!/network-bind|network-inbound/.test(p), 'inbound is never granted, grant or no grant');
@@ -292,6 +297,34 @@ describe('sandbox-exec argv', () => {
     });
 });
 
+describe('exec and stat are as narrow as the grants', () => {
+    test('only the installed Node image may be executed (no shell, no other program)', () => {
+        const p = build();
+        assert.ok(!/\(allow process-exec\s*\)/.test(p));
+        assert.ok(p.includes(`(allow process-exec\n    (literal "${NODE}"))`));
+        assert.ok(auditProfile(p.replace(`(allow process-exec\n    (literal "${NODE}"))`, '(allow process-exec)')).some((x: string) => /process-exec/.test(x)),
+            'the audit refuses an unfiltered exec grant');
+    });
+
+    test('stat() reaches the ancestors of the grants and the grants, nothing else', () => {
+        const p = build({ readOnlyDirs: ['/srv/wordjs/backend/src/core'], writableDirs: ['/srv/wordjs/backend/data/plugin-own/x'] });
+        assert.ok(!/\(allow file-read-metadata\s*\)/.test(p), 'no global metadata grant');
+        const block = /\(allow file-read-metadata([\s\S]*?)\)\)\n/.exec(p)?.[1] || '';
+        for (const lit of ['/', '/srv', '/srv/wordjs', '/srv/wordjs/backend', '/srv/wordjs/backend/data', '/srv/wordjs/backend/data/plugin-own']) {
+            assert.ok(block.includes(`(literal "${lit}")`), `ancestor ${lit} is stat-able (realpath walks it)`);
+        }
+        assert.ok(block.includes('(subpath "/srv/wordjs/backend/src/core")') && block.includes('(subpath "/srv/wordjs/backend/data/plugin-own/x")'));
+        assert.ok(!block.includes('(subpath "/srv/wordjs/backend")'), 'the app root is never a stat subtree');
+        assert.ok(auditProfile(p.replace(/\(allow file-read-metadata[\s\S]*?\)\)\n/, '(allow file-read-metadata)\n')).some((x: string) => /metadata/.test(x)),
+            'the audit refuses a global metadata grant');
+    });
+
+    test('the probe certifies both: a shell exec and a stat outside the grants are refused', () => {
+        assert.match(__probeSrc, /cp\.spawn\("\/bin\/sh"/);
+        assert.match(__probeSrc, /fs\.statSync\(hidden\)/);
+    });
+});
+
 describe('probe', () => {
     test('the embedded Seatbelt probe remains valid JavaScript', () => {
         assert.doesNotThrow(() => new Function(__probeSrc));
@@ -362,7 +395,9 @@ describe('Seatbelt: granting the cwd ancestors', () => {
         const profile = build(PRODUCT);
         assert.doesNotMatch(profile, /\(subpath "\/srv\/wordjs\/backend"\)/,
             'the app root became readable as a SUBTREE — that is the whole thing sandboxPaths withholds');
-        assert.doesNotMatch(profile, /\(literal "\/srv\/wordjs\/backend"\)/,
+        // stat() of the app root is how Node walks down to its grants; reading or listing it is not.
+        const reads = profile.replace(/\(allow file-read-metadata[\s\S]*?\)\)\n/, '');
+        assert.doesNotMatch(reads, /\(literal "\/srv\/wordjs\/backend"\)/,
             'the app root was granted directly, so backend/ can be listed and wordjs-config.json is visible');
         // What SHOULD be readable is still readable: the narrow roots the product passes.
         assert.match(profile, /\(subpath "\/srv\/wordjs\/backend\/src\/core"\)/,

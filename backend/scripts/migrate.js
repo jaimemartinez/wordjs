@@ -7,7 +7,7 @@
  * automatically at boot, so this is idempotent. Switching DB *drivers* (copying data between
  * sqlite/postgres) is a separate operation in the admin panel (Admin → Database), not this command.
  *
- * Mirrors server.js / monolith.js: prefer compiled dist/, fall back to ts-node on src/.
+ * Prefers compiled dist/ and falls back to ts-node on src/ (a one-shot command: it starts no plugin).
  */
 const path = require('path');
 const fs = require('fs');

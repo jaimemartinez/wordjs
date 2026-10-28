@@ -692,6 +692,8 @@ router.post('/install', async (req: Request, res: Response) => {
     if (!adminUser || !/^[a-zA-Z0-9_.-]{3,}$/.test(String(adminUser))) return fail('Admin username must be at least 3 characters (letters, numbers, . _ -).');
     if (!adminEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(String(adminEmail))) return fail('A valid admin email is required.');
     if (!adminPassword || String(adminPassword).length < 10) return fail('Admin password must be at least 10 characters.');
+    // bcrypt reads 72 BYTES at most (models/User passwordTooLong); checked here before anything is written.
+    if (Buffer.byteLength(String(adminPassword), 'utf8') > 72) return fail('Admin password must not exceed 72 bytes (about 72 plain letters; accented letters count as 2 and emoji as 4).');
     const ALLOWED_DRIVERS = ['sqlite-native', 'sqlite-legacy', 'postgres', 'mysql'];
     if (!ALLOWED_DRIVERS.includes(dbDriver)) return fail('Invalid database driver.');
     if ((dbDriver === 'postgres' || dbDriver === 'mysql') && (!dbConn || !dbConn.host || !dbConn.database || !dbConn.user)) {

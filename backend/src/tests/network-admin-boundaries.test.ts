@@ -10,7 +10,7 @@
  *      administrator can; everyone keeps managing ordinary accounts exactly as before.
  *   2. NETWORK-WIDE ACTIONS on the main site take a network administrator: plugin and theme code,
  *      marketplace, backups, the database migration tool, the site's addresses, certificates, the hooks
- *      registry and the object-cache switch. Activation, grants and the other site-level actions stay
+ *      registry, the detailed health reports and the object-cache switch. Activation, grants and the other site-level actions stay
  *      with the main site's administrators.
  *
  * Plus the bookkeeping: deleting an account removes it from the network administrators, and every row
@@ -167,7 +167,7 @@ describe('a network administrator account is out of reach of a main-site-only ad
         assert.strictEqual(peer.status, 200, JSON.stringify(peer.body));
         const down = await as('net', 'put', `${API}/users/${U.mainadmin}`).send({ displayName: 'Main Admin' });
         assert.strictEqual(down.status, 200, JSON.stringify(down.body));
-        const reset = await as('net', 'post', `${API}/users/${U.netadmin2}/mfa/reset`).send({});
+        const reset = await as('net', 'post', `${API}/users/${U.netadmin2}/mfa/reset`).send({ currentPassword: PASSWORD });
         assert.strictEqual(reset.status, 200, JSON.stringify(reset.body));
     });
 
@@ -210,6 +210,8 @@ describe('network-wide actions on the main site take a network administrator', (
         ['get', '/site-address'],
         ['get', '/system/certs/config'],
         ['get', '/hooks'],
+        ['get', '/health/details'],
+        ['get', '/health/site'],
         ['get', '/marketplace/sources'],
         ['post', '/plugins/upload'],
         ['delete', '/plugins/no-such-plugin'],

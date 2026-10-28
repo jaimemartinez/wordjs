@@ -4,7 +4,7 @@ const log = require('../core/module-logger').moduleLogger('routes/hooks');
 const router = express.Router();
 const { hooks } = require('../core/hooks');
 const { isAdmin } = require('../middleware/permissions');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, sessionOnly } = require('../middleware/auth');
 const { offStack } = require('../middleware/errorHandler');
 
 /**
@@ -29,19 +29,38 @@ router.get('/', authenticate, isAdmin, (req: Request, res: Response) => {
     }
 });
 
+// Open inspector streams, per process and per user. Each one turns hook monitoring on for the whole
+// process and serializes every hook call it relays, so they are few by design: one per open tab.
+const MAX_HOOK_STREAMS = 20;
+const MAX_HOOK_STREAMS_PER_USER = 3;
+let openHookStreams = 0;
+const hookStreamsByUser = new Map<number, number>();
+
 /**
  * @swagger
  * /hooks/stream:
  *   get:
  *     summary: Stream live hook events (SSE)
+ *     description: An administrator's interactive session only (an API token is refused with rest_token_management_forbidden). At most 3 open streams per user and 20 per process; beyond that the answer is 429 rest_hook_stream_limit.
  *     tags: [System]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
  *         description: Event stream
+ *       403:
+ *         description: Not an administrator, or an API token
+ *       429:
+ *         description: Too many open inspector streams (rest_hook_stream_limit)
  */
-router.get('/stream', authenticate, isAdmin, (req: Request, res: Response) => {
+router.get('/stream', authenticate, isAdmin, sessionOnly, (req: Request, res: Response) => {
+    const userId = Number(req.user && req.user.id) || 0;
+    if (openHookStreams >= MAX_HOOK_STREAMS || (hookStreamsByUser.get(userId) || 0) >= MAX_HOOK_STREAMS_PER_USER) {
+        return res.status(429).json({ code: 'rest_hook_stream_limit', message: 'Too many open hook inspector streams. Close another inspector tab and try again.', data: { status: 429 } });
+    }
+    openHookStreams++;
+    hookStreamsByUser.set(userId, (hookStreamsByUser.get(userId) || 0) + 1);
+
     res.setHeader('Content-Type', 'text/event-stream');
     res.setHeader('Cache-Control', 'no-cache');
     res.setHeader('Connection', 'keep-alive');
@@ -81,13 +100,22 @@ router.get('/stream', authenticate, isAdmin, (req: Request, res: Response) => {
         res.write(': keep-alive\n\n');
     }), 15000);
 
-    // Cleanup
-    req.on('close', () => {
+    // Cleanup — once, whichever side closes first.
+    let closed = false;
+    const cleanup = () => {
+        if (closed) return;
+        closed = true;
+        openHookStreams--;
+        const left = (hookStreamsByUser.get(userId) || 1) - 1;
+        if (left > 0) hookStreamsByUser.set(userId, left); else hookStreamsByUser.delete(userId);
         clearInterval(keepAlive);
         hooks.monitor.off('hook:call', onHookCall);
         hooks.disableMonitoring();
         res.end();
-    });
+    };
+    req.on('close', cleanup);
+    res.on('close', cleanup);
 });
 
 module.exports = router;
+module.exports.openHookStreamCount = () => openHookStreams;

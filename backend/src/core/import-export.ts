@@ -14,6 +14,29 @@ const { getOption, updateOption } = require('./options');
 const { canonicalImportedPostStatus } = require('./post-capabilities');
 const log = require('./module-logger').moduleLogger('core/import-export');
 
+/** The shape of a plugin's or theme's own table (core/plugin-api's per-plugin prefix). */
+const PLUGIN_TABLE_NAME = /^wjp_[a-z0-9_]+$/i;
+
+/**
+ * The table prefixes of the plugins and themes installed here — wjp_<slug>_, built exactly as
+ * core/plugin-api builds a plugin's prefix. Read from disk at import time.
+ */
+function installedTablePrefixes(): string[] {
+    const toPrefix = (slug: string) => ('wjp_' + slug.replace(/[^A-Za-z0-9]+/g, '_') + '_').toLowerCase();
+    const prefixes: string[] = [];
+    // Where core/plugins and the theme loader keep them: relative to the backend's working directory.
+    for (const dir of [path.resolve('./plugins'), path.resolve('./themes')]) {
+        let names: string[];
+        try { names = fs.readdirSync(dir); } catch { continue; }
+        for (const name of names) {
+            if (typeof name !== 'string' || name.startsWith('.')) continue;
+            try { if (!fs.statSync(path.join(dir, name)).isDirectory()) continue; } catch { continue; }
+            prefixes.push(toPrefix(name));
+        }
+    }
+    return prefixes;
+}
+
 /**
  * Export all site content
  */
@@ -174,6 +197,9 @@ async function exportSite(options: Record<string, any> = {}) {
 
             for (const table of allTables) {
                 if (CORE_TABLES.includes(table)) continue;
+                // Only plugin/theme tables travel (the import accepts nothing else): never the engine's
+                // own bookkeeping (locks, analytics, search indexes, …), whatever its name.
+                if (!PLUGIN_TABLE_NAME.test(String(table))) continue;
 
                 // 1. Get Schema
                 const schema = await db.getTableSchema(table);
@@ -299,7 +325,11 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                     existing = await User.findByEmail(user.email);
                 }
 
-                if (existing && (!updateExisting || (typeof protectedUser === 'function' && protectedUser(existing.id)))) {
+                // Never rewritten by an import: a network administrator (protectedUser, from the route) and,
+                // on any site, a network administrator's handoff account — the handoff alone manages it
+                // (core/network-handoff).
+                if (existing && (!updateExisting || (typeof protectedUser === 'function' && protectedUser(existing.id))
+                    || require('./network-handoff').isHandoffAccount(existing))) {
                     idMap.users[user.id] = existing.id;
                     results.users.skipped++;
                 } else if (existing && updateExisting) {
@@ -523,6 +553,11 @@ async function importSite(data: any, options: Record<string, any> = {}) {
             'sqlite_sequence', 'migrations'
         ];
 
+        // The ALLOWLIST: a "custom table" is a plugin's or theme's own table, wjp_<slug>_…, for a plugin or
+        // theme installed on this site. Every other name — core tables the list above names, and the ones
+        // it does not (locks, analytics, search indexes, whatever a later migration adds) — is refused.
+        const prefixes = installedTablePrefixes();
+
         for (const table of data.content.custom_tables) {
             try {
                 // Reject anything that is not a plain identifier (blocks dotted/schema-qualified names,
@@ -533,6 +568,9 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                 }
                 if (CORE_TABLES.includes(tableName.toLowerCase())) {
                     throw new Error(`refusing to import into core table '${table.name}'`);
+                }
+                if (!prefixes.some((p) => tableName.toLowerCase().startsWith(p))) {
+                    throw new Error(`refusing to import table '${tableName}': only the tables of a plugin or theme installed on this site (wjp_<slug>_…) can be imported`);
                 }
                 // Defense-in-depth: also refuse SQLite's reserved internal tables (sqlite_master,
                 // sqlite_sequence, sqlite_stat*, …). These pass the simple-identifier shape but are

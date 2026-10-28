@@ -24,20 +24,42 @@ const httpKeepAliveAgent = new http.Agent(KEEPALIVE);
 
 // Verify the upstream server cert (rejectUnauthorized:true) against the cluster CA. Targets are
 // addressed by IP (https://127.0.0.1:PORT) while internal certs carry service CNs, so we override
-// ONLY the hostname check with checkServerIdentity: accept any cert that (a) chains to our CA —
-// enforced by rejectUnauthorized:true + ca — AND (b) has an allowed internal CN. This gives MITM
-// protection without requiring IP SANs in the internal certs.
-function createUpstreamAgent({ ca, key, cert }, allowedCNs = ['backend', 'frontend', 'gateway', 'gateway-internal']) {
+// ONLY the hostname check with checkServerIdentity: accept a cert that (a) chains to our CA —
+// enforced by rejectUnauthorized:true + ca — AND (b) carries the CN of the ROLE the gateway meant to
+// reach. Every node's cert chains to the same CA, so "any cluster CN" would let one role answer for
+// another; the expected identity is therefore bound per agent, one agent per role (upstreamAgents).
+// Separate agents also keep the keep-alive pools apart: a socket verified as one role is never reused
+// for a request meant for another.
+function createUpstreamAgent({ ca, key, cert }, allowedCNs) {
+    const allowed = Array.isArray(allowedCNs) ? allowedCNs.map(String) : [];
+    if (!allowed.length) throw new Error('createUpstreamAgent: the expected upstream identity (CN) is required');
     return new https.Agent({
         ...KEEPALIVE,
         ca, key, cert,
         rejectUnauthorized: true,
         checkServerIdentity: (host, peerCert) => {
             const cn = peerCert && peerCert.subject && peerCert.subject.CN;
-            if (allowedCNs.includes(cn)) return undefined; // accepted
-            return new Error(`Gateway: upstream cert CN '${cn}' not in allowed identities`);
+            if (typeof cn === 'string' && allowed.includes(cn)) return undefined; // accepted
+            return new Error(`Gateway: upstream cert CN '${cn}' is not the expected identity (${allowed.join(', ')})`);
         }
     });
 }
 
-module.exports = { createProxyServer, createUpstreamAgent, httpKeepAliveAgent };
+// The roles a registered target can belong to (routing.ROLE_ROUTES). One verifying agent per role.
+const UPSTREAM_ROLES = ['backend', 'frontend'];
+
+/**
+ * One agent per upstream role, and `forRole(role)` to pick the one whose certificate check expects that
+ * role. An unknown role gets NO agent (null): the caller then refuses the request instead of sending it
+ * with a check that would accept any identity.
+ */
+function upstreamAgents(creds) {
+    const agents = Object.create(null);
+    for (const role of UPSTREAM_ROLES) agents[role] = createUpstreamAgent(creds, [role]);
+    return {
+        forRole: (role) => (typeof role === 'string' && agents[role]) || null,
+        agents,
+    };
+}
+
+module.exports = { createProxyServer, createUpstreamAgent, upstreamAgents, UPSTREAM_ROLES, httpKeepAliveAgent };

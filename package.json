@@ -1,6 +1,6 @@
 {
   "name": "wordjs-gateway",
-  "version": "2.11.7",
+  "version": "2.11.20",
   "license": "MIT",
   "engines": {
     "node": ">=22.0.0"
@@ -27,6 +27,7 @@
     "migrate": "node setup/index.js --migrate",
     "site": "node backend/scripts/site-address.js",
     "media": "node backend/scripts/media-storage.js",
+    "sandbox": "node backend/scripts/plugin-sandbox.js",
     "network": "node backend/scripts/network.js",
     "cluster": "node scripts/cluster.js",
     "node:join": "node scripts/node-join.js",

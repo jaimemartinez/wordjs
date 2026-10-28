@@ -1,8 +1,8 @@
 /**
  * The page CSP's media origin, added at RESPONSE time.
  *
- * next.config.ts bakes the Content-Security-Policy into .next/routes-manifest.json at BUILD time, and a
- * pre-compiled release is built without knowing any site's configuration. Where a site's media is
+ * src/proxy.ts writes the Content-Security-Policy (lib/contentSecurityPolicy.ts) without knowing the site's
+ * media storage, and a pre-compiled release is built without knowing any site's configuration. Where a site's media is
  * served from is RUNTIME configuration (Settings → Media storage: an S3-compatible bucket or a CDN in
  * front of it, backend/src/core/media-storage.ts), so the custom servers (server.js, ../monolith.js)
  * amend the header on its way out instead: exactly ONE origin — the configured media origin — is added

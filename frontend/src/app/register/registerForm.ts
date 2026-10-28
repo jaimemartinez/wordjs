@@ -21,6 +21,7 @@
  */
 
 import { t as translate } from "@/lib/i18n";
+import { passwordTooLong } from "@/lib/passwordRules";
 
 /** Política de contraseña del backend, palabra por palabra. */
 export const PASSWORD_MIN = 8;
@@ -85,7 +86,8 @@ export function validateRegisterDraft(draft: RegisterDraft, t: Translate = spani
         errors.password = t("register.error.passwordRequired");
     } else if (password.length < PASSWORD_MIN) {
         errors.password = fill(t("register.error.passwordShort"), PASSWORD_MIN);
-    } else if (password.length > PASSWORD_MAX) {
+    } else if (passwordTooLong(password)) {
+        // 72 BYTES, the backend's limit (lib/passwordRules): accented letters count double.
         errors.password = fill(t("register.error.passwordLong"), PASSWORD_MAX);
     }
 

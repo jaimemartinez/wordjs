@@ -50,6 +50,7 @@ wrong under the field. If you ever see a browser pop-up while using the admin, i
 | [Settings](settings.md) | General (including **Week starts on**), Reading & Discussion, Writing & comments, Media, Performance & Cache (Redis) |
 | [Emails](emails.md) | Editing the subject and words of every message the site sends, per language; placeholders, the preview, a test to yourself, the layout's colours |
 | [Plugins](plugins.md) | Installing from the Marketplace or a ZIP, permissions, activating, deactivating and deleting |
+| [Audit log and duplicate records](audit-and-integrity.md) | How long the audit log is kept, checking that nobody changed it, the copy to a syslog server or webhook; resolving repeated logins, emails and slugs |
 | [Site address and HTTPS](site-address-and-https.md) | The certificate form, **Automatic Certificate Renewal** for several names, the HTTPS switch, Site address |
 
 This guide covers WordJS itself. Each plugin adds its own screens; what the official plugins do is in the

@@ -15,6 +15,7 @@ import ParticipantSheet from "./ParticipantSheet";
 import { consentT } from "../lib/consentI18n";
 import { PortalPaperConsent } from "./ConsentBits";
 import { WithdrawDeadlineNote } from "./Withdraw";
+import { GroupPicker } from "../lib/GroupPicker";
 import { familyGroupsOf, isCancelled, payStateOf, personName, pruneSelection, type PayFilter, type PortalPerson } from "./participants";
 // «Pagos de cuotas» (conference-manager ≥ 2.18.0): the tab, its data hub and its sheets (feePayments.ts holds the rules).
 import FeePaymentsTab, { FeeSheets, useFeeHub } from "./FeePaymentsTab";
@@ -70,70 +71,7 @@ interface Location {
 // returned_amount / cancelled. Names follow the form (form.ts portalPersonName), as in the admin.
 type Inscription = PortalPerson;
 
-// Combobox for the GROUPING field: search/pick an existing group (with member preview) or create a
-// new one. Module-level (never define a component inside a component — it steals input focus).
-function GroupPicker({ field, value, onChange, groups, id, invalid, describedBy }: any) {
-    const [open, setOpen] = useState(false);
-    const val = value == null ? '' : String(value);
-    const lower = val.trim().toLowerCase();
-    const list = groups || [];
-    const filtered = lower ? list.filter((g: any) => g.name.toLowerCase().includes(lower)) : list;
-    const exact = list.find((g: any) => g.name.toLowerCase() === lower);
-    return (
-        <div className="relative">
-            <input
-                id={id}
-                type="text"
-                required={!!field.is_required}
-                data-field={field.name} aria-invalid={invalid} aria-describedby={describedBy}
-                className={inputCls}
-                placeholder="Buscar grupo existente o escribir uno nuevo…"
-                value={val}
-                onChange={(e) => onChange(e.target.value)}
-                onFocus={() => setOpen(true)}
-                onBlur={() => setTimeout(() => setOpen(false), 180)}
-                autoComplete="off"
-            />
-            {open && (
-                <div className="absolute z-40 left-0 right-0 mt-2 bg-white border border-gray-100 rounded-3xl shadow-2xl max-h-64 overflow-y-auto p-2 animate-in slide-in-from-top-2 duration-200">
-                    {filtered.length === 0 && !val && (
-                        <div className="px-4 py-3 text-xs font-bold text-gray-500 italic">Aún no hay grupos en esta localidad. Escribe para crear el primero.</div>
-                    )}
-                    {filtered.map((g: any) => (
-                        <button
-                            type="button"
-                            key={g.name}
-                            onMouseDown={(e) => { e.preventDefault(); onChange(g.name); setOpen(false); }}
-                            className="w-full text-left px-4 py-3 hover:bg-blue-50 rounded-2xl transition-all group"
-                        >
-                            <div className="flex items-center justify-between gap-2">
-                                <span className="text-sm font-bold text-gray-700 group-hover:text-blue-700 transition-colors truncate">{g.name}</span>
-                                <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest whitespace-nowrap">{g.count} {g.count === 1 ? 'persona' : 'personas'}</span>
-                            </div>
-                            {g.members && g.members.length > 0 && (
-                                <div className="text-[11px] text-gray-400 truncate mt-0.5">{g.members.map((m: any) => m.name).join(', ')}</div>
-                            )}
-                        </button>
-                    ))}
-                    {val.trim() && !exact && (
-                        <button
-                            type="button"
-                            onMouseDown={(e) => { e.preventDefault(); setOpen(false); }}
-                            className="w-full text-left px-4 py-3 mt-1 rounded-2xl text-blue-600 hover:bg-blue-50 font-bold text-sm border-t border-gray-50 transition-all"
-                        >
-                            <i className="fa-solid fa-plus mr-2"></i>Crear grupo «{val.trim()}»
-                        </button>
-                    )}
-                </div>
-            )}
-            {exact && exact.members && exact.members.length > 0 && (
-                <div className="mt-2 text-xs text-gray-600 bg-blue-50/60 rounded-xl px-4 py-2.5 border border-blue-100">
-                    <span className="font-bold text-blue-900">En «{exact.name}» ({exact.count}):</span> {exact.members.map((m: any) => m.name).join(', ')}
-                </div>
-            )}
-        </div>
-    );
-}
+// Combobox for the GROUPING field: lib/GroupPicker.tsx (shared with the admin's edit form since 2.36.22).
 
 function LocationPortalContent() {
     const { addToast } = useToast();
@@ -949,6 +887,7 @@ function LocationPortalContent() {
                                                         value={formData[field.name] ?? ''}
                                                         onChange={(v: string) => setFormData({ ...formData, [field.name]: inputToFormValue(field, v) })}
                                                         groups={groups}
+                                                        className={inputCls}
                                                         invalid={fe.invalid(field.name)}
                                                         describedBy={fe.describedBy(field.name)}
                                                     />

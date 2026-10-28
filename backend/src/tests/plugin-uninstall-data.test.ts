@@ -31,6 +31,8 @@ const SLUG = `zz-uninstall-probe-${process.pid}`;
 const OTHER = `zz-uninstall-other-${process.pid}`;
 const CAP = 'zz_probe_mailbox';
 const PROBE_DIR = path.join(BACKEND, 'plugins', SLUG);
+// A plugin's own options are named after its slug (the options bridge's write allowlist).
+const NS = `zz_uninstall_probe_${process.pid}_`;
 
 before(async () => {
     await database.init({ driver: 'sqlite-native' });
@@ -56,11 +58,13 @@ test('the options bridge records only the options a plugin CREATES — never a s
     const { optionsOwnedBy } = require('../core/plugin-owned-options');
     await updateOption('blogname', 'My site'); // a core setting that exists before the plugin touches it
     const api = require('../core/plugin-api').createPluginApi(SLUG);
-    await runWithContext(SLUG, () => api.options.set('zz_probe_port', '2525'));
-    await runWithContext(SLUG, () => api.options.set('zz_probe_domain', 'mail.example.test'));
-    await runWithContext(SLUG, () => api.options.set('blogname', 'Renamed by the plugin'));
-    assert.deepStrictEqual((await optionsOwnedBy(SLUG)).sort(), ['zz_probe_domain', 'zz_probe_port']);
-    assert.strictEqual(await getOption('zz_probe_port'), 2525);
+    await runWithContext(SLUG, () => api.options.set(`${NS}port`, '2525'));
+    await runWithContext(SLUG, () => api.options.set(`${NS}domain`, 'mail.example.test'));
+    // A site setting is not the plugin's to write at all, so it can never become the plugin's either.
+    await assert.rejects(() => runWithContext(SLUG, () => api.options.set('blogname', 'Renamed by the plugin')), /not writable by plugins/);
+    assert.deepStrictEqual((await optionsOwnedBy(SLUG)).sort(), [`${NS}domain`, `${NS}port`]);
+    assert.strictEqual(await getOption(`${NS}port`), 2525);
+    assert.strictEqual(await getOption('blogname'), 'My site');
 });
 
 test('the ledger itself is off-limits to plugins', () => {
@@ -73,10 +77,11 @@ test('delete-with-data removes its options, revokes its account capability, drop
     const { dbAsync } = database;
     const core = require('../core/plugins');
     const perms = require('../core/plugin-permissions');
-    // Another plugin created an option this one also writes: it stays for that plugin.
+    // Another plugin cannot record this plugin's option — nor a site setting — as its own.
+    await runWithContext(OTHER, () => require('../core/plugin-owned-options').noteOptionWrite(OTHER, `${NS}port`));
     await runWithContext(OTHER, () => require('../core/plugin-owned-options').noteOptionWrite(OTHER, 'zz_shared_key'));
     await updateOption('zz_shared_key', 'x');
-    await runWithContext(SLUG, () => require('../core/plugin-owned-options').noteOptionWrite(SLUG, 'zz_shared_key'));
+    assert.deepStrictEqual(await require('../core/plugin-owned-options').optionsOwnedBy(OTHER), []);
 
     // Two accounts hold the capability the plugin declared.
     await dbAsync.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)', [101, `account_capability:${CAP}`, '1']);
@@ -91,10 +96,10 @@ test('delete-with-data removes its options, revokes its account capability, drop
 
     const result = await core.uninstallPluginData(SLUG, { dropTables: true, accountCapabilities: [CAP] });
 
-    assert.deepStrictEqual(result.optionsRemoved.sort(), ['zz_probe_domain', 'zz_probe_port']);
-    assert.strictEqual(await getOption('zz_probe_port', null), null, 'the plugin option survived');
-    assert.strictEqual(await getOption('zz_shared_key', null), 'x', 'an option another plugin also created was deleted');
-    assert.strictEqual(await getOption('blogname', null), 'Renamed by the plugin', 'a core setting was deleted');
+    assert.deepStrictEqual(result.optionsRemoved.sort(), [`${NS}domain`, `${NS}port`]);
+    assert.strictEqual(await getOption(`${NS}port`, null), null, 'the plugin option survived');
+    assert.strictEqual(await getOption('zz_shared_key', null), 'x', 'an option the plugin never owned was deleted');
+    assert.strictEqual(await getOption('blogname', null), 'My site', 'a core setting was deleted');
 
     assert.strictEqual(result.accountCapabilitiesRevoked, 2);
     assert.deepStrictEqual(await dbAsync.all('SELECT user_id FROM user_meta WHERE meta_key = ?', [`account_capability:${CAP}`]), []);
@@ -110,11 +115,11 @@ test('delete WITHOUT data keeps the options, the capability grants and the stora
     const { getOption } = require('../core/options');
     require('../core/plugin-permissions')._setGrantsInMemory(SLUG, ['settings:read', 'settings:write']); // the previous delete removed them
     const api = require('../core/plugin-api').createPluginApi(SLUG);
-    await runWithContext(SLUG, () => api.options.set('zz_probe_keep', 'kept'));
+    await runWithContext(SLUG, () => api.options.set(`${NS}keep`, 'kept'));
     await database.dbAsync.run('INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, ?)', [103, `account_capability:${CAP}`, '1']);
     const result = await core.uninstallPluginData(SLUG, { dropTables: false, accountCapabilities: [CAP] });
     assert.strictEqual(result.optionsRemoved, undefined);
-    assert.strictEqual(await getOption('zz_probe_keep', null), 'kept');
+    assert.strictEqual(await getOption(`${NS}keep`, null), 'kept');
     assert.strictEqual((await database.dbAsync.all('SELECT user_id FROM user_meta WHERE meta_key = ?', [`account_capability:${CAP}`])).length, 1);
 });
 

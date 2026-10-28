@@ -89,6 +89,11 @@ const log = require('./module-logger').moduleLogger('core/sandbox-macos');
  * boundary, and a PATH-resolved `sandbox-exec` is a PATH-hijack away from being a no-op wrapper that
  * silently execs the child unconfined. The probe additionally requires the file to EXIST before it will
  * report anything other than 'unsupported'.
+ *
+ * Apple marks sandbox-exec deprecated (its man page has said so since macOS 10.12) while every release
+ * still ships and enforces it. The probe is what keeps this honest: on a release where the binary is gone
+ * or no longer confines, the state is 'unsupported' or 'degraded', never 'active', and the fail-closed
+ * policy refuses plugins rather than starting them unconfined.
  */
 const SEATBELT_BIN = '/usr/bin/sandbox-exec';
 
@@ -263,6 +268,16 @@ export type SeatbeltProfileOptions = {
      * network-granted plugin, whose egress stays bounded by the in-process egress guard exactly as today.
      */
     denyNetwork?: boolean;
+    /**
+     * For a network-GRANTED plugin: the TCP ports it may connect to (the same list the Linux shim enforces
+     * with Landlock). Every other TCP port and every loopback destination is refused by the kernel.
+     */
+    egressTcpPorts?: number[];
+    /**
+     * The loopback TCP ports of destinations an administrator approved for this plugin (a relay or a
+     * tunnel on the host itself): allowed again after the loopback refusal, those ports only.
+     */
+    loopbackTcpPorts?: number[];
     /** The application root. Read-only to the child except for the writable zones above. */
     appRoot: string;
     /** Narrow code/dependency roots. When present these replace the legacy whole-appRoot read grant. */
@@ -295,6 +310,10 @@ export type SeatbeltProfileOptions = {
 function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     const denyNetwork = !!(opts && opts.denyNetwork);
     const rawNode = (opts && opts.nodePath) || process.execPath;
+    const egressPorts = Array.from(new Set((Array.isArray(opts && opts.egressTcpPorts) ? (opts.egressTcpPorts as number[]) : [53, 80, 443])
+        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535))).sort((a, b) => a - b);
+    const loopbackPorts = Array.from(new Set((Array.isArray(opts && opts.loopbackTcpPorts) ? (opts.loopbackTcpPorts as number[]) : [])
+        .filter((n) => Number.isInteger(n) && n >= 1 && n <= 65535))).sort((a, b) => a - b);
 
     // ── Resolve every caller-supplied path to the spellings the kernel will actually check ──────────
     const requestedReadRoots = Array.isArray(opts && opts.readOnlyDirs)
@@ -394,11 +413,27 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     //
     // THIS IS THE ONE PLACE THIS PROFILE IS WEAKER THAN THE WINDOWS APPCONTAINER, and it is stated rather
     // than hidden: an AppContainer cannot even enumerate objects whose ACL omits its SID.
-    L.push(';; --- metadata-only reads (existence/stat), everywhere ---');
+    // NARROWED to what that resolution touches: the ancestors of every granted root (as literals, so a
+    // sibling of an ancestor stays invisible) and the granted trees themselves. A stat of anything else is
+    // refused, so a plugin cannot probe for the existence of files outside its grants.
+    const metadataRoots = uniq([...appRoots, ...zones, ...runtimePrefixes, ...OS_EXEC_ROOTS.map(([p]) => p), ...OS_DATA_ROOTS.map(([p]) => p)]);
+    const metadataAncestors = uniq([...metadataRoots, ...appFiles, ...allowedNodeMapPaths].flatMap((p) => {
+        const out: string[] = [];
+        let cur = ppath.dirname(p);
+        while (cur && cur !== '/' && cur !== '.') { out.push(cur); cur = ppath.dirname(cur); }
+        return out;
+    })).filter((p) => sbplPath(p) !== null);
+    L.push(';; --- metadata-only reads (existence/stat): the ancestors of every grant, and the grants ---');
     L.push(';; Node lstats every ancestor of its main module (realpath resolution) and every require()');
-    L.push(';; candidate. Denying this kills the child before JS runs. Discloses SHAPE, never CONTENT --');
-    L.push(';; the one row where this profile is weaker than the Windows AppContainer.');
-    L.push('(allow file-read-metadata)');
+    L.push(';; candidate. Denying those kills the child before JS runs. Discloses SHAPE, never CONTENT, and');
+    L.push(';; only along the paths that lead to what this profile grants anyway.');
+    L.push('(allow file-read-metadata');
+    L.push('    (literal "/")');
+    for (const p of metadataAncestors) L.push(`    (literal ${lit(p)})`);
+    for (const p of metadataRoots) L.push(`    (subpath ${lit(p)})`);
+    for (const p of appFiles) L.push(`    (literal ${lit(p)})`);
+    for (const p of allowedNodeMapPaths) L.push(`    (literal ${lit(p)})`);
+    L[L.length - 1] += ')';
     L.push('(allow file-read-data (literal "/")) ;; Node realpath reads the root directory vnode; no subdirectory or file content');
     L.push('');
 
@@ -489,8 +524,17 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
     // This matches the process-tree semantics of bwrap and the base Seatbelt policies used by Chromium and
     // Codex: descendants may exec, and inherit every file/network/process restriction. W^X is the native-code
     // boundary: writable trees never receive file-map-executable, so a plugin cannot plant a new executable.
+    // EXEC IS THE NODE IMAGE ONLY. The Linux floor refuses process creation outright; here a descendant
+    // may still start, but only as the installed Node binary (both spellings of its path) - never a shell,
+    // an interpreter or another program on the host.
     L.push(';; --- process tree: descendants inherit every restriction in this Seatbelt domain ---');
-    L.push('(allow process-exec)                 ;; bwrap-equivalent inherited process-tree containment');
+    if (allowedNodeMapPaths.length) {
+        L.push('(allow process-exec');
+        for (const n of allowedNodeMapPaths) L.push(`    (literal ${lit(n)})`);
+        L[L.length - 1] += ') ;; the installed Node image only';
+    } else {
+        L.push(';; (no Node image survived the W^X filter: nothing may be executed)');
+    }
     L.push('(allow process-fork)                 ;; descendants remain in the same Seatbelt domain');
     for (const n of allowedNodeMapPaths) L.push(`(allow file-read* file-map-executable (literal ${lit(n)})) ;; installed Node image`);
     if (droppedNodeMapPaths > 0) {
@@ -591,10 +635,18 @@ function buildSeatbeltProfile(opts: SeatbeltProfileOptions): string {
         // arrangement on Linux, where the socket rule alone changes. Inbound is
         // NOT granted: a plugin has no business accepting inbound connections, and denying it removes a
         // whole class of "plugin opens a listener on the operator's machine" surprises.
-        L.push(';; This plugin holds the admin `network` grant: outbound is opened at the kernel level and');
-        L.push(';; the in-process egress guard remains the authority on WHERE it may go. Inbound (network-BIND');
-        L.push(';; / listen) is NOT granted -- a plugin has no business accepting connections.');
-        L.push('(allow network-outbound)');
+        L.push(';; This plugin holds the admin `network` grant: outbound is opened at the kernel level for the');
+        L.push(';; TCP ports it may use, and the in-process egress guard remains the authority on WHERE it may go.');
+        L.push(';; Inbound (network-BIND / listen) is NOT granted -- a plugin has no business accepting connections.');
+        for (const port of egressPorts) L.push(`(allow network-outbound (remote tcp "*:${port}"))`);
+        L.push('(allow network-outbound (remote udp "*:*"))                 ;; UDP clients (DNS to a resolver), as on Linux');
+        L.push('(allow network-outbound (remote unix-socket (path-literal "/private/var/run/mDNSResponder"))) ;; getaddrinfo()');
+        L.push(';; The host itself is not a destination: loopback services (the backend, its database, a local');
+        L.push(';; cache) stay out of reach whatever the port. After the allows above, so it wins over them; only');
+        L.push(';; an administrator-approved loopback destination is allowed again, on its own port.');
+        L.push('(deny network-outbound (remote ip "localhost:*"))');
+        if (loopbackPorts.length) L.push(';; Loopback destinations an administrator approved for this plugin, on their ports only.');
+        for (const port of loopbackPorts) L.push(`(allow network-outbound (remote tcp "localhost:${port}"))`);
         L.push('(allow file-read* (literal "/private/etc/resolv.conf") (literal "/etc/resolv.conf") (subpath "/private/var/run/resolv.conf")) ;; DNS configuration');
         L.push('(allow mach-lookup');
         L.push('    (global-name "com.apple.SystemConfiguration.configd") ;; interface/DNS configuration');
@@ -646,6 +698,9 @@ function auditProfile(profile: string): string[] {
 
     if (/\(allow\s+default\)/.test(body)) problems.push('(allow default) present: SBPL is last-match-wins, this annihilates (deny default)');
     if (/\(allow\s+process-exec\*\)/.test(body)) problems.push('(allow process-exec*) present: exec must never be granted unrestricted');
+    if (/\(allow\s+process-exec\s*\)/.test(body)) problems.push('unfiltered (allow process-exec) present: only the Node image may be executed');
+    if (/\(allow\s+file-read-metadata\s*\)/.test(body)) problems.push('unfiltered (allow file-read-metadata) present: stat must stay on the paths to the grants');
+    if (/\(allow\s+network-outbound\s*\)/.test(body)) problems.push('unfiltered (allow network-outbound) present: egress must name its ports');
     if (/\(allow\s+sysctl-read\s*\)/.test(body)) problems.push('blanket (allow sysctl-read) present: kern.procargs2 exposes another process environment');
     if (/\(allow\s+mach-lookup\s*\)/.test(body)) problems.push('blanket (allow mach-lookup) present: the bootstrap namespace reaches launchd');
     if (/network-bind|network-inbound/.test(body)) problems.push('an inbound network grant is present: a plugin must never listen');
@@ -763,14 +818,19 @@ function getSeatbeltState() { return seatbeltState; }
  */
 const PROBE_SRC = [
     'var fs=require("fs");var net=require("net");var os=require("os");var cp=require("child_process");',
-    'var out={stage:"RESULT",wrote:false,readCode:"NONE",homeCode:"NONE",descendantReadCode:"NONE",netCode:"SKIP"};',
-    'var target=process.argv[1];var denyNet=process.argv[2]==="1";var forbidden=process.argv[3];',
+    'var out={stage:"RESULT",wrote:false,readCode:"NONE",homeCode:"NONE",descendantReadCode:"NONE",netCode:"SKIP",portCode:"SKIP",shCode:"NONE",statCode:"NONE",tunnelCode:"SKIP"};',
+    'var target=process.argv[1];var denyNet=process.argv[2]==="1";var forbidden=process.argv[3];var loopPort=Number(process.argv[4]||0);var hidden=process.argv[5]||"";',
     'function reportFinal(){try{process.send(out,function(){process.exit(0);});}catch(e){process.exit(5);}}',
     'function attemptSpawn(){out.stage="SPAWN";out.descendantReadCode="ATTEMPTED";try{process.once("message",function(m){if(!m||m.wordjsProbeSpawn!==true){process.exit(6);return;}var settled=false;var child=null;var done=function(v){if(settled){return;}settled=true;out.descendantReadCode=v;try{if(child){child.kill();}}catch(e){}reportFinal();};try{var childSrc="var fs=require(\\"fs\\");try{fs.readFileSync(process.env.WORDJS_SEATBELT_PROBE_FORBIDDEN);process.exit(10);}catch(e){process.exit(e&&e.code===\\"EPERM\\"?20:e&&e.code===\\"EACCES\\"?21:22);}";child=cp.spawn(process.env.WORDJS_SEATBELT_PROBE_NODE,["-e",childSrc],{stdio:"ignore"});child.on("error",function(e){done((e&&e.code)||"THROW");});child.on("close",function(code,signal){done(code===10?"OPEN":code===20?"EPERM":code===21?"EACCES":(signal||"FAIL"));});}catch(e){done((e&&e.code)||"THROW");}});process.send(out);}catch(e){process.exit(5);}}',
     'setTimeout(function(){process.exit(4);},12000);',
     'if(!process.send){process.exit(3);}',
-    'function tryNetwork(){var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}attemptSpawn();};try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
-    'function startProbe(){try{fs.writeFileSync(target,"wjs");out.wrote=fs.readFileSync(target,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}try{fs.readFileSync(forbidden);out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}tryNetwork();}',
+    // The egress tunnel, as a network-granted plugin uses it (core/egress-tunnel).
+    'var __wjtDone=function(p,q){out.tunnelCode="public="+p+";metadata="+q;attemptSpawn();};',
+    'function tryTunnel(){' + require('./egress-tunnel').probeTunnelSnippet('__wjtDone') + 'setTimeout(function(){if(out.tunnelCode==="SKIP"){out.tunnelCode="TIMEOUT";attemptSpawn();}},8000);}',
+    'function tryPort(){if(!loopPort){tryTunnel();return;}var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.portCode=c;try{if(s){s.destroy();}}catch(e){}tryTunnel();};try{s=net.connect(loopPort,"127.0.0.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
+    'function tryNetwork(){var done=false;var s=null;var settle=function(c){if(done){return;}done=true;out.netCode=c;try{if(s){s.destroy();}}catch(e){}tryPort();};try{s=net.connect(443,"1.1.1.1");s.on("error",function(e){settle((e&&e.code)||"THROW");});s.on("connect",function(){settle("CONNECTED");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
+    'function startProbe(){try{fs.writeFileSync(target,"wjs");out.wrote=fs.readFileSync(target,"utf8")==="wjs";}catch(e){out.wrote=false;out.writeCode=(e&&e.code)||"THROW";}try{fs.readFileSync(forbidden);out.readCode="OPEN";}catch(e){out.readCode=(e&&e.code)||"THROW";}try{fs.readdirSync(os.homedir());out.homeCode="OPEN";}catch(e){out.homeCode=(e&&e.code)||"THROW";}try{fs.statSync(hidden);out.statCode="OPEN";}catch(e){out.statCode=(e&&e.code)||"THROW";}trySh();}',
+    'function trySh(){var done=false;var settle=function(c){if(done){return;}done=true;out.shCode=c;tryNetwork();};try{var sh=cp.spawn("/bin/sh",["-c","exit 0"],{stdio:"ignore"});sh.on("error",function(e){settle((e&&e.code)||"THROW");});sh.on("close",function(code){settle(code===0?"OPEN":"FAIL");});}catch(e){settle((e&&e.code)||"THROW");}setTimeout(function(){settle("TIMEOUT");},4000);}',
     'process.once("message",function(m){if(!m||m.wordjsProbeBoot!==true){process.exit(7);return;}startProbe();});process.send({stage:"BOOT"});',
 ].join('');
 
@@ -797,14 +857,14 @@ function logSafe(v: any): string {
     return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
 }
 
-type ProbeMsg = { stage?: string; wrote?: boolean; readCode?: string; homeCode?: string; descendantReadCode?: string; netCode?: string };
+type ProbeMsg = { stage?: string; wrote?: boolean; readCode?: string; homeCode?: string; descendantReadCode?: string; netCode?: string; portCode?: string; tunnelCode?: string; shCode?: string; statCode?: string };
 
 /**
  * Run PROBE_SRC once. `pre` is the wrapper argv (`[sandbox-exec, -p, <profile>]`) or [] for the UNCONFINED
  * control. Resolves null when the child did not complete an IPC round-trip and exit cleanly — which for
  * the control is itself a reason to report 'degraded', because an unmeasurable control certifies nothing.
  */
-function runProbeChild(pre: string[], target: string, forbidden: string, denyNet: boolean): Promise<ProbeMsg | null> {
+function runProbeChild(pre: string[], target: string, forbidden: string, denyNet: boolean, loopPort: number = 0): Promise<ProbeMsg | null> {
     return new Promise<ProbeMsg | null>((res) => {
         let proc: any = null, msg: ProbeMsg | null = null, done = false, stderr = '', overall: any = null;
         let spawnFailure = '';
@@ -819,7 +879,8 @@ function runProbeChild(pre: string[], target: string, forbidden: string, denyNet
         // alive past its own IPC teardown.
         overall = setTimeout(() => finish(null), 25000);
         if ((overall as any).unref) (overall as any).unref();
-        const argv = [...pre, process.execPath, '-e', PROBE_SRC, target, denyNet ? '1' : '0', forbidden];
+        // argv[4]: a loopback port nobody may reach; argv[5]: the outside-zone canary, whose mere stat() must be refused.
+        const argv = [...pre, process.execPath, '-e', PROBE_SRC, target, denyNet ? '1' : '0', forbidden, String(loopPort || 0), forbidden];
         try {
             proc = spawn(argv[0], argv.slice(1),
                 {
@@ -838,8 +899,10 @@ function runProbeChild(pre: string[], target: string, forbidden: string, denyNet
                 stderr = (stderr + String(chunk)).slice(-1024);
             });
         }
+        // The child's tunnel frames are served by the real host side of the egress tunnel.
+        try { require('./egress-tunnel').attachProbeTunnel(proc); } catch { /* the tunnel check then fails */ }
         proc.on('message', (m: any) => {
-            if (!m || typeof m !== 'object') return;
+            if (!m || typeof m !== 'object' || m.kind === 'net') return;
             msg = m as ProbeMsg;
             if (msg.stage === 'BOOT') {
                 try { proc.send({ wordjsProbeBoot: true }); } catch { /* close will fail the probe */ }
@@ -918,7 +981,6 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         }
         const appRoot = pathm.resolve(__dirname, '..', '..');
         const target = pathm.join(dir, 'control.txt');
-        const allowedTarget = pathm.join(dir, 'control-network.txt');
         const controlTarget = pathm.join(dir, 'control-unconfined.txt');
         const forbidden = pathm.join(forbiddenDir, 'canary.txt');
         try { fsm.writeFileSync(forbidden, 'outside-zone-canary', { mode: 0o600 }); } catch {
@@ -930,7 +992,6 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
         // The probe is inline JavaScript, so it needs no application-code read grant. It deliberately uses
         // the installed runtime directly, exactly like production and the reference Seatbelt profiles.
         const profile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: [], denyNetwork: true, appRoot, nodePath: process.execPath, logDenials: true });
-        const allowedProfile = buildSeatbeltProfile({ writableDirs: [dir], readOnlyDirs: [], denyNetwork: false, appRoot, nodePath: process.execPath, logDenials: true });
 
         // A profile that fails its own text invariants is never launched. This costs microseconds and it
         // is the only check in this file that runs on the SHIPPED profile on the SHIPPED host.
@@ -938,13 +999,19 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
 
         let confined: ProbeMsg | null = null;
         let control: ProbeMsg | null = null;
-        let allowed: ProbeMsg | null = null;
+        // A loopback listener: the control reaches it, the confined child must be refused by the kernel.
+        let loop: any = null;
+        let loopPort: number;
+        try {
+            loop = require('net').createServer((sock: any) => sock.end());
+            await new Promise<void>((resolve, reject) => { loop.once('error', reject); loop.listen(0, '127.0.0.1', resolve); });
+            loopPort = Number(loop.address().port) || 0;
+        } catch { loopPort = 0; }
         if (selfAudit.length === 0) {
-            confined = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(profile, [])], target, forbidden, true);
-            control = await runProbeChild([], controlTarget, forbidden, true);
-            // The network-granted shape must retain every non-network denial and actually permit egress.
-            allowed = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(allowedProfile, [])], allowedTarget, forbidden, false);
+            confined = await runProbeChild([SEATBELT_BIN, ...seatbeltArgs(profile, [])], target, forbidden, true, loopPort);
+            control = await runProbeChild([], controlTarget, forbidden, true, loopPort);
         }
+        try { if (loop) loop.close(); } catch { /* */ }
         // Always removed, on every exit path — a probe that leaks one temp dir per failed boot is exactly
         // the class of probe-temp leak this module must avoid.
         try { fsm.rmSync(dir, { recursive: true, force: true }); } catch { /* best effort */ }
@@ -962,19 +1029,23 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
             && control.readCode === 'OPEN'
             && control.homeCode === 'OPEN'
             && control.descendantReadCode === 'OPEN'
-            && !refused(control.netCode);
+            && !refused(control.netCode)
+            && control.portCode === 'CONNECTED' && control.shCode === 'OPEN' && control.statCode === 'OPEN';
         const controlOk = !!(confined && confined.wrote === true);  // granted write really worked
         const readRefused = !!(confined && refused(confined.readCode));
         const homeRefused = !!(confined && refused(confined.homeCode));
         const descendantConfined = !!(confined && refused(confined.descendantReadCode));
         const netRefused = !!(confined && refused(confined.netCode));
-        const allowedShape = !!allowed && allowed.wrote === true
-            && refused(allowed.readCode) && refused(allowed.homeCode) && refused(allowed.descendantReadCode)
-            && allowed.netCode === 'CONNECTED';
+        // Only the Node image may be executed, and a path outside every grant cannot even be stat()ed.
+        const execAndStatRefused = (m: ProbeMsg | null) => !!(m && refused(m.shCode) && refused(m.statCode));
+        // A network-granted plugin has the SAME profile (no network of its own) and reaches the network
+        // through the host egress tunnel: a public host opens through it, the metadata address is refused.
+        const tunnelOk = !!(confined && require('./egress-tunnel').probeTunnelOk(confined.tunnelCode));
+        const loopRefused = !!(confined && (refused(confined.portCode) || !loopPort));
         if (selfAudit.length === 0 && ipcOk && controlRan && controlClean && controlOk
-            && readRefused && homeRefused && descendantConfined && netRefused && allowedShape) {
+            && readRefused && homeRefused && descendantConfined && netRefused && loopRefused && execAndStatRefused(confined) && tunnelOk) {
             seatbeltState = 'active';
-            log.info('[Sandbox] macOS Seatbelt confinement ACTIVE for both network policies: deny-by-default reads, scoped writes, trusted Node descendants inherit confinement; only outbound network changes with the grant.');
+            log.info('[Sandbox] macOS Seatbelt confinement ACTIVE: deny-by-default reads, scoped writes, no network of its own for any plugin, trusted Node descendants inherit confinement; network-granted plugins go through the host egress tunnel.');
             return 'active';
         }
         seatbeltState = 'degraded';
@@ -986,7 +1057,9 @@ function probeSeatbelt(): Promise<'active' | 'degraded' | 'unsupported' | 'disab
             + `homeRead=${homeRefused ? 'refused' : logSafe((confined && confined.homeCode) || 'unknown')} `
             + `descendantRead=${descendantConfined ? 'refused' : logSafe((confined && confined.descendantReadCode) || 'unknown')} `
             + `rawIpConnect=${netRefused ? 'refused' : logSafe((confined && confined.netCode) || 'unknown')} `
-            + `networkGrantedShape=${allowedShape ? 'ok' : 'FAILED'}`);
+            + `shellExec=${logSafe((confined && confined.shCode) || 'unknown')} outsideStat=${logSafe((confined && confined.statCode) || 'unknown')} `
+            + `loopbackPort=${loopRefused ? 'refused' : logSafe((confined && confined.portCode) || 'unknown')} `
+            + `egressTunnel=${tunnelOk ? 'ok' : logSafe((confined && confined.tunnelCode) || 'unknown')}`);
         return 'degraded';
     })();
     return seatbeltProbe;

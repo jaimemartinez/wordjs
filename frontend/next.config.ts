@@ -3,15 +3,6 @@ import type { NextConfig } from "next";
 const path = require('path');
 const localConfigModule = (filename: string) => path.resolve(__dirname, filename);
 
-// THE hosts a video embed may come from — the SAME module `src/lib/sanitize.ts` reads, so the CSP and
-// the sanitizer can no longer disagree. See embed-hosts.js for what the hand-written list broke.
-//
-// Next 16 transpiles this TypeScript file into an in-memory `next.config.compiled.js`. On Node 22/24,
-// that virtual CommonJS module has no physical parent from which `require('./embed-hosts.js')` can
-// resolve, even though the helper exists beside this source file. Resolve local config helpers against
-// the real frontend directory explicitly; package/builtin requires are unaffected.
-const { ALLOWED_EMBED_HOSTS } = require(localConfigModule('embed-hosts.js')) as { ALLOWED_EMBED_HOSTS: string[] };
-
 // Real app version exposed to the client (editor chrome, about panels). Read from the ROOT
 // package.json — release bumps touch that one; frontend/package.json is pinned at 0.1.0 and never
 // versioned. fs+JSON.parse (not a JSON import) so it compiles cleanly under next.config.ts.
@@ -152,88 +143,16 @@ const nextConfig: NextConfig = {
     root: require('path').resolve(__dirname, '..'),
   },
   async headers() {
-    // SECURITY: baseline security headers for every route. The KEY anti-clickjacking control is
-    // `frame-ancestors 'self'` (plus the legacy X-Frame-Options: SAMEORIGIN); object-src 'none' +
-    // base-uri 'self' close common injection vectors. Those are the real value here.
-    //
-    // frame-ancestors is 'self' (NOT 'none') on purpose: WordJS frames its OWN pages same-origin —
-    // the theme Customizer (/admin/themes/customize) previews the live site in an <iframe src="/">,
-    // and other admin surfaces embed same-origin content. 'self' still fully blocks CROSS-origin
-    // framing (an attacker's site can't frame WordJS → no clickjacking); 'none' additionally blocked
-    // the app's own same-origin preview, which broke the Customizer (blank/errored iframe). This is
-    // the same relaxation WordPress uses for its Customizer preview.
-    //
-    // script-src: 'unsafe-eval' is GONE. It was here for the Puck visual editor, which no longer exists.
-    // Evidence for the removal: the real production client build (.next, 91 chunks) contains zero `eval(`
-    // and zero `new Function(`; the only two `Function("` occurrences are core-js's and decimal.js's
-    // global-object fallbacks, which short-circuit on globalThis/self and are unreachable in a browser.
-    // No WebAssembly in client chunks, and every shipped plugin admin bundle (marketplace/plugins/*/dist)
-    // is clean too. Test: src/lib/__tests__/embedHostsCsp.test.ts asserts script-src never regains it.
-    //
-    // What DOES stay in script-src, because removing it breaks the app (a regression):
-    //   • blob: — the admin loads each plugin's frontend bundle via `import(URL.createObjectURL(blob))`
-    //     (lib/pluginBundleLoader.ts). Without script-src blob:, every plugin admin UI + its icons fail
-    //     to render. (This was the cause of the "no icons" regression.)
-    //   • 'unsafe-inline' — Next.js App Router emits inline bootstrap/hydration <script> tags; a full
-    //     per-request nonce migration is out of scope. (So script-src isn't an XSS backstop today — the
-    //     server-side sanitizer in lib/sanitize.ts is the real XSS defense.)
-    // worker-src blob: — libs that spawn workers from a blob URL. font-src allows the Google Fonts CDN.
-    // frame-src is DERIVED from ALLOWED_EMBED_HOSTS (embed-hosts.js) — the list the VideoEmbed block
-    // actually resolves URLs against. It used to be written out by hand, next to a comment claiming it
-    // covered "the sanitizer's permitted embeds" while naming a DIFFERENT list: youtube-nocookie.com
-    // was accepted by the block and blocked by this header, so a privacy-enhanced YouTube embed became
-    // an empty hole with no "Unsupported video URL" marker. Deriving it means a new provider can only
-    // be added in one place. Test: src/lib/__tests__/embedHostsCsp.test.ts.
-    // Resource directives (script/style/font/img) allow https: — the app loads its OWN theme assets
-    // (fonts under /uploads/fonts, theme CSS/JS, images) over https.
-    //
-    // The old justification here — "the Puck editor renders the theme inside an about:srcdoc iframe,
-    // where the CSP keyword 'self' does NOT resolve to the page origin" — is DEAD: Puck is gone, there
-    // is no srcdoc iframe anywhere in frontend/src, and Verso's canvas is an ordinary same-origin route
-    // (<iframe src="/admin/canvas-frame">), where 'self' resolves normally.
-    //
-    // The TRUE reason https: remains in script-src is the bundled analytics-tag plugin: its public
-    // loader (marketplace/plugins/analytics-tag/public/loader.js) injects <script> elements pointing at
-    // https://www.googletagmanager.com/gtag/js, https://plausible.io/js/script.js, and — the blocker for
-    // a static allow-list — an ADMIN-ENTERED Matomo origin (validated only as https, different per site).
-    // This header is baked at BUILD time and cannot know that per-site origin, so no explicit origin list
-    // can be written here today. To narrow it later: proxy the admin-entered Matomo origin same-origin
-    // (or render it into a per-request header), then replace https: with an explicit origin allow-list —
-    // googletagmanager.com + plausible.io + the proxied Matomo path. Dropping https: outright without
-    // that is a product decision (it disables third-party analytics tags), not a cleanup.
-    //
-    // These resource directives are NOT the XSS line of defense anyway (script-src still carries
-    // 'unsafe-inline' for the Next.js bootstrap; the server-side sanitizer is the XSS control). The REAL
-    // value kept here is the structural set: frame-ancestors 'self' (cross-origin clickjacking),
-    // object-src 'none', base-uri 'self'.
-    // 'unsafe-eval' is DEVELOPMENT-ONLY. React's development build calls eval() for its debugging
-    // features (reconstructing component stacks across environments) and, served the strict header,
-    // logs "eval() is not supported in this environment … React requires eval() in development mode"
-    // on every page — the app still works, but a dev console painted red on load hides real errors.
-    // React never uses eval() in production, the shipped chunks contain none (measured), and Vitest runs
-    // with NODE_ENV=test, so the strict production shape is what the tests pin and what `next start`
-    // serves. Keyed on === 'development' precisely so no other environment inherits the allowance.
-    const scriptSrc = process.env.NODE_ENV === 'development'
-      ? "script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:"
-      : "script-src 'self' 'unsafe-inline' blob: https:";
-    const csp = [
-      "default-src 'self'",
-      scriptSrc,
-      "worker-src 'self' blob:",
-      "style-src 'self' 'unsafe-inline' https:",
-      "img-src 'self' data: blob: https:",
-      "font-src 'self' data: https:",
-      "connect-src 'self' https: http: ws: wss:",
-      ["frame-src 'self'", ...ALLOWED_EMBED_HOSTS.map((h) => `https://${h}`)].join(' '),
-      "frame-ancestors 'self'",
-      "object-src 'none'",
-      "base-uri 'self'",
-    ].join('; ');
+    // SECURITY: baseline security headers for every route. The Content-Security-Policy is NOT here: it is
+    // written per request by src/proxy.ts (lib/contentSecurityPolicy.ts), because the documents that render
+    // per request get a fresh script nonce and the cached public pages get the script origins their active
+    // plugins declare — neither of which a header fixed at build time can carry. The anti-clickjacking
+    // X-Frame-Options: SAMEORIGIN stays here next to the policy's frame-ancestors 'self' (the theme
+    // Customizer frames the site same-origin, so 'none' would break it).
     return [
       {
         source: '/:path*',
         headers: [
-          { key: 'Content-Security-Policy', value: csp },
           { key: 'X-Frame-Options', value: 'SAMEORIGIN' },
           { key: 'X-Content-Type-Options', value: 'nosniff' },
           { key: 'Referrer-Policy', value: 'strict-origin-when-cross-origin' },
@@ -254,7 +173,7 @@ const nextConfig: NextConfig = {
           // user. ONE value for every route on purpose: a document keeps the policy it was LOADED with,
           // and the admin is usually reached by a client-side navigation (/login → /admin), so an
           // /admin-only value would not apply until the next full reload.
-          { key: 'Permissions-Policy', value: 'camera=(self), microphone=(), geolocation=(), browsing-topics=()' },
+          { key: 'Permissions-Policy', value: 'camera=(self), microphone=(self), geolocation=(), browsing-topics=()' },
         ],
       },
       {
@@ -280,8 +199,13 @@ const nextConfig: NextConfig = {
     // ORDER MATTERS: Next applies matching beforeFiles rules one after another, so with '/' first its
     // result (/wjs-site/<host>) was rewritten again by '/:path+' into a path that does not exist. With
     // '/:path+' first, neither rule matches what the other produced.
+    //
+    // Next's own assets (`/_next/...`) and `/favicon.ico` are never a site's page: src/proxy.ts does not
+    // run there (its matcher leaves them out), so it cannot remove a client's copy of the header on those
+    // paths, and the rule must not match them either — an asset request would otherwise be answered with
+    // a page. The gateway and the monolith drop a client's header too (gateway/src/host-edge.js).
     const multisiteRewrites = [
-      { source: '/:path+', has: SITE_ROUTE_HAS, destination: '/wjs-site/:siteHost/:path+' },
+      { source: '/:path((?!_next/|favicon\\.ico$).+)', has: SITE_ROUTE_HAS, destination: '/wjs-site/:siteHost/:path' },
       { source: '/', has: SITE_ROUTE_HAS, destination: '/wjs-site/:siteHost' },
     ];
 
