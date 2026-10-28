@@ -94,6 +94,16 @@ describe('frame-src is derived from ALLOWED_EMBED_HOSTS', () => {
       }
     });
 
+    it('audio and video a page builds from its own API (blob: URLs) can play, and nothing wider', async () => {
+      // Without media-src the policy falls back to default-src 'self', and <audio>/<video> refuse a blob:
+      // URL (MEDIA_ERR_SRC_NOT_SUPPORTED) while <img> takes it. No data:, no remote host.
+      for (const opts of [{}, { nonce: 'abc' }]) {
+        const csp = await cspDirectives(opts);
+        expect(csp.get('media-src')).toEqual(["'self'", 'blob:']);
+        expect(csp.get('default-src')).toEqual(["'self'"]);
+      }
+    });
+
     it('next.config no longer fixes a policy at build time: src/proxy.ts writes it per request', async () => {
         const groups = await (nextConfig.headers as () => Promise<any[]>)();
         const keys = groups.flatMap((g: any) => (g.headers as Array<{ key: string }>).map((h) => h.key.toLowerCase()));

@@ -76,6 +76,8 @@ export function contentSecurityPolicy({ nonce, scriptOrigins = [], dev = false }
         "worker-src 'self' blob:",
         "style-src 'self' 'unsafe-inline' https:",
         "img-src 'self' data: blob: https:",
+        // A page that fetches media through its own authenticated API can only play it from a blob: URL.
+        "media-src 'self' blob:",
         "font-src 'self' data: https:",
         "connect-src 'self' https: http: ws: wss:",
         ["frame-src 'self'", ...ALLOWED_EMBED_HOSTS.map((h: string) => `https://${h}`)].join(' '),
