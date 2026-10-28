@@ -90,15 +90,29 @@ export function attributionHtml(text: unknown): string {
 }
 
 /**
- * A tile URL template Leaflet may fetch: https only (the site CSP allows https images), with {z} {x} {y}.
- * Anything else falls back to the OpenStreetMap standard tiles.
+ * Whether `url` is a tile URL template a map may use: https only (the site CSP allows https images), with
+ * {z} {x} {y}, optionally {s} and {r} and no other placeholder (Leaflet would fill one from its options), and
+ * no user name or password. The same rules as the server's check of the site setting (backend core/map-tiles).
  */
-export function safeTileUrl(url: unknown): string {
-    if (typeof url !== "string") return DEFAULT_TILE_URL;
+export function isValidTileUrl(url: unknown): url is string {
+    if (typeof url !== "string") return false;
     const v = url.trim();
-    if (!/^https:\/\/[^\s"'<>]+$/i.test(v)) return DEFAULT_TILE_URL;
-    if (!v.includes("{z}") || !v.includes("{x}") || !v.includes("{y}")) return DEFAULT_TILE_URL;
-    return v;
+    if (v.length > 512 || !/^https:\/\/[^\s"'<>\`]+$/i.test(v)) return false;
+    const names = Array.from(v.matchAll(/\{([^{}]*)\}/g), (m) => m[1]);
+    if (!names.every((n) => ["s", "z", "x", "y", "r"].includes(n))) return false;
+    if (!["z", "x", "y"].every((n) => names.includes(n))) return false;
+    const filled = v.replace(/\{(?:s|z|x|y|r)\}/g, "0");
+    if (/[{}]/.test(filled)) return false;
+    let parsed: URL;
+    try { parsed = new URL(filled); } catch { return false; }
+    if (parsed.protocol !== "https:" || !parsed.hostname || parsed.username || parsed.password) return false;
+    const authority = filled.slice("https://".length).split(/[/?#]/)[0];
+    return !!authority && authority.toLowerCase() === parsed.host;
+}
+
+/** A tile URL template Leaflet may fetch (isValidTileUrl); anything else falls back to the OpenStreetMap standard tiles. */
+export function safeTileUrl(url: unknown): string {
+    return isValidTileUrl(url) ? url.trim() : DEFAULT_TILE_URL;
 }
 
 export interface MarkerIconSpec {

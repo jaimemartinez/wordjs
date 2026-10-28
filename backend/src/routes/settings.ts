@@ -69,7 +69,11 @@ const PUBLIC_SETTINGS = [
     'comment_registration',
     'WPLANG',               // site locale — drives <html lang> (and the RSS <language>, see routes/seo)
     'site_text_direction',  // explicit <html dir> override: '' (derive from WPLANG) | ltr | rtl | auto
-    'blog_public'           // '0' = discourage search engines: the SSR layout adds noindex (routes/seo robots.txt too)
+    'blog_public',          // '0' = discourage search engines: the SSR layout adds noindex (routes/seo robots.txt too)
+    // The tile server every map on the site draws from, and the credit it requires (core/map-tiles).
+    // PUBLIC: public pages draw maps, and each visitor's browser requests the template for every tile anyway.
+    'map_tile_url',
+    'map_tile_attribution'
 ];
 
 // All settings that can be modified
@@ -515,6 +519,8 @@ const SETTING_VALIDATORS: Record<string, (v: any) => string | null> = {
         try { new Intl.DateTimeFormat('en', { timeZone: v }); } catch { return 'timezone_string must be an IANA time zone like "Europe/Madrid".'; }
         return null;
     },
+    map_tile_url: (v: any) => require('../core/map-tiles').tileUrlProblem(v),
+    map_tile_attribution: (v: any) => require('../core/map-tiles').tileAttributionProblem(v),
     site_text_direction: (v: any) => {
         const s = v === null || v === undefined ? '' : v;
         if (typeof s !== 'string' || !TEXT_DIRECTIONS.includes(s)) {
@@ -561,6 +567,8 @@ const SETTING_NORMALIZERS: Record<string, (v: any) => any> = {
     medium_size_h: (v: any) => String(Number(String(v).trim())),
     large_size_w: (v: any) => String(Number(String(v).trim())),
     large_size_h: (v: any) => String(Number(String(v).trim())),
+    map_tile_url: (v: any) => require('../core/map-tiles').normalizedTileSetting(v),
+    map_tile_attribution: (v: any) => require('../core/map-tiles').normalizedTileSetting(v),
 };
 
 /** El valor EXACTO que se persiste para esta clave (idéntico al recibido si no hay normalizador). */

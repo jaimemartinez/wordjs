@@ -6,6 +6,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **Choose the map tile server from the panel.** Settings → General → «Maps» sets the tile URL template and
+  its attribution for every map on the site, plugin maps included (`map_tile_url`, `map_tile_attribution`).
+  Empty keeps the OpenStreetMap standard tiles, and the panel links the OSM tile usage policy next to that
+  default. Only `https://` templates with `{z}`, `{x}` and `{y}` (optionally `{s}` or `{r}`) and no user name or
+  password are accepted, with a live preview. A map draws no tile until it knows the site's server, and it
+  does not fall back to OpenStreetMap if that read fails. A plugin can still pass `tileUrl` for a server of its own.
+  No CSP change: tiles are images, already covered by `img-src … https:`.
+
 ## [2.11.23] - 2026-10-28
 
 ### Added

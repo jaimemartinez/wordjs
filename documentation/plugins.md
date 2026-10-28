@@ -541,14 +541,18 @@ Avoid raw `div` containers for main content. Use the `Card` component, which han
     `@/components/ui` are host-only; importing one fails the build, so style your own controls with the
     same Tailwind classes instead.
 *   **Maps and QR codes come from the host too.** `import MapView from "@/components/map/MapView"` gives a
-    declarative Leaflet map (OpenStreetMap tiles by default): `markers` (`pin`/`dot`/`badge`/`vertex`/`pulse`,
+    declarative Leaflet map that draws from the site's tile server (Settings → General → «Maps»; OpenStreetMap
+    when none is set): `markers` (`pin`/`dot`/`badge`/`vertex`/`pulse`,
     optional accuracy circle, draggable) and `lines` (solid or dashed) are diffed by `id`, so a poll can hand
     new arrays every few seconds without flicker (a line whose `points` array is the same object as last
     time is not even redrawn); `onMapClick`, `fitPoints` + `fitKey` (+ `fitPadding`), `interactive={false}`
     for a static preview and a ref handle (`fitTo`, `setView`, `getCenter`, `getZoom`, `invalidateSize`)
     cover editing and following. Until the user pans or zooms, the map re-fits its points when its box
     changes size. Labels, tooltips, colours and the tile attribution are escaped or allowlisted by the
-    component, and only `https://` tile templates with `{z}/{x}/{y}` are accepted.
+    component, and only `https://` tile templates with `{z}/{x}/{y}` (optionally `{s}`/`{r}`) and no user name
+    or password are accepted. Leave `tileUrl` unset to follow the site's choice: a map without it waits for
+    the site's server before it requests a tile, so a site that moved off OpenStreetMap never sends a
+    visitor there. Pass `tileUrl` (and `tileAttribution`) only when your map really needs a server of its own.
     `import { qrDataUrl, qrSvg } from "@/lib/qr"` draws a QR code in the browser. Do not bundle a map or QR
     library of your own: the host's copy is the one that is loaded once and kept up to date.
 *   **Dates: use the admin's calendar, not `<input type="date">`.** The native input draws the browser's
