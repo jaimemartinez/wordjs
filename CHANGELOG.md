@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.21] - 2026-10-28
+
 ### Fixed
 - **Microphone for the site's own pages.** The `Permissions-Policy` header now allows the microphone to the site
   itself (`microphone=(self)`), as it already did for the camera, so a call answered or placed from a plugin's admin
