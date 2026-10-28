@@ -83,6 +83,17 @@ async function setCursor(seq: number): Promise<void> {
 }
 
 /**
+ * Record that rows up to `seq` were delivered — forward only. Another node of a cluster may have delivered
+ * further while this one was sending; writing the smaller value would send those rows again and again.
+ */
+async function advanceCursor(seq: number): Promise<number> {
+    const now = await getCursor();
+    if (seq <= now) return now;
+    await setCursor(seq);
+    return seq;
+}
+
+/**
  * Save the configuration. Turning the copy on (or pointing it somewhere else) starts at the chain's
  * current head: the receiver gets what happens from now on, not years of history in one burst.
  */
@@ -235,8 +246,10 @@ async function flushExport(): Promise<number> {
             const c = await getConfig();
             if (c.mode === 'off') return 0;
             const { dbAsync } = require('../config/database');
-            let cursor = await getCursor();
+            let cursor = 0;
             for (let i = 0; i < 1000; i++) {
+                // Read every round: another node may have moved it while this one was sending.
+                cursor = Math.max(cursor, await getCursor());
                 const rows = (await dbAsync.all(
                     'SELECT id, actor_id, action, target_type, target_id, detail, created_at, chain_seq, prev_hash, row_hash FROM audit_log WHERE chain_seq > ? ORDER BY chain_seq ASC LIMIT ?',
                     [cursor, BATCH]
@@ -244,11 +257,11 @@ async function flushExport(): Promise<number> {
                 if (!rows.length) break;
                 state.lastAttemptAt = Date.now();
                 await send(c, rows.map(toEvent));
-                cursor = Number(rows[rows.length - 1].chain_seq);
-                await setCursor(cursor);
+                cursor = await advanceCursor(Number(rows[rows.length - 1].chain_seq));
                 delivered += rows.length;
                 state.lastSuccessAt = Date.now();
                 state.lastError = null;
+                sl.retryDelay = 30_000; // the receiver answers again: the next outage starts the backoff over
                 if (rows.length < BATCH) break;
             }
             state.delivered += delivered;
@@ -272,7 +285,7 @@ function withSite(fn: () => any) {
 function scheduleFlush(): void {
     const sl = slot();
     if (sl.timer) return;
-    const run = withSite(() => { sl.timer = null; return flushExport().then((n) => { if (n) sl.retryDelay = 30_000; }); });
+    const run = withSite(() => { sl.timer = null; return flushExport(); });
     sl.timer = setTimeout(run, 250);
     if (sl.timer.unref) sl.timer.unref();
 }

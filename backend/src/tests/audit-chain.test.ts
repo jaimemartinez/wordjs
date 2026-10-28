@@ -65,6 +65,20 @@ const put = (url: string, body: any) => (request(server) as any).put(`${API}${ur
 const post = (url: string, body: any = {}) => (request(server) as any).post(`${API}${url}`).set('Host', MAIN).set('Authorization', `Bearer ${token}`).send(body);
 const record = (action: string, target = 'x') => inSite(() => require('../core/audit').recordAudit(1, action, 'test', target, { n: target }));
 
+/**
+ * Wait until what a receiver holds satisfies `ok`. Receivers call `wake()` on every frame, request or
+ * datagram, so this resolves on the event itself, never after a fixed tick that a slow runner outlasts.
+ * The background delivery (scheduleFlush, a retry) may send a row before or after the test's own
+ * "Send now", so tests assert WHAT arrived, never WHICH pass sent it.
+ */
+const waiters: Array<() => void> = [];
+const wake = () => { for (const w of waiters.splice(0)) w(); };
+const until = (what: string, ok: () => boolean) => new Promise<void>((resolve, reject) => {
+    const timeout = setTimeout(() => reject(new Error(`timed out after 15 s waiting for ${what}`)), 15_000);
+    const check = () => { if (ok()) { clearTimeout(timeout); resolve(); } else waiters.push(check); };
+    check();
+});
+
 // ── The same chain on every engine ──────────────────────────────────────────────────────────────────
 
 async function engineChain(t: any, kind: 'postgres' | 'mysql') {
@@ -241,10 +255,12 @@ describe('Audit log hash chain', () => {
                 assert.strictEqual(req.headers['x-wordjs-signature-256'], sig, 'signed with the secret');
                 got.push(...JSON.parse(body).events);
                 res.end('ok');
+                wake();
             });
         });
         await new Promise<void>((r) => recv.listen(0, '127.0.0.1', r));
         const url = `http://127.0.0.1:${recv.address().port}/audit`;
+        const has = (id: string) => got.some((e) => e.targetId === id);
         try {
             const exportCfg = { mode: 'webhook', url, allowPrivate: true, secret };
             assert.strictEqual((await put('/audit/settings', { export: exportCfg })).status, 403, 'the copy is changed only with the password');
@@ -257,9 +273,7 @@ describe('Audit log hash chain', () => {
             await record('user.role_change', 'w1');
             await record('user.role_change', 'w2');
             await post('/audit/export/flush');
-            const seqs = got.map((e) => e.seq);
-            assert.ok(got.some((e) => e.targetId === 'w1') && got.some((e) => e.targetId === 'w2'), JSON.stringify(got));
-            assert.deepStrictEqual(seqs, [...seqs].sort((a, b) => a - b), 'in chain order');
+            await until('w1 and w2', () => has('w1') && has('w2'));
             const w2 = got.find((e) => e.targetId === 'w2');
             const stored = await db().get('SELECT row_hash, chain_seq FROM audit_log WHERE target_id = ?', ['w2']);
             assert.strictEqual(w2.rowHash, stored.row_hash, 'the receiver holds the hash');
@@ -270,6 +284,7 @@ describe('Audit log hash chain', () => {
                 [JSON.stringify({ role: 'editor', password: 'hunter2-raw', apiToken: 'tok-raw' }), require('../core/analytics-retention').dbTimestamp(Date.now())]);
             await record('user.role_change', 'after-raw');
             await post('/audit/export/flush');
+            await until('the raw row', () => has('raw'));
             const raw = got.find((e) => e.targetId === 'raw');
             assert.ok(raw, 'the raw row is exported');
             assert.strictEqual(raw.detail.role, 'editor');
@@ -281,24 +296,22 @@ describe('Audit log hash chain', () => {
             const down = await get('/health/site');
             assert.strictEqual(down.body.checks.find((c: any) => c.id === 'security.auditExport').status, 'warn', 'a failing copy is a warning');
             up = true;
+            await post('/audit/export/flush');
+            await until('the backlog (while-down)', () => has('while-down'));
+            // "Send now" resolves only after any pass already running AND one more: nothing is left behind.
             const flushed = await post('/audit/export/flush');
-            assert.ok(flushed.body.delivered >= 1);
-            assert.ok(got.some((e) => e.targetId === 'while-down'), 'the backlog arrives');
-            assert.strictEqual(flushed.body.export.behind, 0);
+            assert.strictEqual(flushed.body.export.behind, 0, JSON.stringify(flushed.body.export));
+            assert.strictEqual(flushed.body.export.lastError, null);
+            const seqs = got.map((e) => e.seq);
+            assert.deepStrictEqual(seqs, [...seqs].sort((a, b) => a - b), `in chain order: ${JSON.stringify(seqs)}`);
+            assert.strictEqual(new Set(seqs).size, seqs.length, 'no row is sent twice');
         } finally {
             recv.close();
+            await put('/audit/settings', { export: { mode: 'off' }, currentPassword: PASSWORD });
         }
     });
 
     test('syslog over TCP (octet-counted RFC 5424) and UDP', async () => {
-        // Each receiver resolves a waiter the moment what it holds satisfies it — never after a fixed tick.
-        const waiters: Array<() => void> = [];
-        const wake = () => { for (const w of waiters.splice(0)) w(); };
-        const until = (what: string, ok: () => boolean) => new Promise<void>((resolve, reject) => {
-            const timeout = setTimeout(() => reject(new Error(`timed out waiting for ${what}`)), 10_000);
-            const check = () => { if (ok()) { clearTimeout(timeout); resolve(); } else waiters.push(check); };
-            check();
-        });
         const tcpConns: string[] = [];
         const tcp = net.createServer((s: any) => {
             const i = tcpConns.push('') - 1;
@@ -313,8 +326,7 @@ describe('Audit log hash chain', () => {
             const tcpCfg = { mode: 'syslog', host: '127.0.0.1', port: tcp.address().port, transport: 'tcp', allowPrivate: true };
             assert.strictEqual((await put('/audit/settings', { export: tcpCfg, currentPassword: PASSWORD })).status, 200);
             await record('user.role_change', 'tcp-1');
-            const sent = await post('/audit/export/flush');
-            assert.ok(sent.body.delivered >= 1, JSON.stringify(sent.body));
+            await post('/audit/export/flush');
             await until('the tcp-1 frame', () => tcpConns.some((x) => x.includes('"targetId":"tcp-1"')));
             const conn = tcpConns.find((x) => x.includes('"targetId":"tcp-1"')) as string;
             const m = /^(\d+) (<109>1 .*)$/s.exec(conn);
@@ -355,6 +367,7 @@ describe('Audit log hash chain', () => {
             req.on('end', () => {
                 const finish = () => { got.push(...JSON.parse(body).events.map((e: any) => e.targetId)); res.end('ok'); };
                 if (hold === null) { hold = finish; held(); } else finish();
+                wake();
             });
         });
         await new Promise<void>((r) => recv.listen(0, '127.0.0.1', r));
@@ -372,6 +385,44 @@ describe('Audit log hash chain', () => {
             await second;
             assert.ok(got.includes('early'), JSON.stringify(got));
             assert.ok(got.includes('late'), `the second flush resolved before "late" was sent: ${JSON.stringify(got)}`);
+        } finally {
+            recv.close();
+            await put('/audit/settings', { export: { mode: 'off' }, currentPassword: PASSWORD });
+        }
+    });
+
+    test('the delivery position only moves forward: another node that delivered further is not undone', async () => {
+        const got: string[] = [];
+        let hold: (() => void) | null = null;
+        let held: () => void = () => {};
+        const firstHeld = new Promise<void>((r) => { held = r; });
+        const recv = http.createServer((req: any, res: any) => {
+            let body = '';
+            req.on('data', (c: any) => { body += c; });
+            req.on('end', () => {
+                const finish = () => { got.push(...JSON.parse(body).events.map((e: any) => e.targetId)); res.end('ok'); };
+                if (hold === null) { hold = finish; held(); } else finish();
+            });
+        });
+        await new Promise<void>((r) => recv.listen(0, '127.0.0.1', r));
+        try {
+            const url = `http://127.0.0.1:${recv.address().port}/audit`;
+            assert.strictEqual((await put('/audit/settings', { export: { mode: 'webhook', url, allowPrivate: true }, currentPassword: PASSWORD })).status, 200);
+            const ex = require('../core/audit-export');
+            const options = require('../core/options');
+            await record('user.role_change', 'n1');
+            const first = inSite(() => ex.flushExport());
+            await firstHeld; // this node is sending n1
+            await record('user.role_change', 'n2');
+            await record('user.role_change', 'n3');
+            // ...while another node of the cluster delivers n2 and n3 and moves the shared position past them.
+            const head = Number((await db().get('SELECT MAX(chain_seq) AS s FROM audit_log')).s);
+            await inSite(() => options.updateOption(ex.CURSOR_OPTION, String(head), 'no'));
+            (hold as unknown as () => void)();
+            await first;
+            await inSite(() => ex.flushExport());
+            assert.strictEqual(Number(await inSite(() => options.getOptionFresh(ex.CURSOR_OPTION, 0))), head, 'the position is not moved back');
+            assert.deepStrictEqual(got.filter((x) => x === 'n2' || x === 'n3'), [], `rows the other node delivered are not sent again: ${JSON.stringify(got)}`);
         } finally {
             recv.close();
             await put('/audit/settings', { export: { mode: 'off' }, currentPassword: PASSWORD });
