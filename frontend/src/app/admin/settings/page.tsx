@@ -20,6 +20,8 @@ import { isSignupSafeRole } from "@/lib/signupRoles";
 import { PageHeader } from "@/components/ui";
 import { DateTimeFormats, ImageSizes, ReadingExtras, SITE_BEHAVIOUR_DEFAULTS, WritingDiscussion, siteBehaviourFrom, type SiteBehaviourValues } from "./SiteBehaviourSettings";
 import RedisServerPanel from "./RedisServerPanel";
+import MapTileSettings, { mapTileProblem } from "./MapTileSettings";
+import { resetSiteTiles } from "@/components/map/siteTiles";
 
 
 /**
@@ -108,6 +110,9 @@ export default function SettingsPage() {
         timezone_string: "UTC",
         // The first day of the week of the admin's calendars (components/ui/DatePicker); WordPress's option.
         start_of_week: "1",
+        // Settings → Maps: the tile server every map draws from ('' = OpenStreetMap) and its credit.
+        map_tile_url: "",
+        map_tile_attribution: "",
     });
     const [roles, setRoles] = useState<Record<string, Role>>({});
     // Reading / writing / discussion / media settings that had no control (QA M2-06), saved with the rest.
@@ -212,6 +217,8 @@ export default function SettingsPage() {
                 site_text_direction: data.site_text_direction || "",
                 timezone_string: data.timezone_string || "UTC",
                 start_of_week: String(normalizeWeekStart((data as Record<string, unknown>).start_of_week)),
+                map_tile_url: typeof data.map_tile_url === "string" ? data.map_tile_url : "",
+                map_tile_attribution: typeof data.map_tile_attribution === "string" ? data.map_tile_attribution : "",
             });
             setBehaviour(siteBehaviourFrom(data as Record<string, unknown>));
             const effective = Number((data as Record<string, unknown>).upload_max_bytes);
@@ -225,12 +232,18 @@ export default function SettingsPage() {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        const mapProblem = mapTileProblem(settings);
+        if (mapProblem) {
+            await alert(t(mapProblem));
+            return;
+        }
         setSaving(true);
         setSaved(false);
 
         try {
             await settingsApi.update({ ...settings, ...behaviour });
             resetWeekStart(settings.start_of_week);
+            resetSiteTiles(settings);
             setSaved(true);
             setTimeout(() => setSaved(false), 3000);
         } catch (error) {
@@ -836,6 +849,11 @@ export default function SettingsPage() {
                         </div>
                         <ImageSizes values={behaviour} onChange={setBehaviour} />
                     </div>
+
+                    <MapTileSettings
+                        values={{ map_tile_url: settings.map_tile_url, map_tile_attribution: settings.map_tile_attribution }}
+                        onChange={(v) => setSettings({ ...settings, ...v })}
+                    />
 
                     {/* Performance Section */}
                     <div className="bg-white rounded-3xl md:rounded-[40px] shadow-xl shadow-gray-100/50 border-2 border-gray-50 overflow-hidden">

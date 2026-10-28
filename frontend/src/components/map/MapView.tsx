@@ -19,13 +19,16 @@
  *   through mapUtils.ts: escaped or allowlisted. Leaflet writes a string tooltip with innerHTML, so a
  *   marker title is bound only as tooltipText(title) — titles are often typed by other people (a portal
  *   user's name, a place name) and must show as text, never run as markup.
- * - Tiles are <img> requests to the tile server (CSP img-src allows https:). The default server is the
- *   OpenStreetMap standard tile layer, whose usage policy requires the visible attribution.
+ * - Tiles are <img> requests to the tile server (CSP img-src allows https:). A map with no `tileUrl` uses
+ *   the SITE's server (Settings → General → «Maps», siteTiles.ts) and draws no tile until that is known;
+ *   with none set it is the OpenStreetMap standard tile layer, whose usage policy requires the attribution.
+ *   A `tileUrl` prop still wins, for a plugin that needs a server of its own.
  */
 
 import React, { forwardRef, useEffect, useImperativeHandle, useRef, useState } from "react";
 import type * as Leaflet from "leaflet";
 import { LEAFLET_CSS } from "./leafletCss";
+import { useSiteTiles } from "./siteTiles";
 import * as U from "./mapUtils";
 import {
     MARKER_CSS, attributionHtml, boundsOf, isValidLatLng, markerIconSpec, safeColor, safeTileUrl, tooltipText, validPoints,
@@ -84,7 +87,9 @@ export interface MapViewProps {
     markers?: MapMarker[];
     lines?: MapLine[];
     onMapClick?: (pos: LatLng) => void;
+    /** A tile server of the map's own (https template with {z}/{x}/{y}). Unset = the site's server. */
     tileUrl?: string;
+    /** The credit shown for the tiles. Unset = the site's (or, with `tileUrl`, the OpenStreetMap one). */
     tileAttribution?: string;
     maxZoom?: number;
     className?: string;
@@ -149,6 +154,7 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(props, 
     propsRef.current = props;
     const [ready, setReady] = useState(false);
     const [failed, setFailed] = useState(false);
+    const siteTiles = useSiteTiles(tileUrl !== undefined);
 
     const handle: MapViewHandle = {
         fitTo(points, opts) {
@@ -202,10 +208,6 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(props, 
             if (b && (b[0][0] !== b[1][0] || b[0][1] !== b[1][1])) map.fitBounds(b, { padding: [pad, pad], maxZoom: 17 });
             else if (b) map.setView(b[0], 16);
             else map.setView(isValidLatLng(initial.center) ? initial.center : DEFAULT_CENTER, initial.zoom ?? DEFAULT_ZOOM);
-            tileRef.current = L.tileLayer(safeTileUrl(initial.tileUrl ?? DEFAULT_TILE_URL), {
-                maxZoom: initial.maxZoom ?? 19,
-                attribution: attributionHtml(initial.tileAttribution ?? DEFAULT_TILE_ATTRIBUTION),
-            }).addTo(map);
             map.on("click", (e: Leaflet.LeafletMouseEvent) => {
                 if (propsRef.current.interactive === false) return;
                 propsRef.current.onMapClick?.([e.latlng.lat, e.latlng.lng]);
@@ -243,20 +245,28 @@ const MapView = forwardRef<MapViewHandle, MapViewProps>(function MapView(props, 
         };
     }, []);
 
-    // Tile source / attribution changes.
+    // The tile layer: created once the server is known (the prop, or the site's), replaced when it changes.
+    const tileSource = tileUrl !== undefined
+        ? { url: tileUrl, attribution: tileAttribution ?? DEFAULT_TILE_ATTRIBUTION }
+        : siteTiles && { url: siteTiles.url, attribution: tileAttribution ?? siteTiles.attribution };
+    const sourceUrl = tileSource ? tileSource.url : null;
+    const sourceAttribution = tileSource ? tileSource.attribution : null;
     useEffect(() => {
         const map = mapRef.current, L = LRef.current, tile = tileRef.current;
-        if (!ready || !map || !L || !tile) return;
-        const url = safeTileUrl(tileUrl ?? DEFAULT_TILE_URL);
-        const attribution = attributionHtml(tileAttribution ?? DEFAULT_TILE_ATTRIBUTION);
-        if (tile.options.attribution !== attribution) {
+        if (!ready || !map || !L || sourceUrl === null) return;
+        const url = safeTileUrl(sourceUrl);
+        const attribution = attributionHtml(sourceAttribution);
+        if (!tile) {
+            tileRef.current = L.tileLayer(url, { maxZoom, attribution }).addTo(map);
+            tileRef.current.bringToBack();
+        } else if (tile.options.attribution !== attribution) {
             map.removeLayer(tile);
             tileRef.current = L.tileLayer(url, { maxZoom, attribution }).addTo(map);
             tileRef.current.bringToBack();
         } else {
             tile.setUrl(url);
         }
-    }, [ready, tileUrl, tileAttribution, maxZoom]);
+    }, [ready, sourceUrl, sourceAttribution, maxZoom]);
 
     // Markers, diffed by id.
     useEffect(() => {
