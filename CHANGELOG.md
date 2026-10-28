@@ -10,7 +10,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **Maps and QR codes for plugins.** Two host modules plugin bundles may import:
   `@/components/map/MapView` — a declarative Leaflet map (OpenStreetMap tiles by default; markers and lines
   diffed by id; labels, tooltips, colours and the attribution escaped or allowlisted; only `https://` tile
-  templates) — and `@/lib/qr` (`qrDataUrl`, `qrSvg`). Leaflet 1.9.4 (BSD-2-Clause) is a new frontend
+  templates) — and `@/lib/qr` (`qrDataUrl`, `qrSvg`). Leaflet 1.9.4 (BSD-2-Clause, pinned exactly) is a new frontend
   dependency.
 
 ### Changed
