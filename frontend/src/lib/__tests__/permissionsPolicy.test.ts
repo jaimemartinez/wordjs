@@ -1,15 +1,16 @@
 /**
- * THE CAMERA AND THE MICROPHONE ARE ALLOWED FOR THE SITE ITSELF, AND ONLY FOR IT.
+ * THE CAMERA, THE MICROPHONE AND GEOLOCATION ARE ALLOWED FOR THE SITE ITSELF, AND ONLY FOR IT.
  *
  * The Permissions-Policy header used to say `camera=()`. Chromium enforces it: on Android Chrome and on
  * desktop Chrome/Edge getUserMedia was refused before any prompt, so the conference-manager meal scanner
  * (an admin plugin screen) could never open the camera and told the operator to grant a permission that
  * no browser setting could grant. Safari ignores the header, which is why an iPhone still showed a
  * picture and the bug went unnoticed. `microphone=()` did the same to calls answered or placed from a
- * plugin's admin page or portal app: getUserMedia({ audio }) was refused, so a call had no audio.
+ * plugin's admin page or portal app: getUserMedia({ audio }) was refused, so a call had no audio. And
+ * `geolocation=()` refused navigator.geolocation to a plugin map that shows the user's own position.
  *
  * The test reads the header string the browser enforces, from the real `nextConfig.headers()`:
- *   - the camera and microphone allowlists are exactly `self` (never `*`: embedded third-party frames stay out);
+ *   - the camera, microphone and geolocation allowlists are exactly `self` (never `*`: embedded third-party frames stay out);
  *   - the other denials of audit F-09 are untouched;
  *   - one value covers every route: a document keeps the policy it was loaded with, and the admin is
  *     reached by a client-side navigation from /login, so an /admin-only override would not apply.
@@ -44,12 +45,12 @@ describe('Permissions-Policy', () => {
         const d = parse(groups[0].value);
         expect(d.get('camera')).toEqual(['self']);
         expect(d.get('microphone')).toEqual(['self']);
+        expect(d.get('geolocation')).toEqual(['self']);
     });
 
-    it('keeps denying geolocation and the Topics API', async () => {
+    it('keeps denying the Topics API and lists no other feature', async () => {
         const [{ value }] = await policyGroups();
         const d = parse(value);
-        expect(d.get('geolocation')).toEqual([]);
         expect(d.get('browsing-topics')).toEqual([]);
         expect([...d.keys()].sort()).toEqual(['browsing-topics', 'camera', 'geolocation', 'microphone']);
     });

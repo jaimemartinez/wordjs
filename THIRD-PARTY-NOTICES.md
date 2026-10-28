@@ -26,6 +26,12 @@ offering.
 | `expand-template` (via `better-sqlite3` → `prebuild-install`) | `(MIT OR WTFPL)` | **MIT** | Permissive option taken. Build-time helper for downloading prebuilt native binaries; not loaded at runtime. |
 | `rc` (via `better-sqlite3` → `prebuild-install`) | `(BSD-2-Clause OR MIT OR Apache-2.0)` | **MIT** | Permissive option taken. Build-time helper for downloading prebuilt native binaries; not loaded at runtime. |
 
+## Code copied from a dependency
+
+| Copied into | From | License | Notes |
+|---|---|---|---|
+| `frontend/src/components/map/leafletCss.ts` | `leaflet@1.9.4` `dist/leaflet.css` | BSD-2-Clause | Leaflet's stylesheet, with the image-loading rules removed, injected by `MapView` at runtime. The file carries Leaflet's copyright notice and licence text; Leaflet itself is a regular frontend dependency. |
+
 ## Non-propagating copyleft component
 
 | Dependency | License | Why it does not affect WordJS's MIT license |

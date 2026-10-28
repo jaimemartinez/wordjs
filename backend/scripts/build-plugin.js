@@ -189,6 +189,7 @@ async function buildPlugin(slug) {
         'components/ui/StatCard', 'components/ui/PageHeader', 'components/ui/Card', 'components/ui/ActionCard',
         // The admin's own calendar (DatePicker / DateTimePicker): plugins replace their native date inputs with it.
         'components/ui/DatePicker',
+        'components/map/MapView', 'lib/qr',
     ];
     // The WordJS release that FIRST exposes each host module added after 2.9.0. A plugin importing one must
     // declare at least that version in manifest `requires.wordjs`, or an older core installs a bundle it
