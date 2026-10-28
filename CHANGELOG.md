@@ -6,6 +6,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+- **Microphone for the site's own pages.** The `Permissions-Policy` header now allows the microphone to the site
+  itself (`microphone=(self)`), as it already did for the camera, so a call answered or placed from a plugin's admin
+  page or portal has audio on Chrome, Edge and Android. Embedded third-party frames still cannot request it, and the
+  browser still asks the user.
+
 ## [2.11.20] - 2026-10-28
 
 ### Fixed
