@@ -1344,3 +1344,80 @@ describe('conference-manager 2.36.22 — cupos totals and the family groups in t
             expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
     });
 });
+
+describe('conference-manager 2.36.23 — the custom Excel of «Localidades»', () => {
+    const fields = [
+        { name: 'first_name', label: 'Nombre', type: 'text' },
+        { name: 'age', label: 'Edad', type: 'number', role: 'age' },
+        { name: 'gender', label: 'Sexo', type: 'select', options: 'Masculino, Femenino', role: 'gender' },
+        { name: 'family_group', label: 'Grupo familiar', type: 'text', is_group: 1 },
+        { name: 'health_conditions', label: 'Salud', type: 'select', options: 'A,B', role: 'health' },
+    ];
+    const locations = [
+        { id: 1, name: 'Norte', capacity: 10, inscribed: 4, responsible_name: 'Ana' },
+        { id: 2, name: 'Sur', capacity: null, inscribed: 2 },
+        { id: 3, name: 'Este', capacity: '5', inscribed: 0 },
+    ];
+    const people = [
+        { id: 1, location_id: 1, age: '3', gender: 'Femenino', family_group: 'Ochoa', payment_status: 'paid' },
+        { id: 2, location_id: 1, age: 8, gender: 'masculino ', family_group: ' ochoa', payment_status: 'partial' },
+        { id: 3, location_id: 1, age: '65', gender: 'Femenino', family_group: 'Ruiz' },
+        { id: 4, location_id: 1, age: '', gender: '' },
+        { id: 5, location_id: 1, age: 30, gender: 'Femenino', status: 'cancelled' },
+        { id: 6, location_id: 2, age: 17, gender: 'Otro', family_group: '' },
+        { id: 7, location_id: 2, age: 'abc', gender: 'Masculino' },
+    ];
+    it('validates the age ranges: whole years, from ≤ to, no overlap; labels read 0–5 / 60+', async () => {
+        const { ageRangesError, ageRangeLabel, normalizeAgeRanges, parseAge, AGE_MAX } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/locationsReport');
+        expect(ageRangesError([])).toEqual({ code: 'empty', index: -1 });
+        expect(ageRangesError([{ from: '0', to: '5' }, { from: '', to: '9' }])).toEqual({ code: 'invalid', index: 1 });
+        expect(ageRangesError([{ from: '9', to: '5' }])).toEqual({ code: 'order', index: 0 });
+        expect(ageRangesError([{ from: 0, to: 10 }, { from: 10, to: 20 }])).toEqual({ code: 'overlap', index: 1 });
+        expect(ageRangesError([{ from: 0, to: 5 }, { from: 7, to: AGE_MAX }])).toBeNull();
+        expect(normalizeAgeRanges([{ from: '60', to: '120' }, { from: '0', to: '5' }])).toEqual([{ from: 0, to: 5 }, { from: 60, to: 120 }]);
+        expect([ageRangeLabel({ from: 0, to: 5 }), ageRangeLabel({ from: 60, to: AGE_MAX }), ageRangeLabel({ from: 7, to: 7 })]).toEqual(['0–5', '60+', '7']);
+        expect([parseAge(' 4 '), parseAge('4,5'), parseAge('x'), parseAge(-1), parseAge(200), parseAge('')]).toEqual([4, 4, null, null, null, null]);
+    });
+    it('builds one row per locality in the chosen order, with cupos, ages, a field breakdown and the total row', async () => {
+        const { buildLocationsSheet } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/locationsReport');
+        const sheet = buildLocationsSheet({
+            locations, people, fields,
+            keys: ['name', 'capacity', 'inscribed', 'available', 'occupancy', 'cancelled', 'families', 'paid', 'ages', 'by:gender'],
+            ageRanges: [{ from: 0, to: 5 }, { from: 6, to: 17 }, { from: 60, to: 120 }],
+        });
+        expect(sheet.columns.map((c) => c.header)).toEqual([
+            'Localidad', 'Cupos asignados', 'Inscritos', 'Cupos disponibles', '% de ocupación', 'Cancelados', 'Grupos familiares', 'Pagado',
+            'Edad 0–5', 'Edad 6–17', 'Edad 60+', 'Sin edad', 'Sexo: Masculino', 'Sexo: Femenino', 'Sexo: Otro', 'Sexo: Sin respuesta',
+        ]);
+        expect(sheet.rows).toEqual([
+            ['Norte', 10, 4, 6, 40, 1, 2, 1, 1, 1, 1, 1, 1, 2, 0, 1],
+            ['Sur', 'Sin límite', 2, '', '', 0, 0, 0, 0, 1, 0, 1, 1, 0, 1, 0],
+            ['Este', 5, 0, 5, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0],
+            ['Total', 15, 6, 11, 26.7, 1, 2, 1, 1, 2, 1, 2, 2, 2, 1, 1],
+        ]);
+        expect(sheet.boldRows).toEqual([3]);
+    });
+    it('limits to the ticked localities, drops the total on request, skips columns without data and never offers the health answer', async () => {
+        const { buildLocationsSheet, breakdownFields } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/locationsReport');
+        const s = buildLocationsSheet({ locations, people, fields: fields.filter((f) => f.role !== 'age' && !f.is_group), keys: ['name', 'ages', 'families', 'by:nope', 'responsible_name'], locationIds: [1], totals: false, labels: { name: 'Locality' } });
+        expect(s.columns.map((c) => c.header)).toEqual(['Locality', 'Encargado']);
+        expect(s.rows).toEqual([['Norte', 'Ana']]);
+        expect(breakdownFields(fields).map((f) => f.name)).toEqual(['gender']);
+        const { buildXlsx } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/xlsx');
+        expect(buildXlsx([s]).length).toBeGreaterThan(100);
+    });
+    it('wired: the button on «Localidades», the modal with no native dialogs or required, strings in every language', async () => {
+        const page = src('client/admin/page.tsx');
+        expect(page).toContain('data-locations-excel-open=""');
+        expect(page).toContain('<LocationsExcelModal conferenceId={conferenceId}');
+        const modal = src('client/admin/LocationsExcel.tsx');
+        expect(modal).not.toMatch(/\b(alert|confirm|prompt)\(/);
+        expect(modal).not.toMatch(/\brequired\b/);
+        expect(modal).not.toMatch(/<select[\s>]/);
+        expect(modal).not.toMatch(/\b(sm|md|lg|xl):(hidden|block|flex|grid|inline)(?![-\w])/);
+        const { REPORT_LABELS } = await import('../../../../../marketplace/plugins/conference-manager/client/lib/locationsReport');
+        const keys = [...Object.keys(REPORT_LABELS).map((k) => `locx.col.${k}`), ...[...modal.matchAll(/tx\('(locx\.[a-z.]+)'/g)].map((m) => m[1])];
+        expect(keys.length).toBeGreaterThan(40);
+        for (const l of ['es', 'en', 'pt'] as const) for (const k of keys) expect((cmTranslations as any)[l][k], `${l} ${k}`).toBeTruthy();
+    });
+});
