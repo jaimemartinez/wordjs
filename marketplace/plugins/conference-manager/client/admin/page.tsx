@@ -28,6 +28,7 @@ import { canAutoFocus, LAYER } from "../lib/overlay";
 // Phones (2.16.0): the shell scrolls with the page; the tab strip reveals the active tab.
 import { DECO_LAYER_CLASS, HERO_HEAD_CLASS, SHELL_CSS, STAT_GRID_CLASS } from "../lib/phoneLayout";
 import { capacityTotals } from "../lib/locationFilter";
+import { LocationsExcelModal } from "./LocationsExcel";
 import { SectionPicker } from "./SectionPicker";
 import { WithdrawDeadlineSetting } from "./WithdrawDeadline";
 import { RegistrationClosesSetting, LocationRegistrationCloses } from "./RegistrationCloses";
@@ -5031,6 +5032,8 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
     const shownLocations = useMemo(() => filterLocations(locations, locQuery, locFilter), [locations, locQuery, locFilter]);
     const locCounts = useMemo(() => locationCounts(locations), [locations]);
     const capTotals = useMemo(() => capacityTotals(locations), [locations]);
+    // 2.36.23: «Descargar Excel» — one row per locality, the columns and age ranges chosen by the admin.
+    const [showLocExcel, setShowLocExcel] = useState(false);
     const [savingMethods, setSavingMethods] = useState<number | null>(null);
     // The general lodging dates (2.21.0): the two inputs mirror the conference's opening / closing until saved.
     const [datesInput, setDatesInput] = useState({ opens: '', closes: '' });
@@ -5501,6 +5504,14 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                     <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1">Sedes regionales y grupos locales</p>
                 </div>
                 <div className="flex flex-wrap items-center gap-2">
+                {locations.length > 0 && <button
+                    type="button"
+                    onClick={() => setShowLocExcel(true)}
+                    className="bg-white border-2 border-gray-100 text-emerald-700 px-6 py-4 rounded-2xl font-black text-[10px] uppercase tracking-widest hover:border-emerald-500 transition-all flex items-center gap-2"
+                    data-locations-excel-open=""
+                >
+                    <i className="fa-solid fa-file-excel text-[10px]"></i> {tx('locx.open', 'Descargar Excel')}
+                </button>}
                 {canPlan && <button
                     type="button"
                     onClick={openPlan}
@@ -5518,6 +5529,7 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                 </button>}
                 </div>
             </div>
+            {showLocExcel && <LocationsExcelModal conferenceId={conferenceId} slug={currentConference?.slug} locations={locations} onClose={() => setShowLocExcel(false)} />}
             {planHotels && <LodgingPlan conferenceId={conferenceId} hotels={planHotels} onClose={() => setPlanHotels(null)} onApplied={() => loadLocations()} />}
 
             {loading ? (
