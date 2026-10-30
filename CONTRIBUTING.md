@@ -1,6 +1,6 @@
 # Contributing to WordJS
 
-Thanks for taking the time — WordJS is a **beta, primarily solo-maintained** project, so small,
+Thanks for taking the time — WordJS is a **primarily solo-maintained** project, so small,
 focused, tested pull requests are the ones that merge fastest. Whether you're fixing a typo, adding a
 theme, or trying to break the plugin sandbox, you're welcome here.
 

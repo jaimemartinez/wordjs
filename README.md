@@ -274,7 +274,7 @@ See the [Separate-mode guide](documentation/separate-mode.md) for the walkthroug
 
 ## 🧭 Project status
 
-> **Beta · primarily solo-maintained.**
+> **Primarily solo-maintained.**
 >
 > WordJS recently completed rounds of **security hardening** (fixing a CSRF bypass, committed secrets, and XSS sinks, among others). The plugin sandbox has had multiple internal red-team passes — but there is **no independent third-party audit yet**. An independent audit is still recommended for high-stakes deployments, and the residual risks are documented plainly in [SECURITY.md](SECURITY.md) and [POSITIONING.md](POSITIONING.md).
 >

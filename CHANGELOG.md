@@ -15,7 +15,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   device.
 
 ### Changed
-- **The docs no longer call WordJS pre-production.** The README, `SECURITY.md`, the deployment checklist and the
+- **The docs no longer call WordJS beta or pre-production.** The README, `CONTRIBUTING.md`, `SECURITY.md`, the deployment checklist and the
   security reference drop the label; they still say plainly that there is no independent audit yet and recommend one
   for high-stakes deployments.
 

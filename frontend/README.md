@@ -18,4 +18,4 @@ This is **not** a standalone `localhost:3000` Next.js app. The frontend is one o
 - It can also run inside the **monolith** (a single process on `:3000`).
 - In the browser the frontend calls a **relative** `/api/v1` path (see `src/lib/api.ts`), so it reaches the backend through the gateway automatically — there is no client-side API-URL env var to set. For SSR fetches the backend base is resolved server-side from `WORDJS_MONO_ORIGIN` (monolith) or `wordjs-config.json` (split), with an optional `INTERNAL_API_URL` override; see [`../documentation/frontend.md`](../documentation/frontend.md).
 
-See [`../documentation/frontend.md`](../documentation/frontend.md) and [`../documentation/deployment.md`](../documentation/deployment.md) for the full setup; this is a beta, self-hosted project, so prefer those docs over duplicating details here.
+See [`../documentation/frontend.md`](../documentation/frontend.md) and [`../documentation/deployment.md`](../documentation/deployment.md) for the full setup; this is a self-hosted project, so prefer those docs over duplicating details here.
