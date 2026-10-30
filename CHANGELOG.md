@@ -14,6 +14,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   all localities or the ones ticked, with an optional «Total» row and a preview. The choice is remembered on the
   device.
 
+### Changed
+- **The docs no longer call WordJS beta or pre-production.** The README, `CONTRIBUTING.md`, `SECURITY.md`, the deployment checklist and the
+  security reference drop the label; they still say plainly that there is no independent audit yet and recommend one
+  for high-stakes deployments.
+
 ## [2.11.24] - 2026-10-28
 
 ### Added

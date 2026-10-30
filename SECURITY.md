@@ -1,8 +1,8 @@
 # Security Policy
 
-> **Posture (be realistic).** WordJS is **pre-production** and primarily solo-maintained. The defenses
+> **Posture (be realistic).** WordJS is primarily solo-maintained. The defenses
 > below are real and tested, but the project has **not** had an independent security audit — one is
-> **recommended before any production deployment**. Operators **must** complete the hardening steps in
+> **recommended for high-stakes deployments**. Operators **must** complete the hardening steps in
 > the checklist (rotate `jwtSecret` / `gatewaySecret` / `db.password`, set a strong `gatewaySecret`)
 > before exposing an instance to the internet. See [`documentation/security.md`](documentation/security.md)
 > for the deeper defenses reference.
@@ -92,7 +92,7 @@ WordJS is primarily solo-maintained (see the posture note above), so these are *
 
 ## 📝 Supported Versions
 
-WordJS is pre-production; only the latest `main` and the current `2.x` release line are supported. There is no LTS line yet.
+Only the latest `main` and the current `2.x` release line are supported. There is no LTS line yet.
 
 | Version   | Supported | Notes                                              |
 | :-------- | :-------- | :------------------------------------------------- |

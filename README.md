@@ -274,11 +274,11 @@ See the [Separate-mode guide](documentation/separate-mode.md) for the walkthroug
 
 ## 🧭 Project status
 
-> **Beta · pre-production · primarily solo-maintained.**
+> **Primarily solo-maintained.**
 >
-> WordJS recently completed rounds of **security hardening** (fixing a CSRF bypass, committed secrets, and XSS sinks, among others). The plugin sandbox has had multiple internal red-team passes — but there is **no independent third-party audit yet**. An external audit is strongly recommended before any production or internet-facing deployment, and the residual risks are documented plainly in [SECURITY.md](SECURITY.md) and [POSITIONING.md](POSITIONING.md).
+> WordJS recently completed rounds of **security hardening** (fixing a CSRF bypass, committed secrets, and XSS sinks, among others). The plugin sandbox has had multiple internal red-team passes — but there is **no independent third-party audit yet**. An independent audit is still recommended for high-stakes deployments, and the residual risks are documented plainly in [SECURITY.md](SECURITY.md) and [POSITIONING.md](POSITIONING.md).
 >
-> The whole ecosystem is **first-party**: the marketplace ships 32 plugins (the theme catalog was retired and builds empty; four themes come bundled). The public review pipeline now exists — policy, submission by pull request, automated checks in CI, a tracked decision ledger and a **Reviewed** badge ([`marketplace/REVIEW.md`](marketplace/REVIEW.md)) — but no third-party author community has formed around it yet. **Use it to build, learn, and experiment — do your own review before trusting it with real data or real users.**
+> The whole ecosystem is **first-party**: the marketplace ships 32 plugins (the theme catalog was retired and builds empty; four themes come bundled). The public review pipeline now exists — policy, submission by pull request, automated checks in CI, a tracked decision ledger and a **Reviewed** badge ([`marketplace/REVIEW.md`](marketplace/REVIEW.md)) — but no third-party author community has formed around it yet. **Before going live, complete the hardening checklist in [SECURITY.md](SECURITY.md) and review the plugins you install.**
 
 ---
 
@@ -286,7 +286,7 @@ See the [Separate-mode guide](documentation/separate-mode.md) for the walkthroug
 
 The plugin sandbox is designed to **fail closed**, with defense-in-depth layers (see [What's inside](#-whats-inside) and [Security Architecture](documentation/security.md)). Beyond plugins, WordJS ships **TOTP two-factor auth** with an admin-enforced MFA-by-role policy, JWT revocation, per-(IP + account) login throttling, constant-time secret comparison, origin-pinned CSRF protection combined with a double-submit token (every cookie-authenticated write must carry an `X-CSRF-Token` header equal to the `wjs_csrf` cookie issued at sign-in; Bearer callers, a session cookie that no longer verifies, and the two sign-in steps `POST /auth/login` and `POST /auth/mfa` stay outside the token gate), and SSRF-safe outgoing webhooks.
 
-Before exposing WordJS to the internet: have it **independently audited**, **rotate every secret**, and set a strong `gatewaySecret` (the gateway refuses management endpoints while the default is in place). Found a vulnerability? Please follow the disclosure process in [SECURITY.md](SECURITY.md).
+Before exposing WordJS to the internet: **rotate every secret** and set a strong `gatewaySecret` (the gateway refuses management endpoints while the default is in place); for high-stakes deployments, have it **independently audited** as well. Found a vulnerability? Please follow the disclosure process in [SECURITY.md](SECURITY.md).
 
 <details>
 <summary><b>Tech stack</b></summary>
