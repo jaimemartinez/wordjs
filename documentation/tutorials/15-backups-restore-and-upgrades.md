@@ -1,7 +1,7 @@
 # Tutorial 15 — Backups, restoring and upgrading
 
 In this tutorial you take a backup of a site, upgrade WordJS to a new release with one command, and
-restore the backup to bring back something that was deleted. You go from 2.6.0 to 2.7.0 here, but the
+restore the backup to bring back something that was deleted. You go from 2.8.0 to 2.9.0 here, but the
 steps are the same for any release.
 
 **Time:** about 20 minutes.
@@ -37,7 +37,8 @@ every one).
 ## 2. Upgrade
 
 **From the admin panel:** **Admin → Updates** says whether a newer WordJS is out and shows its release
-notes. Enter your password and a code from your authenticator app and click **Update to …**. WordJS:
+notes. Enter your password (and a code from your authenticator app, if your account has two-factor
+authentication) and click **Update to …**. WordJS:
 
 1. makes a backup (it appears in Settings → Backups);
 2. runs the same official upgrade as the command below — it downloads the release and checks its

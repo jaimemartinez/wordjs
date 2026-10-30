@@ -47,8 +47,8 @@ Click **Heading** in the Blocks panel. It is added below the selected block; set
 
 Click **Text**. A paragraph block is added with the sample text `Write here...`. Text is written **on the
 canvas**, not in the panel. With the block selected, click the **pencil** in its toolbar (or double-click
-the text): the cursor goes to the end of the text. Select the sample text (**Ctrl/⌘+A**), type
-`Open Tuesday to Saturday, 8 am to 4 pm. Ask for a cupping on Fridays.` over it, and press **Esc** (or click
+the text): the sample text is selected, so what you type replaces it. Type
+`Open Tuesday to Saturday, 8 am to 4 pm. Ask for a cupping on Fridays.`, and press **Esc** (or click
 outside the text) when you are done. While you edit, selecting some words shows a small toolbar with
 **Bold**, **Italic**, **Link**, **List**, **Numbered list** and **Clear formatting**. The panel keeps the
 paragraph's style: color, size, line height and maximum width.
@@ -62,7 +62,7 @@ Each block's toolbar also has **Move up/down**, **Duplicate** and **Delete**. Un
 
 - **Preview** in the top bar opens the page on the live site (the ▶ button beside it only replays the
   entrance animations). Drafts stay private to you.
-- To publish, set the status to **Publish** and click **Save**.
+- To publish, set the status to **Publish**: the main button then reads **Publish**; click it.
 
 The page is now public at `/our-story`. From then on, edits show **Unpublished changes**, and the main
 button reads **Publish**: your changes go live only when you click it.

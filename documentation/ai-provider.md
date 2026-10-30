@@ -17,7 +17,7 @@ Nobody else ever sees the key: not the browser, not plugins, not the logs.
 | Provider | What to enter |
 |---|---|
 | **Anthropic (Claude)** | the model — `claude-sonnet-5-5` (default, balanced), `claude-haiku-5-5` (cheapest) or `claude-opus-5-5` (most capable) — and the API key |
-| **OpenAI-compatible** | the base URL ending in `/v1` (OpenAI, an OpenAI-compatible gateway, Ollama, LM Studio, vLLM…), the model name, and the key if the server needs one. https is required unless the host is loopback (`localhost`, `127.0.0.1`, `::1`). No query string or fragment |
+| **OpenAI-compatible** | the base URL ending in `/v1` (OpenAI, an OpenAI-compatible gateway, Ollama, LM Studio, vLLM…), the model name, and the key if the server needs one. https is required unless the host is loopback (`localhost`, any `*.localhost` name, `127.0.0.1`, `::1`). No query string or fragment |
 
 **Which addresses.** The base URL goes through the same egress guard as webhooks, at save time and again
 before every request, and the request connects to the address that was checked (no DNS rebinding in
@@ -52,6 +52,11 @@ shows its own wording for each (anything else falls back to "the AI provider did
 | `ai_provider_bad_request` | 502 | any other refusal of the request (400/413/422) |
 | `ai_provider_bad_response` | 502 | the answer was not JSON |
 | `ai_provider_error` | 502 | any other error status |
+| `ai_empty` | 502 | the model answered with no text |
+| `ai_nothing_to_summarise` | 400 | the title and body are too short to suggest anything from |
+| `ai_unsupported_media` | 400 | alt text was asked for something that is not a public PNG, JPEG, WebP, GIF or AVIF image, or the image could not be read |
+
+`/ai/suggest` also answers `403 rest_forbidden` without the task's capability (or edit rights on the image), and `404 rest_post_invalid_id` for an unknown `mediaId`.
 
 The provider's own error body is only inspected to classify the failure; it is never echoed back.
 

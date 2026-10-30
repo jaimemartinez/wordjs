@@ -243,12 +243,15 @@ that file, per file and with an exact count. The allowlist holds:
 Everything above is the **backend**. In split and separate mode the other two processes log
 differently, so a log pipeline has to parse three shapes:
 
-- **Gateway** (`gateway/src/index.js`) — Winston, not pino, at a fixed `info` level (`LOG_LEVEL` and
-  `logging.level` do not apply to it). It writes each line twice: to **stdout** as colourised plain
+- **Gateway** (`gateway/src/index.js`) — Winston, not pino, at the level `LOG_LEVEL` gives, else
+  `logging.level`, else `info` (`gateway/src/runtime-settings.js`; the backend's level names mean the same
+  here). It writes each line twice: to **stdout** as colourised plain
   text (`info: …`), and to a **file**, `logs/gateway-%DATE%.log` relative to the gateway's working
   directory (`gateway/logs/` when started by the root scripts, which `cd gateway`), as one JSON object
   per line with a `timestamp`, rotated daily, gzipped, capped at 20 MB per file and kept for 14 days.
-  Its access log is morgan's `combined` format, logged as the `message` of an `info` line. There is no
+  Its access log is morgan's `combined` format with two changes (`gateway/src/access-log.js`): every
+  query-string value is written as `[redacted]` (the names stay) and the Referer field is always `-`, so
+  a reset or verification link never lands in a log. It is logged as the `message` of an `info` line. There is no
   `requestId` on the gateway's own lines.
 - **Frontend** (`frontend/server.js`, started by `frontend/scripts/start-frontend.js`) — plain
   `console` output from the custom server and Next.js on stdout/stderr: unstructured text, no JSON and

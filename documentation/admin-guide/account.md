@@ -8,7 +8,8 @@ Open `https://<your-site>/login`. The page asks for:
 
 - **Username** («Nombre de Usuario») and **Password** («Contraseña»). The eye button shows or hides what you typed.
 - **Remember me** («Recordarme»), ticked by default.
-  - **Ticked:** you stay signed in for 7 days on this browser, even after closing it.
+  - **Ticked:** you stay signed in on this browser even after closing it, for up to 7 days. The session
+    is renewed while you use the panel; after about 2 hours without using it you sign in again.
   - **Unticked:** the session ends when you close the browser. Use this on a shared or public computer.
 - **Login** («Iniciar sesión»).
 

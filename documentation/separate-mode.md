@@ -211,7 +211,10 @@ cert is issued from the cluster CA, so SSR fetches validate — `start-frontend.
 The gateway is the cluster's only public address, but some services listen on the backend node: the mail server's
 SMTP listener is the usual one. Admin → Servers → *Ports the gateway forwards to the backend* makes the gateway listen
 on a port (25, say) and pipe every connection to a port of the backend node (the one the mail server reports, 2525 when
-25 is taken there), with a PROXY protocol v1 line first. Add the gateway's address to the mail server's trusted proxies
+25 is taken there), with a PROXY protocol v1 line first. A forward may only reach a mail port on the backend (25, 110, 143, 465, 587,
+993, 995, 2525, 4190, or the port the backend reports for its inbound SMTP listener), at most 10 forwards; changing them
+asks for your password (and your two-factor code when your account has one), and `tcpForwardBind` in `gateway-config.json` narrows the
+listeners to one address of the gateway machine. Add the gateway's address to the mail server's trusted proxies
 so it judges the real sender's address. The gateway needs the privilege to bind a port below 1024 (it runs as root
 under the `create-wordjs --systemd` unit; otherwise grant `CAP_NET_BIND_SERVICE`); the screen says when it cannot.
 Point the MX record at the gateway's public address.
@@ -314,7 +317,7 @@ which is shorter and already instant.
 
 | Thing | Where | Notes |
 |---|---|---|
-| `gatewaySecret` | all three configs | written automatically by `init`/`node-join` |
+| `gatewaySecret` | gateway + every backend | written automatically by `init`/`node-join` (a frontend never receives it) |
 | `revalidateSecret` | gateway + every frontend | minted by `init`, handed out by `/enroll`, and re-fetched by a frontend that lacks it (`GET /revalidate-secret`, mTLS `CN=frontend`); authenticates cache purges. A mismatch means purges are refused (403) and content falls back to TTL freshness |
 | cluster CA (`cluster-ca.crt`) | all three `certs/` | distributed automatically by enrollment |
 | `siteUrl` and the site's other addresses | backend (the master), pushed to the gateway | the host browsers reach the gateway on must be the main address, one of the other addresses, loopback or (with the default `ipLiterals: any`) an IP address, or the gateway and the backend answer `421 rest_host_not_allowed`. Change them on the backend only (Settings → Site address, or `npm run site`); the backend pushes the policy to the gateway (`POST /host-policy`) and the new `siteUrl` (`/config-update`). The frontend node keeps its own copy of `siteUrl`, used to name the public host on SSR reads, and keeps it current by itself: every 30 s it asks the gateway (`GET /edge-info`, mTLS `CN=frontend`) for the address the backend last pushed and the protocol the gateway's workers serve, and rewrites `siteUrl`, `gatewayPort`, `gatewaySsl` and — when it is the gateway's own address, as enrollment writes it — `internalApiUrl` in its `wordjs-config.json`. Nothing has to be edited on that machine after changing the main address or switching HTTPS on or off in Admin → Security; an `internalApiUrl` that points anywhere else is left as the operator set it. Frontend SSR reaches the gateway at its `internalApiUrl`, usually an IP: with `hostPolicy.ipLiterals` set to `own` or `none`, add that address as another address. `own` means the gateway machine's addresses here, not the backend node's: the gateway reports them in its answer to every push, and the backend judges `own` with them too. See [site-address.md](site-address.md) |

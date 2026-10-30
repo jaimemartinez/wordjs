@@ -48,7 +48,7 @@ The scaffold already works as a reading list. `index.js` registers three routes,
 - `POST /` adds one (administrators only);
 - `DELETE /:id` removes one (administrators only).
 
-It keeps the items in a site option called `reading-list_items`. Options are shared by the whole
+It keeps the items in a site option called `reading_list_items` (a plugin may only write options that start with its slug, with dashes turned into underscores). Options are shared by the whole
 site, so always prefix your keys with the plugin's slug. The admin page calls those routes.
 
 The manifest asks for five permissions. Each comes with a reason, which the administrator reads before

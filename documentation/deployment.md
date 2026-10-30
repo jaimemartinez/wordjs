@@ -85,7 +85,7 @@ known open bug in it.
 
 A release bumps, in one pull request: the `version` of the root, `backend` and `packages/create-wordjs`
 `package.json` (and their lockfiles), the [Unreleased] heading of `CHANGELOG.md` to `## [x.y.z] - <date>`,
-`deploy/helm/wordjs/Chart.yaml` (`appVersion` to the release, `version` — the chart's own — by one minor),
+`deploy/helm/wordjs/Chart.yaml` (`appVersion` to the release, `version` — the chart's own — by one patch),
 the image-tag examples in `deploy/helm/wordjs/values.yaml` and the chart README, the *Latest release* line and the
 tag examples on this page, and the supported-versions table in `SECURITY.md`.
 
@@ -225,7 +225,7 @@ npm run build
 cd ..
 ```
 
-> The backend `server.js` supervisor automatically runs the compiled `dist/index.js` when it exists, and only falls back to `ts-node` when no build is present. Always run `npm run build` for production. See **[development.md](development.md)** for the full dev vs prod workflow.
+> The backend `server.js` supervisor runs the compiled `dist/index.js`, and refuses to start when no build is present. Always run `npm run build` for production. See **[development.md](development.md)** for the full dev vs prod workflow.
 
 ### 3. Build Plugin Frontends (NEW)
 WordJS uses a hybrid system. In production, plugins load frontend code from pre-compiled bundles. You must compile them once before starting.
@@ -240,7 +240,7 @@ You have two options for production:
 
 **A. Using the Interactive Installer (Default)**
 1. Start the app (see "Run in Production").
-2. The server will detect that `wordjs-config.json` is missing and start in **Setup Mode**.
+2. The server starts in **Setup Mode** until the installer has written `installedAt` / `dbDriver` to `wordjs-config.json`.
 3. Visit your server's IP/Domain (e.g., `http://localhost:3000`).
 4. You will be redirected to the installation screen to set up your admin account and site details.
 
@@ -294,7 +294,7 @@ panel first, and a command or a config edit only as the second way. The screens 
 What still needs a terminal, and why: the first install and the systemd unit (`create-wordjs`, before
 there is a panel), creating a separate-mode cluster and the very first backend's join token, running
 `node-join` on a new machine, upgrading split or separate mode (each machine), and the environment-only
-security gates (`WORDJS_AI_ALLOW_PRIVATE_PROVIDER`, `WORDJS_ACCOUNT_MAIL_ALLOW_PRIVATE_RELAY`).
+security gates (`WORDJS_AI_ALLOW_PRIVATE_PROVIDER`, `WORDJS_ACCOUNT_MAIL_ALLOW_PRIVATE_RELAY`, `WORDJS_IMPORT_ALLOW_PRIVATE_SOURCE`).
 
 ### Restarting by itself (exit code 75)
 
@@ -348,7 +348,7 @@ cd ../frontend
 pm2 start npm --name "wordjs-frontend" -- start
 ```
 
-> Make sure `cd backend && npm run build` has run first, otherwise the backend falls back to slower `ts-node`.
+> Make sure `cd backend && npm run build` has run first, otherwise the backend refuses to start.
 
 ---
 
@@ -597,11 +597,11 @@ Every isolated plugin is wrapped by the mechanism native to its OS. All three pa
 
 | OS | Native mechanism | Guarantees retained for every plugin |
 |---|---|---|
-| Linux | Landlock + `no_new_privs` + seccomp-bpf | read/write allowlist, W^X writable zones, cross-process and process-creation restrictions, dangerous-syscall/anonymous-executable/x32-ABI denial; every socket denied without the network grant and only AF_INET/AF_INET6 clients admitted with it |
-| Windows | AppContainer + Job Object | package-SID filesystem boundary, child-process prohibition, memory and process limits, plus an **opt-in** CPU-rate cap (`sandbox.cpuQuotaPercent`, default `0` = off); only `internetClient` is added when network is granted |
-| macOS | deny-by-default Seatbelt | scoped reads/writes and process-inspection denial — `process-fork`/`process-exec` are deliberately allowed, since a descendant inherits the same Seatbelt domain; outbound network is allowed only when granted |
+| Linux | Landlock + `no_new_privs` + seccomp-bpf | read/write allowlist, W^X writable zones, cross-process and process-creation restrictions, dangerous-syscall/anonymous-executable/x32-ABI denial; every IP socket denied, network grant or not |
+| Windows | AppContainer + Job Object | package-SID filesystem boundary, child-process prohibition, memory and process limits, plus an **opt-in** CPU-rate cap (`sandbox.cpuQuotaPercent`, default `0` = off); no network capability, network grant or not |
+| macOS | deny-by-default Seatbelt | scoped reads/writes and process-inspection denial — `process-fork`/`process-exec` are deliberately allowed, since a descendant inherits the same Seatbelt domain; network denied, network grant or not |
 
-A network grant changes only egress. It never removes the filesystem, process or resource sandbox. Linux no longer needs a separately installed launcher, unprivileged user namespaces or sysctl changes; `/usr/bin/perl` applies Landlock/seccomp to itself and then `exec`s Node.
+No plugin opens a socket of its own at the kernel layer on any OS: a network grant is served by the host's egress tunnel (`backend/src/core/egress-tunnel.ts`), which opens each connection for the plugin within its host and port allow-lists, to public addresses unless an administrator approved a private destination. A network grant changes only egress. It never removes the filesystem, process or resource sandbox. Linux no longer needs a separately installed launcher, unprivileged user namespaces or sysctl changes; `/usr/bin/perl` applies Landlock/seccomp to itself and then `exec`s Node.
 
 `sandbox.requireHardening` is **true by default**. If the native probe fails, or a certified profile cannot be built/launched for a specific plugin, that plugin is refused. Setting it to `false` is an explicit unsafe compatibility downgrade. The source-only Windows `ts-node` development worker is the single carve-out; compiled production is always subject to this gate.
 
@@ -727,6 +727,7 @@ Almost everything lives in `backend/wordjs-config.json` (written by the install 
 | `WORDJS_GRAPHQL_MAX_DEPTH` | — | `10` | env only | Deepest selection a GraphQL query (`/api/v1/graphql`) may nest; range 2–50. See [graphql.md](graphql.md). |
 | `WORDJS_GRAPHQL_MAX_COST` | — | `1000` | env only | Cost budget of one GraphQL query; range 50–100,000. |
 | `WORDJS_GRAPHQL_MAX_TOKENS` | — | `5000` | env only | Token count of one GraphQL document; range 100–100,000. |
+| `WORDJS_GRAPHQL_MAX_MUTATIONS`, `_MAX_FIELDS`, `_MAX_ALIASES`, `_MAX_RESPONSE_BYTES`, `_MAX_STREAMS`, `_MAX_STREAMS_PER_CLIENT` | — | `10`, `1000`, `50`, 16 MiB, `500`, `5` | env only | The other GraphQL limits: mutation fields per document, fields per operation, aliases per selection set, the largest response, and open subscription streams per process and per caller ([graphql.md](graphql.md)). |
 | `REDIS_ENABLED` | `redis.enabled` | `false` | file | `true` turns on the Redis cache and the cross-node bus ([multi-node.md](multi-node.md)). These four rows can also be set from **Settings → Performance**, which tries the server, writes the `redis` section of the file and restarts the backend (`GET`/`PUT /api/v1/system/redis`, `POST /api/v1/system/redis/test`). |
 | `REDIS_HOST` / `REDIS_PORT` | `redis.host` / `redis.port` | `127.0.0.1` / `6379` | file | Redis address. |
 | `REDIS_PASSWORD` / `REDIS_DB` | `redis.password` / `redis.db` | — / `0` | file | Redis credentials and database index. |
@@ -740,6 +741,9 @@ Almost everything lives in `backend/wordjs-config.json` (written by the install 
 | `WORDJS_TRUST_PROXY` | `trustProxy` | unset (by mode) | file | Which peers are your proxies — see [site-address.md](site-address.md). Also in **Admin → Security → Server** (restarts by itself). |
 | `WORDJS_READINESS_TIMEOUT_MS` | — | `3000` | env only | Deadline for the `/readyz` database check (100–60000 ms); past it the probe answers 503 `db: "timeout"`. |
 | `WORDJS_SHUTDOWN_DRAIN_DELAY_MS` | — | `5000` under Kubernetes, else `0` | env only | After `SIGTERM`, how long `/readyz` answers 503 `draining` before the listeners stop accepting (0–60000 ms), so the load balancer can take the instance out of rotation first. |
+| `WORDJS_PLUGIN_READY_TIMEOUT_MS` | — | `60000` | env only | How long a plugin's process may take to start before it is given up on. |
+| `WORDJS_ALLOW_SOURCE` | — | unset | env only | `1` lets `npm start` run the TypeScript sources when there is no `dist/` build — development only, refused with `NODE_ENV=production`. |
+| `WORDJS_LOG_TO_STDERR` | — | unset | env only | `1` sends the backend's log lines to stderr, for a command-line tool whose stdout is its output. |
 | `WORDJS_SHUTDOWN_TIMEOUT_MS` | — | `10000` | env only | The longest the requests in flight are waited for once the listeners are closed (0–120000 ms); what is still open then is closed. |
 | `WORDJS_DB_STRICT` | `dbStrictDriver` | `false` | env | Refuse to boot instead of falling back to `sqlite-legacy` (above). |
 | `WORDJS_INSTALL_TOKEN` | — | random | env only | Your own one-time install token (≥ 16 characters). `WORDJS_PRINT_INSTALL_TOKEN=1` prints it in the banner. |
@@ -805,7 +809,7 @@ CI runs on every pull request, on `v*` tags, once a day on `main` (`17 6 * * *`,
 
 Beyond `ci.yml`, a separate **`.github/workflows/codeql.yml`** runs **CodeQL SAST** (`security-and-quality` queries, JavaScript/TypeScript) on pull requests, pushes to `main` and weekly, reporting to the repo's **Security** tab without blocking merges. Two more workflows run on every pull request (and on manual dispatch) and are required: **`.github/workflows/f6-certification.yml`** re-runs the phase suites on all three database engines, and **`.github/workflows/sandbox-parity.yml`** certifies the compiled sandbox on a four-way OS matrix (`ubuntu-latest`, `ubuntu-22.04`, `macos-14`, `windows-latest`) by running `backend/scripts/verify-sandbox-parity.mjs` against the real kernel of each runner. A scheduled workflow, **`.github/workflows/dependency-audit.yml`**, runs the same `scripts/ci-audit.mjs` gate across **all six** workspaces (root, `backend`, `frontend`, `gateway`, `setup`, `packages/create-wordjs`) every day at 04:41 UTC — and on demand via `workflow_dispatch` — opening or commenting on a `Dependency audit failed (<date>)` issue that names the failing workspaces and links the run; `ci.yml` itself audits only `backend`, `gateway`, `frontend` and `packages/create-wordjs`, so the root and `setup` workspaces are covered by that sweep alone. The release pipeline (`release.yml`) also emits a **CycloneDX SBOM** (`release/wordjs-sbom.cdx.json`) attached as a release asset, and third-party Actions are **pinned to immutable commit SHAs** for supply-chain integrity.
 
-> **Note:** Production runs the **compiled** backend — the `server.js` supervisor launches `node dist/index.js` when `dist/` exists, and only falls back to `ts-node` in development or when no build is present. Run `npm run build` before deploying.
+> **Note:** Production runs the **compiled** backend — the `server.js` supervisor launches `node dist/index.js`, and refuses to start when `dist/` is missing (`WORDJS_ALLOW_SOURCE=1` runs the sources, development only). Run `npm run build` before deploying.
 
 ---
 
