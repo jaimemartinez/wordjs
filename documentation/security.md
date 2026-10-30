@@ -2,9 +2,9 @@
 
 WordJS implements a "Defense in Depth" security model for its plugin ecosystem, designed to protect the core system and sensitive data from malicious or poorly written extensions.
 
-> **Status & honesty note.** WordJS is **pre-production** and primarily solo-maintained. The defenses
+> **Status & honesty note.** WordJS is primarily solo-maintained. The defenses
 > documented here are implemented and tested, but the project has **not** had an independent security
-> audit — one is **recommended before any production deployment**. `SECURITY.md` (repo root) is the
+> audit — one is **recommended for high-stakes deployments**. `SECURITY.md` (repo root) is the
 > disclosure / reporting policy and realistic-posture summary; this document is the deeper defenses
 > reference. The plugin sandbox is the project's central thesis (see `POSITIONING.md`).
 

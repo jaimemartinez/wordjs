@@ -772,7 +772,7 @@ Before going live, confirm:
 4. [ ] **Proper mTLS certificates** — the gateway verifies upstream (backend/frontend) certificates against the cluster CA and requires an allowed internal CN. Provide real certs rather than relying on insecure defaults.
 5. [ ] **CSP follow-up** — the gateway's Helmet config now sets a CSP, but still a permissive one (it mirrors the backend's — `'unsafe-inline'` in `script-src`, open `img-src`/`connect-src`; neither policy carries `'unsafe-eval'` any more), and it only covers the responses the gateway generates itself — proxied responses keep the upstream's own policy. Tightening it is still a hardening item.
 
-> **Status:** WordJS is pre-production and primarily solo-maintained. An **independent security audit is recommended before production**. See `POSITIONING.md` for the sandbox-as-thesis product direction.
+> **Status:** WordJS is primarily solo-maintained and has not had an independent security audit yet; one is **recommended for high-stakes deployments**. See `POSITIONING.md` for the sandbox-as-thesis product direction.
 
 ---
 
