@@ -15,6 +15,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   device.
 
 ### Changed
+- **The documentation matches the code again.** Every operator, developer and admin-guide page was checked against
+  the current code: stale numbers and versions, renamed screens and labels, behaviour that changed since the page
+  was written (the per-request Content-Security-Policy, the plugin egress tunnel, `npm start` refusing to run
+  without a build, the mail relay modes), and features that had no docs (Site Health, Servers and Updates in the
+  admin guide, the «Maps» card, the mail server's «System sent» log, the agents' publish queue).
 - **The docs no longer call WordJS beta or pre-production.** The README, `CONTRIBUTING.md`, `SECURITY.md`, the deployment checklist and the
   security reference drop the label; they still say plainly that there is no independent audit yet and recommend one
   for high-stakes deployments.
