@@ -17,6 +17,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ### Changed
 - **The sandbox parity check runs its macOS leg on macOS 15.** GitHub retires the macOS 14 runner image on
   2026-11-02 and its brownouts were already cancelling the job; the docs name the new image.
+- **follow-redirects 1.16.2 in the backend and the gateway** (GHSA-mrwp-f3q8-3g9p, high: custom credential headers
+  could follow a cross-origin redirect).
 - **The docs no longer call WordJS beta or pre-production.** The README, `CONTRIBUTING.md`, `SECURITY.md`, the deployment checklist and the
   security reference drop the label; they still say plainly that there is no independent audit yet and recommend one
   for high-stakes deployments.
