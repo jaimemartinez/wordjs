@@ -9,7 +9,7 @@
  *
  * The portable MySQL form is a STORED generated column holding the key, with a plain UNIQUE index on
  * it (MySQL ≥ 5.7, MariaDB ≥ 10.2):
- *   users.user_email_key = LOWER(user_email)
+ *   users.user_email_key = LOWER(user_email), NULL when user_email is '' (an account with no email)
  *   posts.post_slug_key  = post_type + '/' + post_name, NULL when post_name is '' (NULLs never collide)
  * Binary collation, so the rule is the exact one the other engines enforce (MySQL's default
  * `utf8mb4_unicode_ci` would also call 'josé' and 'jose' the same).
@@ -30,8 +30,8 @@ const KEYS = [
         table: 'users',
         column: 'user_email_key',
         index: 'uq_users_email',
-        columnDdl: 'ADD COLUMN user_email_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (LEFT(LOWER(user_email), 255)) STORED',
-        dupSql: 'SELECT LOWER(user_email) AS k, COUNT(*) AS c FROM users GROUP BY LOWER(user_email) HAVING COUNT(*) > 1',
+        columnDdl: "ADD COLUMN user_email_key VARCHAR(255) CHARACTER SET utf8mb4 COLLATE utf8mb4_bin GENERATED ALWAYS AS (IF(user_email IS NULL OR user_email = '', NULL, LEFT(LOWER(user_email), 255))) STORED",
+        dupSql: "SELECT LOWER(user_email) AS k, COUNT(*) AS c FROM users WHERE user_email <> '' GROUP BY LOWER(user_email) HAVING COUNT(*) > 1",
     },
     {
         table: 'posts',

@@ -19,6 +19,7 @@ import { ModalProvider } from "@/contexts/ModalContext";
 import { translations } from "@/lib/i18n";
 import UserFormModal, { FIELD_LABEL, HELP_TEXT } from "../UserFormModal";
 import { AA, contrastOf, textClassOf } from "@/lib/__tests__/helpers/tailwindContrast";
+import { pluginHooks } from "@/lib/plugin-hooks";
 
 const ES = translations.es;
 const render = (user: "new") => renderToStaticMarkup(
@@ -28,7 +29,7 @@ const render = (user: "new") => renderToStaticMarkup(
 describe("UserFormModal", () => {
     it("is in the admin's language (es on the server render)", () => {
         const html = render("new");
-        for (const key of ["user.edit.titleNew", "user.edit.subtitleNew", "user.edit.username", "user.edit.email", "user.edit.personalEmail",
+        for (const key of ["user.edit.titleNew", "user.edit.subtitleNew", "user.edit.username", "user.edit.personalEmail",
             "user.edit.displayName", "user.edit.role", "user.edit.password", "user.edit.cancel", "user.edit.save"]) {
             expect(html, key).toContain(ES[key]);
         }
@@ -36,6 +37,27 @@ describe("UserFormModal", () => {
             expect(html, english).not.toContain(english);
         }
         expect(html).toContain(`aria-label="${ES["common.close"]}"`);
+    });
+
+    it("a new account has no account email unless a plugin provides one (the personal address is separate)", () => {
+        const label = `>${ES["user.edit.email"]}<`;
+        expect(render("new")).not.toContain(label);
+        expect(render("new")).toContain(ES["user.edit.personalEmail"]);
+        // A plugin that provides the address (a mailbox) shows the field through the documented filter.
+        pluginHooks.addFilter("user_form_email_input_props", (props: Record<string, unknown>) => ({ ...props, hidden: false, readOnly: true }), 10, "test:shows-email");
+        try {
+            expect(render("new")).toContain(label);
+        } finally {
+            // Same key: replaces the filter above with one that changes nothing.
+            pluginHooks.addFilter("user_form_email_input_props", (props: Record<string, unknown>) => props, 10, "test:shows-email");
+        }
+    });
+
+    it("the password manager is told which field is the username, so it never fills the display name", () => {
+        const html = render("new");
+        expect(html).toMatch(/id="user-form-field-1"[^>]*autoComplete="username"|autoComplete="username"[^>]*id="user-form-field-1"/i);
+        expect(html).toMatch(/id="user-form-field-4"[^>]*autoComplete="off"|autoComplete="off"[^>]*id="user-form-field-4"/i);
+        expect(html).toMatch(/id="user-form-field-5"[^>]*autoComplete="new-password"|autoComplete="new-password"[^>]*id="user-form-field-5"/i);
     });
 
     it("an existing user's subtitle names them, in every language", () => {

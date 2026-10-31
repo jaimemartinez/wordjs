@@ -4,6 +4,7 @@
  *
  *   users.login   a login names one account            idx_users_login
  *   users.email   an email (case-folded) names one     idx_users_email (SQLite/Postgres) · uq_users_email (MySQL)
+ *                 (an account may have none: '' is outside the rule, like an empty slug)
  *   posts.slug    a slug is unique within its type     idx_posts_name_type             · uq_posts_slug
  *   terms.slug    a term slug is unique site-wide      uq_terms_slug
  *
@@ -69,9 +70,9 @@ const RULES: Rule[] = [
         id: 'users.email', table: 'users', idColumn: 'id',
         index: (e) => (e === 'mysql' ? 'uq_users_email' : 'idx_users_email'),
         key: (e) => (e === 'mysql' ? MYSQL_BIN('LOWER(user_email)') : 'LOWER(user_email)'),
-        where: '1 = 1',
+        where: "user_email <> ''",
         columns: 'id, user_login, user_email, display_name, user_registered',
-        createSql: 'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(user_email))',
+        createSql: "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(user_email)) WHERE user_email <> ''",
     },
     {
         id: 'posts.slug', table: 'posts', idColumn: 'id',

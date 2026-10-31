@@ -84,6 +84,12 @@ export default function UserEditorPage() {
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        // A display name that is the username is refused by the server (the name is public, the username is
+        // not). Said before the round trip, in the admin's language.
+        if (isNew && formData.displayName.trim() && formData.displayName.trim().toLowerCase() === formData.username.trim().toLowerCase()) {
+            await alert(t('user.edit.displayNameIsLogin'));
+            return;
+        }
         setSaving(true);
 
         try {
@@ -112,6 +118,18 @@ export default function UserEditorPage() {
         }
     };
 
+    // THE ACCOUNT EMAIL is the account's own address, which a plugin provides: its `user_form_email_input_props`
+    // filter fills it in and sets `hidden: false`. Without one the field is not shown and the account has no
+    // email — the personal address below is a different thing and is never copied into it. An existing account
+    // that already has one keeps the field.
+    const emailInputProps = pluginHooks.applyFilters('user_form_email_input_props', {
+        className: "w-full px-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium",
+        required: true,
+        readOnly: false,
+        hidden: isNew || !loaded.email,
+    }, { formData, isNew });
+    const { hidden: emailHidden, ...emailInputAttrs } = emailInputProps;
+
     return (
         <div className="px-4 py-6 sm:p-8 md:p-12 h-full overflow-auto bg-gray-50/50 animate-in fade-in duration-500">
             {/* Premium Header */}
@@ -138,6 +156,7 @@ export default function UserEditorPage() {
                     <div>
                         <label htmlFor="user-edit-1" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.username')}</label>
                         <input id="user-edit-1"
+                            autoComplete="username"
                             type="text"
                             value={formData.username}
                             onChange={(e) => setFormData({ ...formData, username: e.target.value })}
@@ -152,19 +171,15 @@ export default function UserEditorPage() {
                         isNew={isNew}
                     />
                     <PluginHook name="user_form_before_email" data={{ formData, setFormData, isNew }} />
-                    <div>
+                    {!emailHidden && (<div>
                         <label htmlFor="user-edit-2" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.email')}</label>
                         <input id="user-edit-2"
                             type="email"
                             value={formData.email}
                             onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                            {...pluginHooks.applyFilters('user_form_email_input_props', {
-                                className: "w-full px-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium",
-                                required: true,
-                                readOnly: false
-                            }, { formData, isNew })}
+                            {...emailInputAttrs}
                         />
-                    </div>
+                    </div>)}
                     <div>
                         <label htmlFor="user-edit-3" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.personalEmail') || 'Personal / Recovery Email'}</label>
                         <input id="user-edit-3"
@@ -179,6 +194,7 @@ export default function UserEditorPage() {
                     <div>
                         <label htmlFor="user-edit-4" className="block text-[11px] font-black uppercase tracking-widest text-gray-500 mb-2">{t('user.edit.displayName')}</label>
                         <input id="user-edit-4"
+                            autoComplete="off"
                             type="text"
                             value={formData.displayName}
                             onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
@@ -196,6 +212,7 @@ export default function UserEditorPage() {
                             {isNew ? t('user.edit.password') : t('user.edit.newPassword')}
                         </label>
                         <input id="user-edit-5"
+                            autoComplete="new-password"
                             type="password"
                             value={formData.password}
                             onChange={(e) => setFormData({ ...formData, password: e.target.value })}

@@ -21,17 +21,19 @@ delete button on your own row.
 form:
 
 1. **Username** («Nombre de usuario»): required, and cannot be changed later.
-2. **Email** («Correo electrónico»): required.
-3. **Personal / Recovery Email**: where password-recovery mail and notifications go, if different.
-4. **Display Name** («Nombre visible»).
+2. **Email** («Correo electrónico»): the account's own address. It is shown only when a plugin provides one (a
+   professional mailbox, for example) or when the account already has one. Without it the account has no email.
+3. **Personal / Recovery Email**: where password-recovery mail and notifications go. It is never copied into
+   **Email**.
+4. **Display Name** («Nombre visible»): the name shown publicly. It cannot be the same as the username.
 5. **Role** («Rol»): **Core roles** (Administrator, Editor, Author, Contributor, Subscriber), your **Custom roles**,
    and **Plugin roles**.
 6. **Password** for a new user; when editing, **New Password (leave blank to keep current)**. At least 8
    characters.
 
 Plugins can add switches under **Plugin access for this account**, shown only when an active plugin offers one
-(a mailbox on the site's domain, for example). A switch that sets the user's email makes the **Email** field
-read-only while it is on; only an administrator can change that address.
+(a mailbox on the site's domain, for example). A switch that sets the user's email shows the **Email** field,
+read-only, while it is on; only an administrator can change that address.
 
 Press **Save User** («Guardar usuario»).
 

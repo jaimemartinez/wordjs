@@ -113,6 +113,8 @@ export const registerUserFormExtension = () => {
 
         return {
             ...props,
+            // The core shows the account email only when a plugin provides it: this is the mailbox address.
+            hidden: false,
             readOnly: true,
             className: (props.className || '') + " bg-gray-100 text-gray-400 border-dashed cursor-not-allowed font-mono",
             placeholder: "Generated automatically..."

@@ -504,12 +504,15 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
  *         application/json:
  *           schema:
  *             type: object
- *             required: [username, email, password]
+ *             required: [username, password]
  *             properties:
  *               username:
  *                 type: string
  *               email:
  *                 type: string
+ *                 description: >-
+ *                   The account's own address. Optional: an account without one is stored with none (its
+ *                   personal address is personalEmail, which is never copied here).
  *               password:
  *                 type: string
 *               displayName:
@@ -555,7 +558,7 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
  *               $ref: '#/components/schemas/User'
  *       400:
  *         description: >-
- *           rest_missing_param (username/email/password absent), rest_invalid_param (malformed primary
+ *           rest_missing_param (username or password absent), rest_display_name_is_login, rest_invalid_param (malformed primary
  *           email, or a username outside letters/digits/. _ - or longer than 60 characters, or an
  *           account capability no active plugin declares), rest_invalid_personal_email, or rest_user_exists.
  *         content:
@@ -580,12 +583,16 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
  *               $ref: '#/components/schemas/RestError'
  */
 router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
-    const { username, email, password, displayName, role = 'subscriber', personalEmail } = req.body;
+    const { username, password, displayName, role = 'subscriber', personalEmail } = req.body;
+    // THE ACCOUNT EMAIL IS OPTIONAL HERE. It is the account's own address (a professional mailbox fills it
+    // in); an account without one has none, and its personal address stays in personalEmail — never
+    // copied into this column.
+    const email = typeof req.body.email === 'string' ? req.body.email.trim() : '';
 
-    if (!username || !email || !password) {
+    if (!username || !password) {
         return res.status(400).json({
             code: 'rest_missing_param',
-            message: 'Username, email, and password are required.',
+            message: 'Username and password are required.',
             data: { status: 400 }
         });
     }
@@ -593,6 +600,16 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
     if (rejectWeakPassword(res, password)) return;
     const shownName = displayNameOrRefuse(res, displayName);
     if (!shownName) return;
+    // A display name that IS the login would be swapped for the «User <id>» placeholder by User.create (the
+    // login is never printed publicly — core/public-identity). Said here instead of done silently: a password
+    // manager that fills the login into the field above the password was turning typed names into «User 9».
+    if (shownName.value && require('../core/public-identity').isLoginDerivedName(shownName.value, username)) {
+        return res.status(400).json({
+            code: 'rest_display_name_is_login',
+            message: 'The display name cannot be the username: it is shown publicly, the username is not.',
+            data: { status: 400, params: ['displayName'] }
+        });
+    }
 
     // The username rule (models/User.ts) — User.create enforces it too; checked here for a clean 400.
     const usernameProblem = User.usernameError(username);
@@ -603,7 +620,7 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
     // The PRIMARY email must be a real address. User.create enforces the same rule (it is the model-level
     // backstop for the importers and self-registration), but reaching it here would surface as a raw 500;
     // answer the API's own 400 shape instead. One rule, expressed once — EMAIL_FORMAT_RE from core/email-address.
-    if (!isValidAddress(email)) {
+    if (email && !isValidAddress(email)) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid email format.', data: { status: 400 } });
     }
 
@@ -624,6 +641,7 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
             username,
             email,
             password,
+            optionalEmail: true,
             displayName: shownName.value,
             role,
             personalEmail,
