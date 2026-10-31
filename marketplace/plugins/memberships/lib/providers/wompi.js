@@ -58,7 +58,13 @@ const keyKind = (k) => {
 /** Add one billing period (1 or 12 months) to `fromMs`, calendar-aware. */
 function addPeriod(fromMs, interval, sign = 1) {
     const d = new Date(fromMs);
+    // Clamped to the last day of the target month: setUTCMonth alone turns 31 October + 1 month into
+    // 1 December (31 November overflows), a day too many — and going back from it lands on 1 November.
+    const day = d.getUTCDate();
+    d.setUTCDate(1);
     d.setUTCMonth(d.getUTCMonth() + sign * (interval === 'year' ? 12 : 1));
+    const last = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth() + 1, 0)).getUTCDate();
+    d.setUTCDate(Math.min(day, last));
     return d.getTime();
 }
 
