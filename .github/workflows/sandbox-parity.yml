@@ -30,7 +30,7 @@ jobs:
             label: "Linux current (Landlock + seccomp)"
           - os: ubuntu-22.04
             label: "Linux Ubuntu 22.04 runner (Landlock + seccomp)"
-          - os: macos-14
+          - os: macos-15
             label: "macOS (Seatbelt)"
           - os: windows-latest
             label: "Windows (AppContainer)"

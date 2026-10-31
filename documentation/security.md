@@ -64,7 +64,7 @@ WordJS implements a "Defense in Depth" security model for its plugin ecosystem, 
 > `GET /health/details`; verify the
 > compiled implementation with `backend/scripts/verify-sandbox-parity.mjs`
 > (`.github/workflows/sandbox-parity.yml` runs it on current **and older** Linux runners
-> (`ubuntu-latest`, `ubuntu-22.04`) plus one macOS (`macos-14`) and one Windows (`windows-latest`)
+> (`ubuntu-latest`, `ubuntu-22.04`) plus one macOS (`macos-15`) and one Windows (`windows-latest`)
 > runner, importing the same compiled modules WordJS launches so a duplicate probe cannot certify a
 > primitive the product never uses). **Host requirements, and the one exemption, are in §4.**
 
