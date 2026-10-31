@@ -222,6 +222,13 @@ function locksEmail(user: any): boolean {
     return granted.some((slug) => locking.has(slug));
 }
 
+/** locksEmail as it will read once `changes` (a planAccountCapabilityWrite plan) has been applied. */
+function locksEmailAfter(user: any, changes: Record<string, string> | undefined): boolean {
+    const meta: Record<string, any> = { ...metaOf(user) };
+    for (const [slug, value] of Object.entries(changes || {})) meta[ACCOUNT_CAPABILITY_META_PREFIX + slug] = value;
+    return locksEmail({ meta });
+}
+
 /**
  * Plan a write of the `accountCapabilities` request field — a map {slug: on/off} — against the account
  * `target` (null for a new account). Returns the CHANGES ONLY (an unchanged resend is not a write: the user
@@ -275,6 +282,7 @@ module.exports = {
     hasAccountCapability,
     accountCapabilitiesFor,
     locksEmail,
+    locksEmailAfter,
     planAccountCapabilityWrite,
     applyAccountCapabilityChanges,
 };

@@ -699,12 +699,13 @@ export const tagsApi = {
  * demand a password for "rename my display name"); comparison is case/whitespace-insensitive because that
  * is how the addresses are normalized before they are stored.
  */
-export const SUDO_GATED_SELF_FIELDS = ["password", "email", "personalEmail"] as const;
+export const SUDO_GATED_SELF_FIELDS = ["password", "email", "personalEmail", "removeEmail"] as const;
 
 export interface SelfEditFields {
     email?: string | null;
     personalEmail?: string | null;
     password?: string | null;
+    removeEmail?: boolean;
 }
 
 const normalizeAddress = (v: unknown) => String(v ?? "").trim().toLowerCase();
@@ -712,6 +713,8 @@ const normalizeAddress = (v: unknown) => String(v ?? "").trim().toLowerCase();
 /** True when this self-edit will be refused unless it carries `currentPassword`. */
 export function selfEditNeedsCurrentPassword(current: SelfEditFields, submitted: SelfEditFields): boolean {
     if (submitted.password) return true;
+    // Removing the primary email moves where a reset link would go.
+    if (submitted.removeEmail === true && normalizeAddress(current.email) !== "") return true;
     // Primary email: blank means "left alone" (the backend applies the identical rule).
     if (submitted.email !== undefined) {
         const next = normalizeAddress(submitted.email);
@@ -721,6 +724,18 @@ export function selfEditNeedsCurrentPassword(current: SelfEditFields, submitted:
     if (submitted.personalEmail !== undefined
         && normalizeAddress(submitted.personalEmail) !== normalizeAddress(current.personalEmail)) return true;
     return false;
+}
+
+/**
+ * The user forms' save body. The backend reads a blank `email` as "left alone" (every form resends its whole
+ * object), so an account email that was there and is now empty — the administrator cleared it, or a plugin
+ * took its address away — is sent as the explicit `removeEmail`.
+ */
+export function withEmailRemoval<T extends SelfEditFields>(current: SelfEditFields, submitted: T): T {
+    if (normalizeAddress(current.email) !== "" && normalizeAddress(submitted.email) === "") {
+        return { ...submitted, removeEmail: true };
+    }
+    return submitted;
 }
 
 /**

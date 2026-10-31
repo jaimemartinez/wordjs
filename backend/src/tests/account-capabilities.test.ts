@@ -486,3 +486,57 @@ describe('the upgrade from the core-owned mailbox flag (core/legacy-account-flag
         }
     });
 });
+
+// =================================================================================================
+// Turning a service off takes its address away: an account's email is the address a plugin provides, so
+// the user forms send `removeEmail` once it is gone (a blank `email` stays "left alone").
+// =================================================================================================
+describe('removing the account email (PUT /users/:id removeEmail)', () => {
+
+    test('refused while a granted capability binds the address; one save turns it off and removes it', async () => {
+        await seedUser('rosa', 'subscriber', `rosa@${MAIL_DOMAIN}`);
+        await dbAsync.run(`INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, '1')`, [U.rosa, `account_capability:${BADGE}`]);
+        await dbAsync.run(`INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, 'password_reset_hash', 'pending')`, [U.rosa]);
+
+        const bound = await as('usermgr', 'put', `/users/${U.rosa}`).send({ email: '', removeEmail: true });
+        assert.equal(bound.status, 400);
+        assert.equal(bound.body.code, 'rest_email_in_use_by_service');
+        assert.equal(await emailOf(U.rosa), `rosa@${MAIL_DOMAIN}`, 'the address stays while the service uses it');
+
+        const off = await as('usermgr', 'put', `/users/${U.rosa}`).send({ email: '', removeEmail: true, accountCapabilities: { [BADGE]: false } });
+        assert.equal(off.status, 200, JSON.stringify(off.body));
+        assert.equal(await emailOf(U.rosa), '', 'the account has no email now');
+        assert.equal(await grantOf(U.rosa, BADGE), '0');
+        assert.equal(await metaValue(U.rosa, 'password_reset_hash'), '', 'a reset link sent to the old address dies with it');
+
+        const again = await as('usermgr', 'put', `/users/${U.rosa}`).send({ email: '', removeEmail: true, displayName: 'Rosa' });
+        assert.equal(again.status, 200, 'removing an email the account does not have is a no-op');
+    });
+
+    test('a blank email is still "left alone", and removeEmail cannot travel with a new address', async () => {
+        await seedUser('tomas', 'subscriber', 'tomas@gmail.com');
+        const resend = await as('usermgr', 'put', `/users/${U.tomas}`).send({ email: '', displayName: 'Tomás' });
+        assert.equal(resend.status, 200);
+        assert.equal(await emailOf(U.tomas), 'tomas@gmail.com');
+
+        const both = await as('usermgr', 'put', `/users/${U.tomas}`).send({ email: 'other@gmail.com', removeEmail: true });
+        assert.equal(both.status, 400);
+        assert.equal(both.body.code, 'rest_invalid_param');
+        assert.equal(await emailOf(U.tomas), 'tomas@gmail.com');
+    });
+
+    test('only a user manager removes an address, and on their own account only with the password', async () => {
+        await seedUser('lucia', 'subscriber', 'lucia@gmail.com');
+        const self = await as('lucia', 'put', `/users/${U.lucia}`).send({ removeEmail: true, currentPassword: PASSWORD });
+        assert.equal(self.status, 403);
+        assert.equal(self.body.code, 'rest_forbidden');
+        assert.equal(await emailOf(U.lucia), 'lucia@gmail.com');
+
+        const noProof = await as('usermgr', 'put', `/users/${U.usermgr}`).send({ removeEmail: true });
+        assert.equal(noProof.status, 403, 'removing your own address moves your reset link: sudo');
+        assert.equal(await emailOf(U.usermgr), 'hr@gmail.com');
+        const withProof = await as('usermgr', 'put', `/users/${U.usermgr}`).send({ removeEmail: true, currentPassword: PASSWORD });
+        assert.equal(withProof.status, 200, JSON.stringify(withProof.body));
+        assert.equal(await emailOf(U.usermgr), '');
+    });
+});

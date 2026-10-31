@@ -596,6 +596,9 @@ class User {
             // Nor may it equal ANOTHER account's (legacy) login — see THE USERNAME RULE.
             if (await User.identifierInUse(normalizedEmail, id)) throw new Error('Email already in use');
             updates.push('user_email = ?'); values.push(normalizedEmail);
+        } else if (data.removeEmail === true) {
+            // The account no longer has an address (PUT /users/:id removeEmail): the unique rule leaves '' out.
+            updates.push('user_email = ?'); values.push('');
         }
         if (data.displayName) { updates.push('display_name = ?'); values.push(data.displayName); }
         if (data.url !== undefined) {
