@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.27] - 2026-10-31
+
 ### Changed
 - **Turning off a professional account takes its address away.** The account kept the mailbox address as its
   email, and the **Email** field stayed on screen, required, with no way to empty it: the server read a blank
