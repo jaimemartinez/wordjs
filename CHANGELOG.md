@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.25] - 2026-10-30
+
 ### Added
 - **conference-manager 2.36.23: a custom Excel of the localities.** «Localidades › Descargar Excel» builds one row
   per locality with the columns the admin picks and orders: the coordinator, assigned places, registered, places
