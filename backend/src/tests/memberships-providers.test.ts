@@ -741,6 +741,19 @@ describe('Wompi: charges, events and periods (second audit)', () => {
         assert.ok(calls.some((c) => c.method === 'GET' && c.path === '/v1/transactions/txn_v'));
     });
 
+    test('a month from the 31st ends on the last day of the next month, and a month back undoes it', () => {
+        // setUTCMonth alone made 31 October + 1 month = 1 December, and going back gave 1 November: on the
+        // 31st a voided payment kept its period (this suite failed on 2026-10-31).
+        const { addPeriod } = require('../../../marketplace/plugins/memberships/lib/providers/wompi');
+        const at = (iso: string) => Date.parse(iso);
+        const iso = (ms: number) => new Date(ms).toISOString();
+        assert.strictEqual(iso(addPeriod(at('2026-10-31T02:00:00Z'), 'month')), '2026-11-30T02:00:00.000Z');
+        assert.strictEqual(iso(addPeriod(at('2027-01-31T00:00:00Z'), 'month')), '2027-02-28T00:00:00.000Z');
+        assert.strictEqual(iso(addPeriod(at('2026-11-30T02:00:00Z'), 'month', -1)), '2026-10-30T02:00:00.000Z');
+        assert.strictEqual(iso(addPeriod(at('2028-02-29T00:00:00Z'), 'year')), '2029-02-28T00:00:00.000Z');
+        assert.strictEqual(iso(addPeriod(at('2026-10-15T08:00:00Z'), 'month')), '2026-11-15T08:00:00.000Z');
+    });
+
     test('a voided payment takes its period back', async () => {
         const reference = await wompiPayPeriod(tiers.basic, 'txn_void');
         assert.ok((await grantsOf(MEMBER.id)).includes('tier:basic'));

@@ -38,7 +38,7 @@ let renewTimer = null;
 
 exports.metadata = {
     name: 'Memberships',
-    version: '1.2.2',
+    version: '1.2.3',
     description: 'Members-only content: free and paid tiers, paywall block, Stripe / Mercado Pago / Wompi payments, complimentary memberships, newsletters.',
     author: 'WordJS',
 };

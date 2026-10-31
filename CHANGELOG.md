@@ -19,6 +19,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   2026-11-02 and its brownouts were already cancelling the job; the docs name the new image.
 - **follow-redirects 1.16.2 in the backend and the gateway** (GHSA-mrwp-f3q8-3g9p, high: custom credential headers
   could follow a cross-origin redirect).
+- **memberships 1.2.3: a month paid on the 31st ends on the last day of the next month.** A Wompi period bought on
+  31 October ran to 1 December, a day too many, and a payment voided that day kept its period instead of taking it
+  back.
 - **The docs no longer call WordJS beta or pre-production.** The README, `CONTRIBUTING.md`, `SECURITY.md`, the deployment checklist and the
   security reference drop the label; they still say plainly that there is no independent audit yet and recommend one
   for high-stakes deployments.
