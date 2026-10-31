@@ -812,7 +812,8 @@ async function initializeSchema(db: any, isAsync = false) {
   const uniqueIndexes = [
     'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_login ON users (user_login)',
     ...(isMysqlEngine ? [] : [
-      'CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(user_email))',
+      // '' is an account with no email (an administrator may create one): outside the rule, so many can exist.
+      "CREATE UNIQUE INDEX IF NOT EXISTS idx_users_email ON users (LOWER(user_email)) WHERE user_email <> ''",
       "CREATE UNIQUE INDEX IF NOT EXISTS idx_posts_name_type ON posts (post_name, post_type) WHERE post_name <> ''"
     ])
   ];

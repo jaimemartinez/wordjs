@@ -15,6 +15,17 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   device.
 
 ### Changed
+- **An account can have no email, and the user form asks for one only when a plugin provides it.** The account
+  email is the account's own address (a professional mailbox fills it in); the **Email** field of a new account is
+  shown only when a plugin turns it on, and the personal address is never copied into it. `POST /users` takes no
+  `email` then, and several accounts without one can exist: migration 0026 limits the unique email rule to
+  addresses that are not empty (a partial index on SQLite and PostgreSQL, a rebuilt key column on MySQL).
+  Self-registration and the importers still require an email. mail-server 3.3.8 shows the field while the
+  mailbox is on.
+- **The display name typed on «New user» is kept.** A password manager took the field above the password for the
+  username and filled the login into **Display name**; the server then replaced it with «User <id>», since the
+  login is never shown publicly. The fields now tell the password manager which one is the username, and a display
+  name equal to the username is refused with a message (`rest_display_name_is_login`) instead of replaced.
 - **The docs no longer call WordJS beta or pre-production.** The README, `CONTRIBUTING.md`, `SECURITY.md`, the deployment checklist and the
   security reference drop the label; they still say plainly that there is no independent audit yet and recommend one
   for high-stakes deployments.

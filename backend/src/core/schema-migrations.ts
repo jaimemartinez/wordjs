@@ -1084,6 +1084,34 @@ const MIGRATIONS: Migration[] = [
             }
             await ctx.exec('CREATE UNIQUE INDEX IF NOT EXISTS uq_audit_log_chain_seq ON audit_log (chain_seq)');
         }
+    },
+    {
+        // AN ACCOUNT MAY HAVE NO EMAIL. An administrator creates accounts without a professional mailbox, and
+        // their personal address lives in meta (personal_email), never in users.user_email — which is then ''.
+        // The email rule held '' like any address, so a second such account was refused. The rule now leaves
+        // '' out, as the slug rules do: SQLite/Postgres rebuild idx_users_email as a partial index, MySQL
+        // rebuilds its generated key column so '' maps to NULL (NULLs never collide).
+        id: '0026_users_email_optional',
+        up: async (ctx: MigrationCtx) => {
+            const ui = require('./unique-integrity');
+            const engine = ui.engineOf(ctx.driverName);
+            if (engine === 'mysql') {
+                const col = await ctx.get(
+                    "SELECT generation_expression AS g FROM information_schema.columns WHERE table_schema = DATABASE() AND table_name = 'users' AND column_name = 'user_email_key' LIMIT 1"
+                );
+                const expr = String((col && (col.g ?? col.GENERATION_EXPRESSION)) || '');
+                if (col && !/\bif\s*\(/i.test(expr)) {
+                    const idx = await ctx.get(
+                        "SELECT 1 AS ok FROM information_schema.statistics WHERE table_schema = DATABASE() AND table_name = 'users' AND index_name = 'uq_users_email' LIMIT 1"
+                    );
+                    if (idx) await ctx.exec('ALTER TABLE users DROP INDEX uq_users_email');
+                    await ctx.exec('ALTER TABLE users DROP COLUMN user_email_key');
+                }
+            } else {
+                await ctx.exec('DROP INDEX IF EXISTS idx_users_email');
+            }
+            return deferUntilEnforced('0026', ['users.email'], await ui.ensureUniqueIndexes(ctx, engine));
+        }
     }
 ];
 

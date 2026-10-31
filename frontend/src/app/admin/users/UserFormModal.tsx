@@ -97,6 +97,12 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
+        // A display name that is the username is refused by the server (the name is public, the username is
+        // not). Said before the round trip, in the admin's language.
+        if (isNew && formData.displayName.trim() && formData.displayName.trim().toLowerCase() === formData.username.trim().toLowerCase()) {
+            await alert(t('user.edit.displayNameIsLogin'));
+            return;
+        }
         // The server's rule (8 characters, every password it writes): said before the round trip.
         if (formData.password && formData.password.length < 8) {
             await alert(t('account.pwTooShort'));
@@ -129,6 +135,17 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
     };
 
     if (!user) return null;
+    // THE ACCOUNT EMAIL is the account's own address, which a plugin provides: its `user_form_email_input_props`
+    // filter fills it in and sets `hidden: false`. Without one the field is not shown and the account has no
+    // email — the personal address below is a different thing and is never copied into it. An existing account
+    // that already has one keeps the field.
+    const emailInputProps = pluginHooks.applyFilters('user_form_email_input_props', {
+        className: "w-full px-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium",
+        required: true,
+        readOnly: false,
+        hidden: isNew || !loaded.email,
+    }, { formData, isNew });
+    const { hidden: emailHidden, ...emailInputAttrs } = emailInputProps;
 
     return (
         // Above the admin shell (components/DialogLayer.tsx): on a phone it opened UNDER the header, its
@@ -171,6 +188,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                         <div>
                             <label htmlFor="user-form-field-1" className={FIELD_LABEL}>{t('user.edit.username')}</label>
                             <input id="user-form-field-1"
+                                autoComplete="username"
                                 type="text"
                                 value={formData.username}
                                 onChange={(e) => setFormData({ ...formData, username: e.target.value })}
@@ -185,19 +203,15 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                             isNew={isNew}
                         />
                         <PluginHook name="user_form_before_email" data={{ formData, setFormData, isNew }} />
-                        <div>
+                        {!emailHidden && (<div>
                             <label htmlFor="user-form-field-2" className={FIELD_LABEL}>{t('user.edit.email')}</label>
                             <input id="user-form-field-2"
                                 type="email"
                                 value={formData.email}
                                 onChange={(e) => setFormData({ ...formData, email: e.target.value })}
-                                {...pluginHooks.applyFilters('user_form_email_input_props', {
-                                    className: "w-full px-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium",
-                                    required: true,
-                                    readOnly: false
-                                }, { formData, isNew })}
+                                {...emailInputAttrs}
                             />
-                        </div>
+                        </div>)}
                         <div>
                             <label htmlFor="user-form-field-3" className={FIELD_LABEL}>{t('user.edit.personalEmail')}</label>
                             <input id="user-form-field-3"
@@ -212,6 +226,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                         <div>
                             <label htmlFor="user-form-field-4" className={FIELD_LABEL}>{t('user.edit.displayName')}</label>
                             <input id="user-form-field-4"
+                                autoComplete="off"
                                 type="text"
                                 value={formData.displayName}
                                 onChange={(e) => setFormData({ ...formData, displayName: e.target.value })}
@@ -229,6 +244,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
                                 {isNew ? t('user.edit.password') : t('user.edit.newPassword')}
                             </label>
                             <input id="user-form-field-5"
+                                autoComplete="new-password"
                                 type="password"
                                 value={formData.password}
                                 onChange={(e) => setFormData({ ...formData, password: e.target.value })}

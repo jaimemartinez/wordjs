@@ -276,8 +276,19 @@ class User {
      * checked FIRST. create() runs this very function, so a caller that has to decide before creating
      * (POST /auth/register, which defers the account until the address is confirmed) answers by the same
      * rule the eventual insert enforces.
+     *
+     * `optionalEmail`: an account may be created with no email at all (an administrator creating one that
+     * has no professional mailbox — its personal address lives in meta and is never copied here). Only a
+     * caller that says so gets that; every other door still requires an address. Resolves to '' then.
      */
-    static async assertNewIdentity(username: any, email: any): Promise<string> {
+    static async assertNewIdentity(username: any, email: any, opts: { optionalEmail?: boolean } = {}): Promise<string> {
+        const noEmail = !!opts.optionalEmail && (email == null || String(email).trim() === '');
+        if (noEmail) {
+            const loginProblem = usernameError(username);
+            if (loginProblem) throw new Error(`Invalid username: ${loginProblem}`);
+            if (await User.identifierInUse(username)) throw identityTaken('Username already exists', 'username_taken');
+            return '';
+        }
         // Canonicalize the email (full-Unicode lowercase + NFC) so confusable-case variants collide
         // and uniqueness holds even where the DB's ASCII-only LOWER() would not. Store the canonical form.
         const normalizedEmail = normalizeEmail(email);
@@ -329,9 +340,11 @@ class User {
      */
     static async create(data: any) {
         const { username, email, password, passwordHash, displayName, role = 'subscriber' } = data;
+        // See assertNewIdentity: only a caller that asks for it may create an account with no email.
+        const optionalEmail = data.optionalEmail === true;
 
         // Validation
-        if (!username || !email || (!password && passwordHash === undefined)) {
+        if (!username || (!email && !optionalEmail) || (!password && passwordHash === undefined)) {
             throw new Error('Username, email, and password are required');
         }
         if (passwordHash !== undefined && (password || typeof passwordHash !== 'string' || !BCRYPT_HASH_RE.test(passwordHash))) {
@@ -343,7 +356,7 @@ class User {
         // Reject any role not in the known roles allow-list (prevents role mass-assignment / bogus role).
         assertValidRole(role);
 
-        const normalizedEmail = await User.assertNewIdentity(username, email);
+        const normalizedEmail = await User.assertNewIdentity(username, email, { optionalEmail });
 
         // Hash password
         const hashedPassword = passwordHash !== undefined ? passwordHash : await bcrypt.hash(password, SALT_ROUNDS);
@@ -482,6 +495,8 @@ class User {
         // lowercased, so the column's LOWER() only has to ASCII-fold legacy mixed-case rows. This
         // matches non-ASCII confusable variants that SQLite's ASCII-only LOWER() alone would miss.
         const normalized = normalizeEmail(email);
+        // An account with no email has '' here: an empty address names nobody.
+        if (!normalized) return null;
         const row = await User._onlyRow('SELECT * FROM users WHERE LOWER(user_email) = ?', [normalized], 'email');
         if (!row) return null;
 
@@ -496,6 +511,7 @@ class User {
      */
     static async identifierInUse(value: string, exceptId?: number | string): Promise<boolean> {
         const folded = String(value).toLowerCase();
+        if (!folded.trim()) return false;
         const row = await dbAsync.get(
             'SELECT id FROM users WHERE (LOWER(user_login) = ? OR LOWER(user_email) = ?) AND id <> ? LIMIT 1',
             [folded, folded, exceptId === undefined || exceptId === null ? -1 : Number(exceptId)]);

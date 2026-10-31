@@ -255,6 +255,11 @@ export const registerGreetingCardHooks = () => {
 `user_form_before_email` is rendered by the core user forms (`<PluginHook name="user_form_before_email"
 data={{ formData, setFormData, isNew }} />`), so `data` gives you the form state.
 
+The account **Email** field takes its props from the `user_form_email_input_props` filter. The core hides it
+(`hidden: true`) on a new account and on one that has no email: an account's email is the address a plugin
+provides. A plugin that provides one fills `formData.email` and returns `hidden: false` (and `readOnly: true` if
+only an administrator may change it).
+
 ### Step 5: Build, then activate
 Run `node scripts/build-plugin.js greeting-card` from `backend/` (§4), restart the backend once so it
 discovers the new folder, and activate the plugin in `/admin/plugins` (§5). The **Greeting Card**
