@@ -497,6 +497,7 @@ describe('removing the account email (PUT /users/:id removeEmail)', () => {
         await seedUser('rosa', 'subscriber', `rosa@${MAIL_DOMAIN}`);
         await dbAsync.run(`INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, ?, '1')`, [U.rosa, `account_capability:${BADGE}`]);
         await dbAsync.run(`INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, 'password_reset_hash', 'pending')`, [U.rosa]);
+        await dbAsync.run(`INSERT INTO user_meta (user_id, meta_key, meta_value) VALUES (?, 'email_verification_hash', 'pending')`, [U.rosa]);
 
         const bound = await as('usermgr', 'put', `/users/${U.rosa}`).send({ email: '', removeEmail: true });
         assert.equal(bound.status, 400);
@@ -508,6 +509,7 @@ describe('removing the account email (PUT /users/:id removeEmail)', () => {
         assert.equal(await emailOf(U.rosa), '', 'the account has no email now');
         assert.equal(await grantOf(U.rosa, BADGE), '0');
         assert.equal(await metaValue(U.rosa, 'password_reset_hash'), '', 'a reset link sent to the old address dies with it');
+        assert.equal(await metaValue(U.rosa, 'email_verification_hash'), '', 'and so does a verification link');
 
         const again = await as('usermgr', 'put', `/users/${U.rosa}`).send({ email: '', removeEmail: true, displayName: 'Rosa' });
         assert.equal(again.status, 200, 'removing an email the account does not have is a no-op');
@@ -538,5 +540,16 @@ describe('removing the account email (PUT /users/:id removeEmail)', () => {
         const withProof = await as('usermgr', 'put', `/users/${U.usermgr}`).send({ removeEmail: true, currentPassword: PASSWORD });
         assert.equal(withProof.status, 200, JSON.stringify(withProof.body));
         assert.equal(await emailOf(U.usermgr), '');
+    });
+
+    test('removing ANOTHER administrator\'s address takes the same step-up as changing it', async () => {
+        await seedUser('admin2', 'administrator', 'second@gmail.com');
+        const bare = await as('admin', 'put', `/users/${U.admin2}`).send({ removeEmail: true });
+        assert.equal(bare.status, 403, JSON.stringify(bare.body));
+        assert.equal(bare.body.code, 'rest_sudo_required');
+        assert.equal(await emailOf(U.admin2), 'second@gmail.com');
+        const changed = await as('admin', 'put', `/users/${U.admin2}`).send({ email: 'moved@gmail.com' });
+        assert.equal(changed.status, 403, 'the twin: changing it is gated the same way');
+        assert.equal(changed.body.code, 'rest_sudo_required');
     });
 });

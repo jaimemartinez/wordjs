@@ -147,6 +147,7 @@ describe('a network administrator account is out of reach of a main-site-only ad
     test('email, password and role changes, the two-factor reset and deletion are refused', async () => {
         const before = await userRow(U.netadmin);
         refusedAsNetwork(await as('main', 'put', `${API}/users/${U.netadmin}`).send({ email: 'taken@evil.example' }), 'email');
+        refusedAsNetwork(await as('main', 'put', `${API}/users/${U.netadmin}`).send({ removeEmail: true }), 'remove email');
         refusedAsNetwork(await as('main', 'put', `${API}/users/${U.netadmin}`).send({ password: 'Another-Horse-9!x' }), 'password');
         refusedAsNetwork(await as('main', 'put', `${API}/users/${U.netadmin}`).send({ role: 'subscriber' }), 'role');
         refusedAsNetwork(await as('main', 'post', `${API}/users/${U.netadmin}/mfa/reset`).send({}), 'mfa reset');

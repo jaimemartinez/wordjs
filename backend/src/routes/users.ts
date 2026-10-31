@@ -968,6 +968,14 @@ async function invalidatePendingPasswordReset(userId: number): Promise<void> {
     } catch { /* best-effort: the address change itself already required sudo */ }
 }
 
+/** The account's address is gone: a verification link sent to it must not work any more. */
+async function invalidatePendingEmailVerification(userId: number): Promise<void> {
+    try {
+        await User.updateMeta(userId, 'email_verification_hash', '');
+        await User.updateMeta(userId, 'email_verification_expires', '0');
+    } catch { /* best-effort, like invalidatePendingPasswordReset */ }
+}
+
 /**
  * "BLANK MEANS NOT SUPPLIED" — the single reading of an absent value in this router.
  *
@@ -1728,6 +1736,8 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     // A reset link already sent to an address that is no longer the account's must die with it, whoever
     // changed the address.
     if (recoveryChanged) await invalidatePendingPasswordReset(userId);
+    // ...and so must a verification link sent to the address that was just removed.
+    if (updateData.removeEmail) await invalidatePendingEmailVerification(userId);
 
     // AUDIT: exactly one row per security-relevant change — a role change. No secret material.
     if (updateData.role !== undefined) {
