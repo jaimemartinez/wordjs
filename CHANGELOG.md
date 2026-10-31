@@ -6,16 +6,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
-## [2.11.25] - 2026-10-30
-
-### Added
-- **conference-manager 2.36.23: a custom Excel of the localities.** «Localidades › Descargar Excel» builds one row
-  per locality with the columns the admin picks and orders: the coordinator, assigned places, registered, places
-  available and % occupancy; cancelled people, family groups and payment status; registered by age in ranges the
-  admin edits (with a «No age» column); and one column per answer of any selection field of the form. It works for
-  all localities or the ones ticked, with an optional «Total» row and a preview. The choice is remembered on the
-  device.
-
 ### Changed
 - **An account can have no email, and the user form asks for one only when a plugin provides it.** The account
   email is the account's own address (a professional mailbox fills it in); the **Email** field of a new account is
@@ -28,6 +18,18 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   username and filled the login into **Display name**; the server then replaced it with «User <id>», since the
   login is never shown publicly. The fields now tell the password manager which one is the username, and a display
   name equal to the username is refused with a message (`rest_display_name_is_login`) instead of replaced.
+
+## [2.11.25] - 2026-10-30
+
+### Added
+- **conference-manager 2.36.23: a custom Excel of the localities.** «Localidades › Descargar Excel» builds one row
+  per locality with the columns the admin picks and orders: the coordinator, assigned places, registered, places
+  available and % occupancy; cancelled people, family groups and payment status; registered by age in ranges the
+  admin edits (with a «No age» column); and one column per answer of any selection field of the form. It works for
+  all localities or the ones ticked, with an optional «Total» row and a preview. The choice is remembered on the
+  device.
+
+### Changed
 - **The sandbox parity check runs its macOS leg on macOS 15.** GitHub retires the macOS 14 runner image on
   2026-11-02 and its brownouts were already cancelling the job; the docs name the new image.
 - **follow-redirects 1.16.2 in the backend and the gateway** (GHSA-mrwp-f3q8-3g9p, high: custom credential headers
