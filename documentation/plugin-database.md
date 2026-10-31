@@ -213,7 +213,7 @@ When a plugin is uninstalled, `uninstallPluginData(slug, { dropTables })`
 (`backend/src/core/plugins.ts`) **always** clears its grants (`removeGrants`), crash strikes and queued
 assets — so a re-uploaded slug does not inherit old permissions. The plugin's `wjp_<slug>_*` tables are
 **kept by default** (parity with WordPress) and are only **dropped** when the admin ticks the
-`dropData` box on deletion (`DELETE`, `routes/plugins.ts` → `dropTables: !!dropData`). The drop is
+`dropData` box on deletion (`DELETE`, `routes/plugins.ts`: only a JSON `true` drops the data; any other non-boolean value is refused with `400`). The drop is
 limited to tables under the plugin's `wjp_<slug>_` prefix: it never touches core or other plugins'
 tables. They are dropped in dependency order, so tables linked by foreign keys all go; a table that
 something outside the plugin still references is kept and named in the response (`cleanup.tablesKept`).
@@ -476,5 +476,5 @@ module.exports = {
   `db.createTable`; note that the database bridge **exposes no transactions** (`db.batch` groups the
   **transport**, it is not a transaction), so updates that depend on another row are done with a single
   `UPDATE` carrying a subquery.
-- ✅ Every existing plugin (the 31 marketplace ones included) — standard SQLite syntax; all table-scoped
+- ✅ Every existing plugin (the 32 marketplace ones included) — standard SQLite syntax; all table-scoped
   to their own prefix (no access to core tables).

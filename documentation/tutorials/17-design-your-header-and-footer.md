@@ -7,7 +7,7 @@ line that updates itself every January. You check them at desktop, tablet and ph
 your site still has text from the old **Footer** settings page — you convert it.
 
 **Time:** about 15 minutes.
-**You need:** a WordJS site and an administrator account (any account that can edit theme options),
+**You need:** a WordJS site and an administrator account,
 from [Tutorial 1](01-install-on-a-linux-server.md) or any other install. A menu ticked for the
 **Main Menu** and **Footer Menu** boxes in **Admin → Menus** makes the result look like a real site.
 

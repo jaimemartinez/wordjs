@@ -1,7 +1,7 @@
 # Admin guide
 
 How to run a WordJS site from the admin panel: everything a site owner or an editor does at
-`https://<your-site>/admin`, screen by screen. It describes WordJS 2.9 as it is on screen.
+`https://<your-site>/admin`, screen by screen. It describes WordJS 2.11 as it is on screen.
 
 Installing, upgrading and operating the server are in the [operator documentation](../README.md#operating-and-deploying);
 step-by-step walkthroughs are in the [tutorials](../tutorials/README.md).
@@ -30,6 +30,19 @@ The default roles, from most to least:
 
 **Users → Roles** («Roles») lets an administrator create roles with their own capabilities. Plugins can add
 roles too; those only reach the plugin that declared them.
+
+## Site Health, Servers and Updates
+
+Three screens look after the installation itself. They are on the main site only and need **Manage options**:
+
+- **Site Health** («Salud del sitio») checks the versions, folders and disk, the database, mail and its DNS,
+  HTTPS, the reverse proxy, scheduled tasks and plugin isolation, each in plain words with a link (or a
+  button) that fixes it.
+- **Servers** («Servidores») lists the machines of a multi-machine install and their health, gives a
+  short-lived join token (and the command) for a new machine, and takes a machine out.
+- **Updates** («Actualizaciones») shows whether a newer WordJS is out and what it changes, and installs it
+  with one click: it makes a backup first and puts the previous version back if anything fails. Where the
+  panel cannot update (a container, a git checkout, split mode), it says what to do instead.
 
 ## Never a browser pop-up
 

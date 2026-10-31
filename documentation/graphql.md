@@ -249,7 +249,7 @@ type Query {
   menus: [Menu!]!
   menu(id: Int, location: String): Menu
   comments(first: Int, after: String, postId: Int, parentId: Int, search: String,
-           orderBy: CommentOrderBy, order: Order): CommentConnection!
+           status: String, orderBy: CommentOrderBy, order: Order): CommentConnection!
   comment(id: Int!): Comment
   settings: Settings!
   viewer: Viewer

@@ -73,7 +73,7 @@ mirroring the `/uploads` denylist.
 
 ## Configuration
 
-**Settings → Media storage** (administrators) edits the `mediaStorage` block of
+**Settings → Media storage** (administrators; on a network, network administrators on the main site only) edits the `mediaStorage` block of
 `backend/wordjs-config.json` through the same atomic writer as every other credential the backend holds
 (the backup offload's `s3` block, the database password). The secret access key and session token are
 **write-only**: the API answers only whether they are set and their last four characters (the access key
@@ -176,14 +176,15 @@ bucket.
 ## REST API
 
 The screen is backed by `/api/v1/media-storage` (`backend/src/routes/media-storage.ts`). Every route is
-administrator-only (`authenticate` + `isAdmin`). Bodies are JSON; an unsupported field value answers
+administrator-only (`authenticate` + `isAdmin`); on a network, only network administrators on the main
+site (`networkAdminOnly`; `404` on any other site). Bodies are JSON; an unsupported field value answers
 `400 rest_invalid_param` with `data.params` naming the fields.
 
 | Method | Endpoint | Body | Answer |
 |---|---|---|---|
 | `GET` | `/` | — | The masked configuration (`driver`, `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `keepLocalCopy`, `accessKeyIdHint`, `secretAccessKeySet`, `secretAccessKeyHint`, `sessionTokenSet`, `sources`, `effective: { driver, incomplete, publicBase, publicOrigin }`), plus `state`, `migration` (the progress record) and `running`. On a network also `sites: [{ siteId, host, state, inBucket, migration }]`, the main site first |
 | `PUT` | `/` | Any of `driver` (`local` \| `s3`), `bucket`, `region`, `endpoint`, `prefix`, `publicUrl`, `accessKeyId`, `secretAccessKey`, `sessionToken`, `keepLocalCopy`, `clearCredentials` | Merges the fields over the stored block and saves it; answers the same shape as `GET`. An empty text field clears it; an empty secret keeps the stored one. `400` when `driver: s3` is asked for with an incomplete configuration (`data.params` lists what is missing). `409 rest_media_storage_in_use` when switching to `local` while items are still in the bucket, the library is not `local` or an offload / restore run is in progress. `500 rest_config_write_failed` when `wordjs-config.json` could not be written (nothing changed) |
-| `POST` | `/test` | The same fields (unsaved), merged over the stored ones | Writes a probe object and reads it back: `{ ok, steps: [{ step, ok, detail }], probe, publicUrl }`. The browser then loads `publicUrl` |
+| `POST` | `/test` | The same fields (unsaved), merged over the stored ones, plus `currentPassword?` | Using the stored secret against another endpoint, region or bucket needs `currentPassword` (`403 rest_sudo_required` without it). Writes a probe object and reads it back: `{ ok, steps: [{ step, ok, detail }], probe, publicUrl }`. The browser then loads `publicUrl` |
 | `POST` | `/test` | `{ probe }` (the name the first call answered), plus the same fields | Deletes that probe: `{ ok, steps }`. Only names of the shape the first call writes are accepted (`400` otherwise) |
 | `POST` | `/migrate` | `{ direction: "offload" \| "restore", deleteLocal?, restart? }` | Starts the run in the background and answers `202` with the current state at once; poll `GET /` for progress. On a network the run covers every site of the network, one at a time. `400` without a complete, saved S3 configuration. `409 rest_media_storage_busy` while another run is in progress (on any site) |
 

@@ -35,7 +35,7 @@ Uses the `mysql2` client (connection **Pool**) via `backend/src/drivers/mysql.ts
 *   **Dialect translation:** models and plugins keep writing ONE dialect (SQLite); the driver rewrites it to MySQL at the boundary — `?` placeholders are native; **`TEXT`→`LONGTEXT`, except a column that takes part in a key, which becomes `VARCHAR(255)`** (see below) with parenthesised **expression defaults** (MySQL ≥ 8.0.13); `INTEGER PRIMARY KEY AUTOINCREMENT`→`AUTO_INCREMENT`; `INSERT OR IGNORE` / `ON CONFLICT`→`INSERT IGNORE` / `ON DUPLICATE KEY UPDATE`; `RETURNING`→`insertId`; functional-index parens; and the session runs a single `sql_mode` — `ANSI_QUOTES` (so `"col"` is an identifier like SQLite/Postgres), `STRICT_TRANS_TABLES` and `NO_ENGINE_SUBSTITUTION`.
 
 > **The `TEXT` rule, and why it is not a list of column names** (`backend/src/drivers/mysql-text-rule.ts`). The default used to be the other way round: `VARCHAR(255)` unless the column **name** appeared in a hard-coded set of ~20 core columns. A literal list can never know a plugin's columns or those of an imported bundle, so every plugin `TEXT` column — a mail body, an auction description, a submitted form payload — was created 255 chars wide; and because the session also dropped `STRICT_TRANS_TABLES`, an overlong value was **truncated with a warning instead of rejected**. `POST /api/v1/import` → `createPluginTable` therefore mutilated content while reporting `custom_tables.rows++` and an empty `errors` array. The rule is now derived from the DDL itself — a column is bounded only when the `CREATE TABLE` declares it part of a key (inline `PRIMARY KEY`/`UNIQUE`, or a table-level `PRIMARY KEY (…)`/`UNIQUE (…)`/`KEY (…)`/`INDEX (…)`/`FOREIGN KEY (…)` naming it), because MySQL cannot index a `TEXT` key part without a prefix length and being declared a key is itself the evidence the column is short by design. `STRICT_TRANS_TABLES` is back on: a value that does not fit is an **error**, not a silent truncation.
-*   **Known limitation:** MySQL has no **partial indexes**, so the `posts(post_name) WHERE post_name<>''` unique index is skipped (the app-layer `generateUniqueSlug` enforces slug uniqueness instead).
+*   **MySQL has no partial or expression indexes**, so migration `0020` enforces the e-mail and slug uniqueness rules with STORED generated key columns instead (`users.user_email_key`, `posts.post_slug_key`, with the unique indexes `uq_users_email` and `uq_posts_slug`; `core/mysql-unique-keys.ts`).
 
 #### **SQLite (Legacy - WASM Fallback)**
 Uses a pure JavaScript WASM build of SQLite (`sql.js`) via `backend/src/drivers/sqlite-legacy.ts`.
@@ -576,12 +576,13 @@ A [multisite](./multisite.md) network keeps every site's data apart by giving ea
     | `network_meta` | Key/value records about the network |
     | `network_sites` | One row per site: `id`, unique `slug`, `main_url`, `status` (`active` by default), `db_path`, timestamps |
     | `network_site_hosts` | Every address a site answers (`host` primary key → `site_id`, `kind`) |
-    | `network_admins` | The main-site user ids listed as network administrators |
+    | `network_admins` | The main-site users listed as network administrators (`user_id`, `user_login`) |
     | `network_plugin_ceilings` | Per plugin, the grant tokens any other site may grant it (no row = not offered) |
     | `network_site_quotas` | Per site, its own media storage quota |
     | `network_audit_log` | Network-level actions: who, what, which site, when |
     | `network_site_certs` | Per site address, its TLS certificate and key (served by SNI) |
     | `network_acme_challenges` | HTTP-01 answers every node serves while an order is open |
+    | `network_handoffs` | One row per unredeemed «open as administrator» hand-off token (`jti`, `site_id`, `admin_user_id`, `expires_at`) |
 
 *   **Site 1** is the install that existed before multisite was enabled: its database stays at the configured `dbPath`, unchanged.
 *   **Every other site** owns one directory, `<data dir>/sites/<id>/`, holding its public and private uploads, its backups and, on SQLite, its database (`wordjs-native.db`). Each site database has the full core schema and runs the same migrations; models, migrations and plugin queries keep their literal table names and simply run against the current site's database. A site whose database is not open is an error, never a fall-through to site 1's. A deleted site's schema / database / file is dropped (`dropSiteDatabase`), and its id is never reused.

@@ -19,6 +19,9 @@ Five cards open screens of their own:
   bucket. See [Media storage](../media-storage.md).
 - **Network of sites** («Red de sitios») → **Network**: run several sites from one install. See [Multisite](../multisite.md).
 
+On a network of sites, **Site address**, **Media storage** and **Network of sites** (and the Redis box
+below) are shown only to network administrators on the main site.
+
 When the site cannot send password-reset email yet, a banner says **Password recovery is unavailable** and
 points to Account email.
 
@@ -83,6 +86,18 @@ Administrators' and editors' own comments are always published at once.
 - **Image sizes** («Tamaños de imagen»): the maximum width and height of the **Thumbnail**, **Medium** and
   **Large** copies made of each uploaded image. They apply to new uploads.
 
+## Maps
+
+The **Maps** («Mapas») card chooses the tile server for every map on the site, plugin maps included.
+
+- **Tile URL template** («Plantilla de URL de teselas»): an `https://` template with `{z}`, `{x}` and `{y}` (optionally `{s}`
+  or `{r}`), with no user name or password, up to 512 characters. Leave it empty to keep the standard
+  OpenStreetMap tiles; the card links the OpenStreetMap tile usage policy next to that default.
+- **Attribution** («Atribución»): the credit line the map shows, one line up to 200 characters. It is
+  required when you set your own tile server.
+
+A live preview shows the map with what you typed. It is saved with **Save Settings**.
+
 ## Performance & Cache
 
 «Rendimiento y caché»:
@@ -107,7 +122,8 @@ To connect one:
    to connect (a few seconds) and the page reloads. If WordJS was not started by something that restarts it, the
    message asks you to restart it once.
 
-This box is shown to administrators of the main site only.
+This box is shown to administrators of the main site only; on a network of sites, to network administrators
+on the main site only.
 
 ## Other settings screens
 

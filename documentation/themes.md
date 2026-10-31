@@ -207,8 +207,9 @@ all of which default to today's look so the existing themes render unchanged:
    colors: the header/nav/burger (`Header.tsx`), the footer (`Footer.tsx`), the post/page meta and
    cards (`PostContent.tsx`), and the blog roll (`app/(public)/page.tsx`). Text on solid fills uses the
    `--wjs-color-on-*` contrast tokens, so a theme re-skins the whole shell by setting tokens. The chrome
-   also honors the **menu editor** (`menusApi.getByLocation('header'|'footer')`) and the **footer
-   editor** (`footer_text`/`footer_socials`/`footer_copyright`).
+   also honors the **menu editor** (`menusApi.getByLocation('header'|'footer')`) and the legacy footer
+   options (`footer_text`/`footer_socials`/`footer_copyright`, the built-in fallback; `footer_socials` is
+   edited in the Social profiles list).
 2. **Themed post content.** Rendered post/page bodies are wrapped in `.wjs-content` (the framework's
    long-form content rules) so headings, links, lists, tables, code, etc. pick up the theme's tokens.
 3. **Widget areas.** The widget editor's sidebars are now rendered: `footer-1` inside the footer, and
@@ -372,14 +373,15 @@ be read or parsed is a **warning** (`CHROME_UNREADABLE`).
 
 #### The header & footer editor (`/admin/chrome`)
 
-Site owners compose the site-level header, footer and announcement bar in the admin (capability
-`edit_theme_options`). What it offers:
+Site owners compose the site-level header, footer and announcement bar in the admin (administrators
+only: the screen is listed for `edit_theme_options`, but saving, restoring and migrating need the
+administrator role). What it offers:
 
 - **Source indicator** — the badge says where what you are editing comes from: *Customized on this
   site* (level 1), *From the theme* (2), *Built-in* (3, converted) or *Starter template* (the
   announcement bar has no built-in form). **Restore** deletes the site composition
   (`DELETE /api/v1/chrome/:part`) and the site falls back to the theme's file or the built-in chrome.
-- **Live preview at three widths** — desktop, tablet (820px) and phone (390px). The canvas is
+- **Live preview at three widths** — desktop (1280px), tablet (768px) and phone (375px). The canvas is
   resized for real, so the blocks' own breakpoints react (the hamburger appears, rows stack); a block
   hidden on the previewed device is drawn dimmed, never removed.
 - **Starter templates** — classic, with CTA and search, centered, two rows (top bar), minimal
@@ -509,8 +511,7 @@ reachable by an admin through the settings API but never by a plugin or an impor
 preview. Saving stores the overrides as JSON in the `active_theme_mods` option (admin-gated write,
 public read for SSR). `ThemeTokenOverlay.tsx` (a server component) SSR-injects them as a single
 `<style id="wjs-theme-mods">:root{…}</style>` **after** the theme stylesheet, so overrides win at equal
-specificity with no flash-of-unstyled-content. The overlay is **strictly sanitized** — only keys
-matching `^--wjs-[a-z0-9-]+$` and values free of `;{}:<>` are emitted (no CSS injection). It renders
+specificity with no flash-of-unstyled-content. The overlay is **strictly sanitized** by the shared token-value policy in `contracts/visual-contract.v1.json` (`formats.theme.tokens`, applied by `frontend/src/lib/themeTokenPolicy.ts` and again on the server by `backend/src/core/theme-mods.ts`): keys match `^--wjs-[a-z0-9-]+$`; values use only `#`, letters, digits, spaces and `,.%()/_'"-`, are at most 120 characters, and contain no `url(`, `//` or backslash; the whole set is at most 32 KB (no CSS injection). **Export** and **Import** in the customizer (`GET /api/v1/themes/mods/export`, `POST /api/v1/themes/mods/import`, administrators) save and load the overrides as a file; the import is strict: one invalid key rejects the whole file, with the reasons in `errors[]`. It renders
 nothing when empty, and `switchTheme()` resets it, so changing themes starts from that theme's own look.
 
 ## CSS Variables Reference
@@ -518,8 +519,8 @@ nothing when empty, and `switchTheme()` resets it, so changing themes starts fro
 The narrative reference (core tables, alias/editor-internal rules, per-block groups) lives in
 [`theming.md`](./theming.md); the **complete machine-readable contract** is
 `backend/public/theme-tokens.json`, regenerated from `wordjs-ui.css` with
-`node scripts/generate-token-manifest.js`. The manifest currently tracks **778 tokens** and
-**1777 `var()` uses** across 74 name groups — mostly per-block groups such as `cta` (57),
+`node scripts/generate-token-manifest.js`. The manifest currently tracks **781 tokens** and
+**1790 `var()` uses** across 75 name groups — mostly per-block groups such as `cta` (57),
 `pricing` (53), `accordion` and `card` (40 each), `hero` (38), `form` (37), `audio` (36),
 `testimonial` (30), `tabs` (29), `button` and `search` (26 each).
 
@@ -649,7 +650,7 @@ declarative `theme.json` (`POST /api/v1/themes` with `enforceContrast: true`) an
 the theme doctor finds no `LOW_CONTRAST` pair on the built theme.
 
 **Checking a theme from the panel:** every theme card has **Check theme**, which runs the same doctor as
-`node backend/cli/wordjs.js doctor <slug>` (`GET /api/v1/themes/:slug/doctor`) and lists its errors,
+`node backend/cli/wordjs.js doctor theme <slug>` (`GET /api/v1/themes/:slug/doctor`) and lists its errors,
 warnings (every pair below AA among them) and notes.
 
 ### 2. Edit `theme.json`, then rebuild
@@ -829,7 +830,7 @@ closest-match suggestion.
 ```
 
 A flat map. The name must exist in the token manifest (`backend/public/theme-tokens.json`,
-778 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
+781 tokens) — or be one of the documented `--wjs-footer-*` chrome-bridge tokens, which are valid
 even before the manifest learns them. Editor-internal `--wjs-r-*` tokens are rejected. Values
 follow the portable token rules: non-empty, ≤ 120 chars, charset `#a-zA-Z0-9 ,.%()/_'"-`
 (spaces allowed), no backslash, no `//`, no `url()`, and every parenthesis and quote **balanced**.
@@ -955,7 +956,10 @@ though a `bg` token exists for the base level.
 > compiles. css-tree cannot match a value tree containing `var()` (*"Matching for a tree with
 > `var()` is not supported"*), so instead of refusing the declaration the compiler collects every
 > `var()` reference and requires each to be a **real `--wjs-*` token in the manifest**, skipping the
-> property matcher for that value — stricter than plain CSS, not looser, since hand-written CSS
+> property matcher for that value. Because the matcher is skipped, only the value functions a theme
+> uses (`calc`, `min`/`max`/`clamp`, the colour functions, `color-mix`, the gradients, …) may appear next
+> to a token reference; any other is `VALUE_INVALID: <fn>() is not allowed in a value that references a
+> token`. CSS escapes (`\`) are refused in every theme value. This is stricter than plain CSS, not looser, since hand-written CSS
 > never told anyone that `var(--wjs-color-primry)` resolves to nothing. This matters beyond
 > convenience: with `var()` unavailable the only way to express a token was to inline the value it
 > currently resolves to, which compiles identically and then **ignores customizer overrides**,
@@ -1136,7 +1140,7 @@ above still shows up here as `DECLARATIVE_*`:
 | warning | `THEME_JSON_INVALID` | `theme.json` is not valid JSON — a warning here (not an error) because the site still renders from `parseThemeMetadata()`'s defaults. |
 | warning | `LAYOUT_UNKNOWN_KEY` / `LAYOUT_INVALID_VALUE` | The `layout` block against `backend/public/theme-layouts.schema.json`. |
 | warning | `UNKNOWN_TOKEN` / `ALIAS_OVERRIDE` / `EDITOR_INTERNAL` | A declared `--wjs-*` name that is not in the contract (with a did-you-mean), one of the 22 aliases, one of the 22 `--wjs-r-*`. |
-| warning | `MISSING_ON_COLOR` / `LOW_CONTRAST` | A surface color without its `--wjs-color-on-*` pair (a value is suggested by luminance when the color is hex); main text over main background below 3:1. |
+| warning | `MISSING_ON_COLOR` / `LOW_CONTRAST` | A surface color without its `--wjs-color-on-*` pair (a value is suggested by luminance when the color is hex); a text/background pair the page paints (body, muted text, links, surfaces, button labels, navigation, footer, card titles) is below WCAG AA (4.5:1); the message names the pair. |
 | warning | `EXTERNAL_REF` | `http(s)://` or protocol-relative `//` in an `@import`/`url()`. |
 | warning | `DEAD_RULE` | A compiled declaration a higher-specificity `wordjs-ui.css` rule always beats — it validates, compiles and ships, and the browser never paints it. The canonical case is headings: the compiler emits `.wp-block-heading { font-size: … }` (0,1,0) while ui.css declares `font-size` on `h1.wp-block-heading`…`h6.wp-block-heading` (0,1,1). The message names the winning selector and, where the winner reads one, the token to set instead. |
 | warning | `GENERATED_MARKERS` | Not exactly one matched marker pair — a duplicate block wins the cascade, an unclosed one is never rewritten. Fix by recompiling. |
@@ -1406,7 +1410,7 @@ and drop the whole archive out of the Full-Route Cache. `page/1`, a page past th
 and a malformed tail are all **404**, never a soft-200 empty listing.
 
 **`templates/archive.html`** — the Handlebars file the bundled `default` theme still ships — is *not* what these
-routes render. It belonged to the legacy backend renderer, which was never mounted and has been removed;
+routes render. It belongs to the legacy backend renderer, which still loads at boot but is not mounted on any public route;
 the Next public site reads `templates/archive.json` and the rest of this section's contract.
 
 ### Named template parts (`theme.json` `templateParts` + `chrome/<name>.json`)
@@ -1608,8 +1612,8 @@ otherwise stay applied alongside the new one).
 The `?v=` query string is the **theme slug**, the theme's **`theme.json` version** and
 **`ASSET_VERSION`**, built by `themeStylesheetHref()` in `frontend/src/lib/assetVersion.ts` — a
 deterministic value identical across SSR and hydration (the version always comes from the server,
-never recomputed on the client). Theme CSS and `wordjs-ui.css` are served with a long `Cache-Control`
-(~1 day), so both parts matter: the theme version busts an **in-place theme edit** — a change no
+never recomputed on the client). Theme CSS (1 hour plus an `ETag`) and `wordjs-ui.css` (1 day) are served with a `Cache-Control`
+long enough that both parts matter: the theme version busts an **in-place theme edit** — a change no
 build can see — and `ASSET_VERSION` busts a **release** that changes `wordjs-ui.css`. Every writer
 that rewrites a theme's CSS in place therefore bumps the `theme.json` patch: `PUT
 /api/v1/themes/:slug` (`bumpPatch()` in `backend/src/routes/themes.ts`), the CLI's `build theme`,
@@ -1749,10 +1753,7 @@ that it is no longer silent:
 
 ## Theme Previews in Admin
 
-WordJS provides live previews of components (like the Footer) within the Admin panel. To ensure your theme renders correctly in these isolated previews:
-
-1.  **Scope Injection:** The system automatically scopes your CSS by replacing `:root` and `body` selectors with a unique ID (e.g., `#preview-theme-scope`).
-2.  **Avoid Global Assumptions:** Do not rely on `html` or `window` properties for styling. Rely on CSS variables defined in your `style.css`.
+The admin previews your theme inside the editor canvas: an `<iframe>` whose document is the `/admin/canvas-frame` route (`frontend/src/app/admin/canvas-frame/page.tsx`), which loads the active theme's stylesheet as the public site does. Your CSS is not rewritten, so `:root` and `body` rules apply there as they do on the site. Rely on the CSS variables defined in your `style.css` rather than on `window` or the size of the top-level page: the canvas is resized to the device width being previewed.
 
 ## Component Styling Best Practices
 

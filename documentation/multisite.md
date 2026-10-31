@@ -79,8 +79,8 @@ fix it from the panel.
   nodes](#several-backend-nodes)). In split and separate mode the gateway is told the network's addresses
   by the backend, as it is told the main site's.
 - An installed site (the install wizard finished), with a main address (Settings → Site address).
-- Two-factor authentication on the account of whoever turns the network on or off (My account →
-  Two-factor authentication): the switch asks for the password and a current code.
+- The password of whoever turns the network on or off, plus a current two-factor code if that account
+  has two-factor authentication.
 
 ## Turning it on
 
@@ -161,8 +161,10 @@ Point the new name at the server the main site runs on, exactly as you did for t
 - **Separate mode**: the backend pushes the network's addresses to the gateway with the rest of the
   address policy, immediately after a change and every half minute. A frontend node renders another
   site by fetching that site's data through the gateway; the gateway lets a node it has registered name
-  the site (only one of the network's addresses). A node registered by a DNS name rather than an IP
-  address is not recognised that way: register nodes by address.
+  the site (only one of the network's addresses), when the request also carries the relay proof derived
+  from the cluster's `revalidateSecret` (`x-wordjs-relay`); a frontend without the secret renders only
+  the main site. A node registered by a DNS name rather than an IP address is not recognised that way:
+  register nodes by address.
 - **TLS: one certificate per site.** The main site keeps its certificate (Security → Automatic Certificate Renewal). Every
   other site has a certificate of its own for its main address, which the gateway — and the monolith —
   selects by the name the browser asks for (SNI); a name with no certificate of its own gets the main
@@ -391,7 +393,7 @@ and the network store) and Redis.
 
 ## Changing the database engine
 
-Settings → Database migration (network administrators, on the main site) moves the **whole network**:
+Admin → **DB Migration** (network administrators, on the main site) moves the **whole network**:
 site 1, every other site into its own file / schema / database on the target, and the network store. The
 copy is complete and checked table by table; if any site fails, nothing switches and the network keeps
 running on the source. Moving a network onto `sqlite-legacy`, or onto the engine it already runs on, is
@@ -460,8 +462,9 @@ setting. What is new:
   `http-01`, Let's Encrypt issues them on its own after the upgrade, at the next renewal pass.
 - Each site has its own backups and real-time collaboration.
 - A suspended site can be deleted.
-- The network store gains two tables (`network_acme_challenges`, `network_site_certs`), created at boot.
-- Moving a SQLite network onto Postgres or MySQL: Settings → Database migration on the main site moves
+- The network store gains three tables (`network_acme_challenges`, `network_site_certs`, `network_handoffs`)
+  and the `network_admins.user_login` column, created at boot.
+- Moving a SQLite network onto Postgres or MySQL: Admin → DB Migration on the main site moves
   every site and the network store (above). Make sure the target user may create schemas or databases.
 
 ## Troubleshooting

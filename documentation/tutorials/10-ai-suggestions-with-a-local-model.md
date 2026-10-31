@@ -46,7 +46,7 @@ request also loads the model into memory, so it can take 15 seconds or more; lat
 or two.
 
 A plain `http://` address is accepted only for a server on the same machine (`127.0.0.1`,
-`localhost`). Anything else must be `https://`. To use Claude or OpenAI instead, choose the provider
+`localhost` or a `*.localhost` name). Anything else must be `https://`. To use Claude or OpenAI instead, choose the provider
 and paste an API key. The key stays on the server: it is never sent to the browser or to plugins.
 
 ## 3. Suggest an excerpt and a meta description

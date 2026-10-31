@@ -149,7 +149,10 @@ or granted. Two controls make it safe to use:
 ## 7. Limits
 
 - HTTP: 240 requests/minute per agent token (cluster-wide through the shared limiter store), on top of the
-  global per-IP API limiter.
+  global per-IP API limiter. Past it the client gets a `429` whose body is the JSON-RPC error `-32029`
+  («Too many requests from this agent, please slow down.»).
+- Connections expire after `expiresInDays` (whole days, 1 to 3650) when one is set. Creating or granting a
+  connection, and turning publish confirmation off, follow the same two-factor rule as API tokens.
 - Per agent, in-process: 120 tool calls/minute (`whoami` and resource reads included) and 30
   writes/minute, keyed by site and connection id.
 - At most 25 live connections per bound user.

@@ -94,7 +94,7 @@ Two enforcement gates live on the host (`backend/src/core/plugin-isolate.ts`):
 | `wordjs` member | IPC kind | Host-side gate (a capability here means manifest-declared AND admin-granted) |
 | --- | --- | --- |
 | `hooks.addAction(hook, cb, priority)` / `hooks.addFilter(...)` | `register` | Hook access policy (`core/hook-access.ts`): raw-HTML hooks (`wordjs_head`/`wordjs_footer`/`wp_head`/`wp_footer`/`dynamic_sidebar`), host-only hooks and unclassified core-namespace names denied to **every** plugin; data hooks need the matching grant (`comments:read`, `posts:read`, `notifications:read`, `settings:read`) and every delivery is re-checked and minimized (commenter email/IP/agent only with `comments:pii`; no post passwords, notification tokens or protected option values); capped per-plugin (`MAX_HOOKS`) and per-hook-name (`MAX_PER_HOOK`); each shim runs with a 2 s timeout. |
-| `http.route(method, routePath, opts, handler)` | `register-route` | **`express:register_route` grant** — checked first (default-deny; not implied by `admin`); without it the registration is logged and dropped (no route is mounted). Then: per-plugin route cap (`MAX_ROUTES`); HTTP verb allowlisted (`get/post/put/patch/delete/options/head/all`); `routePath` restricted to static segments, `:params` and at most two `*` wildcards (≤ 200 chars, no regex metacharacters, `::` or `..`); `opts.auth`/`opts.admin` apply the real `authenticate`/`isAdmin` middleware, and the handler's `req.user` is `{ id, role, userEmail, userLogin, pluginCapabilities, accountCapabilities }` (`pluginCapabilities`: the caller's capabilities in the plugin's own namespace — [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare-); `accountCapabilities`: the caller's admin-owned grants among the plugin's declared ones — [plugins.md §12b](plugins.md#12b-declaring-per-account-capabilities-accountcapabilities-)); `opts.multipart` parsed host-side by multer (single file, `fileSize` capped at `config.uploads.maxFileSize` — the site's configured `maxFileSize`, 10 MB by default; staged in the plugin's own private tmp storage `os-tmp/plugins/<key>/uploads/`, which the plugin may READ without a `filesystem` grant, and unlinked when the response finishes — copy it during the request to keep it). Always namespaced under `/api/v1/plugin/<slug>`, auth/session cookies stripped, Set-Cookie/CSP/HSTS/Location dropped, plugin cookies namespaced + path-confined. (No absolute-path mode.) The handler may reply with `res.sendPrivateMedia(mediaId, { filename })`: with the **`media:private_read` grant** the host streams that PRIVATE media item itself (`Content-Disposition: attachment`, nosniff, sandbox CSP, `Cache-Control: private, no-store`; plugin headers ignored; 404 for anything that is not a private attachment), without it the reply is `403`. File bytes never cross the IPC channel. A plugin route sits behind the global CSRF gate like every other API route: a cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` must carry an `X-CSRF-Token` header equal to the caller's `wjs_csrf` cookie or it is refused with `403 rest_csrf_token`; `Bearer` callers are exempt. **`opts.webhook: true`** (POST only) marks a signed server-to-server webhook: it is exempt from the CSRF gate and the handler gets `req.rawBody` (the exact bytes) plus the provider's signature headers (names containing `signature` or `checksum`, and `x-request-id`, `webhook-id`, `webhook-timestamp`, `content-type`) — and never an identity (`req.user` is `null`, no cookies; combining it with `auth`/`admin`/`multipart` is refused). Verify the sender with `crypto.hmac` (or `crypto.hash` for a checksum) + `crypto.timingSafeEqual` ([memberships.md §3](memberships.md#3-plugin-webhook-routes-and-the-hmac-bridge-generic)). |
+| `http.route(method, routePath, opts, handler)` | `register-route` | **`express:register_route` grant** — checked first (default-deny; not implied by `admin`); without it the registration is logged and dropped (no route is mounted). Then: per-plugin route cap (`MAX_ROUTES`); HTTP verb allowlisted (`get/post/put/patch/delete/options/head/all`); `routePath` restricted to static segments, `:params` and at most two `*` wildcards (≤ 200 chars, no regex metacharacters, `::` or `..`); `opts.auth`/`opts.admin` apply the real `authenticate`/`isAdmin` middleware, and the handler's `req.user` is `{ id, role, pluginCapabilities, accountCapabilities }`, plus `userEmail` and `userLogin` when the plugin holds `users:read` (`pluginCapabilities`: the caller's capabilities in the plugin's own namespace — [plugins.md §12a](plugins.md#12a-declaring-user-roles-rolesdeclare-); `accountCapabilities`: the caller's admin-owned grants among the plugin's declared ones — [plugins.md §12b](plugins.md#12b-declaring-per-account-capabilities-accountcapabilities-)); `opts.multipart` parsed host-side by multer (single file, `fileSize` capped at `config.uploads.maxFileSize` — the site's configured `maxFileSize`, 10 MB by default; staged in the plugin's own private tmp storage `os-tmp/plugins/<key>/uploads/`, which the plugin may READ without a `filesystem` grant, and unlinked when the response finishes — copy it during the request to keep it). Always namespaced under `/api/v1/plugin/<slug>`, auth/session cookies stripped, Set-Cookie/CSP/HSTS/Location dropped, plugin cookies namespaced + path-confined. (No absolute-path mode.) The handler may reply with `res.sendPrivateMedia(mediaId, { filename })`: with the **`media:private_read` grant** the host streams that PRIVATE media item itself (`Content-Disposition: attachment`, nosniff, sandbox CSP, `Cache-Control: private, no-store`; plugin headers ignored; 404 for anything that is not a private attachment), without it the reply is `403`. File bytes never cross the IPC channel. A plugin route sits behind the global CSRF gate like every other API route: a cookie-authenticated `POST`/`PUT`/`PATCH`/`DELETE` must carry an `X-CSRF-Token` header equal to the caller's `wjs_csrf` cookie or it is refused with `403 rest_csrf_token`; `Bearer` callers are exempt. **`opts.webhook: true`** (POST only) marks a signed server-to-server webhook: it is exempt from the CSRF gate and the handler gets `req.rawBody` (the exact bytes) plus the provider's signature headers (names containing `signature` or `checksum`, and `x-request-id`, `webhook-id`, `webhook-timestamp`, `content-type`) — and never an identity (`req.user` is `null`, no cookies; combining it with `auth`/`admin`/`multipart` is refused). Verify the sender with `crypto.hmac` (or `crypto.hash` for a checksum) + `crypto.timingSafeEqual` ([memberships.md §3](memberships.md#3-plugin-webhook-routes-and-the-hmac-bridge-generic)). |
 | `shortcodes.add(tag, handler)` | `register-shortcode` | Capped per-plugin; handler resolves HTML over RPC (`doShortcodeAsync`). |
 | `widgets.register(id, def)` | `register-widget` | Capped at 50 per plugin; the renderer resolves HTML over RPC (2 s cap), sanitized on the host; an id core or another plugin holds is refused. |
 | `graphql.extend({ typeDefs, fields })` | `register-graphql` | Declarative only: the host builds each `Query.<field>` resolver (`core/graphql/plugin-bridge`) and resolves it through the plugin's own GET route as the GraphQL caller; at most 5 extensions / 50 fields; the usual extension rules (no rerouting an existing field). |
@@ -109,7 +109,7 @@ gone **fails fast** ("… is not running") instead of waiting the timeout out. P
 global IPC message rates are token-bucket capped, with inbound/outbound payload caps.
 
 ## 1. Photo Carousel 📸
-**ID:** `photo-carousel` | **Version:** 2.1.0
+**ID:** `photo-carousel` | **Version:** 2.1.3
 
 Manages image carousels for Hero sections or content sliders.
 
@@ -121,7 +121,7 @@ Manages image carousels for Hero sections or content sliders.
 ---
 
 ## 2. Card Gallery 🃏
-**ID:** `card-gallery` | **Version:** 1.0.1
+**ID:** `card-gallery` | **Version:** 1.0.4
 
 Displays event or promo cards as a full-width stack whose content alternates left/right by index (the
 "zigzag"). There is no grid mode — the block's only fields are the gallery to show and an optional
@@ -135,7 +135,7 @@ anchor id.
 ---
 
 ## 3. Video Gallery 🎬
-**ID:** `video-gallery` | **Version:** 1.0.1
+**ID:** `video-gallery` | **Version:** 1.1.2
 
 Manages YouTube video carousels. Galleries and their videos are stored in **options**
 (`vgallery_galleries_list`, `vgallery_data_<id>`), not in a `wjp_` table.
@@ -152,7 +152,7 @@ Manages YouTube video carousels. Galleries and their videos are stored in **opti
 ---
 
 ## 4. Mail Server 📧
-**ID:** `mail-server` | **Version:** 3.0.1
+**ID:** `mail-server` | **Version:** 3.3.7
 
 A complete SMTP server and email manager. Allows sending and receiving emails directly within WordJS.
 
@@ -184,7 +184,7 @@ A complete SMTP server and email manager. Allows sending and receiving emails di
 ---
 
 ## 5. Conference Manager 🎟️
-**ID:** `conference-manager` | **Version:** 2.33.1
+**ID:** `conference-manager` | **Version:** 2.36.23
 
 Complex business logic for managing church conferences.
 
@@ -688,7 +688,7 @@ Complex business logic for managing church conferences.
 *   **Documented caps** (a request over a cap answers `400` instead of running unbounded): 200 people per
     fee payment (and per bulk payment), 20 000 inscriptions per `/reprice`, 5 000 unassigned attendees per `/assignment/run`,
     500 passengers per bus operation, 60 dates per bulk meal-service creation.
-*   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item, gated on `conference_manager_access`, which administrators and the team role hold; the page then shows only the sections the user's team role allows), `users` (read — find WordJS users to add to the conference team), `roles` (declare — the team role «Equipo de conferencia»).
+*   **Requested capabilities:** `database` (read/write — its own `wjp_conference_manager_` tables), `express` (register_route — namespaced routes), `admin_menu` (register — sidebar item, gated on `conference_manager_access`, which administrators and the team role hold; the page then shows only the sections the user's team role allows), `users` (read — find WordJS users to add to the conference team), `roles` (declare — the team role «Equipo de conferencia»), `browser:script` (its admin page), `settings` (read — the site's identity), `email` (admin — the messages it sends to registrants) and `network` (outbound — Web Push notifications).
 *   **Sandbox:** isolated, like every plugin — no trust bypass. Default-deny: activation grants its declared
     capabilities (admin-approved in the activation dialog, refinable/revocable in `/admin/plugins`). It
     stores its data in its own prefixed tables (no unscoped/core-table access — that capability no longer
@@ -729,7 +729,7 @@ the same plugin there) and activate it from **Plugins**.
 ---
 
 ## 8. YouTube Videos 🎥
-**ID:** `youtube-videos` | **Version:** 1.0.3
+**ID:** `youtube-videos` | **Version:** 1.0.5
 
 Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a carousel block
 with title filtering and a video-count limit. Works **keyless** out of the box via the channel RSS
@@ -748,8 +748,8 @@ feed (latest 15 videos); add a YouTube Data API v3 key for the full upload histo
 
 Beyond the plugins above, WordJS ships a **Marketplace** of first-party plugins distributed
 **outside** the core build (the Photo Carousel, Card Gallery, Video Gallery, Mail Server, Conference
-Manager, and YouTube Videos sections above are themselves marketplace plugins — only Hello World and
-Test Schema are bundled with core):
+Manager, and YouTube Videos sections above are themselves marketplace plugins; no plugin is bundled with
+core):
 
 *   **Sources:** `marketplace/plugins/<slug>/` in the repo (32 plugins, listed below).
 *   **Catalog build:** `npm run build:marketplace` (`backend/scripts/build-marketplace.js`) packs each
@@ -790,7 +790,7 @@ Test Schema are bundled with core):
 | `bookings` | Appointment booking: services, weekly availability, race-safe slot reservations, email confirmations, admin agenda | `database` r/w, `settings` r/w, routes, admin menu, `email:admin` |
 | `breadcrumbs` | Breadcrumbs Verso block with optional BreadcrumbList JSON-LD | `browser:script` only (frontend-only) |
 | `card-gallery` | Event/promo cards as an alternating-alignment ("zigzag") stack via the `CardGalleryVerso` block | `settings` r/w, `database` write, routes, admin menu |
-| `conference-manager` | Conference inscriptions/registration with per-location capacity and forms of payment, hotel & room auto-assignment plus per-location lodging, registration barcodes, payments, transport, accounting, meals, team roles (own WordJS role), coordinator portal, reports + CSV/Excel export | `database` r/w, routes, admin menu, `users` read, `roles:declare` |
+| `conference-manager` | Conference inscriptions/registration with per-location capacity and forms of payment, hotel & room auto-assignment plus per-location lodging, registration barcodes, payments, transport, accounting, meals, team roles (own WordJS role), coordinator portal, reports + CSV/Excel export | `database` r/w, routes, admin menu, `users` read, `roles:declare`, `settings` read, `email:admin`, `network`, `browser:script` |
 | `contact-forms` | Form builder with a Verso embed block, submissions inbox, CSV export, email notification | `database` r/w, routes, admin menu, `email:admin` |
 | `cookie-consent` | GDPR cookie banner, anonymous consent logging, version-based re-consent | `database` r/w, `settings` r/w, routes, admin menu, `assets:write` |
 | `digital-downloads` | Sell/give away downloadable products (each file a PRIVATE media item) with expiring, limited-use token-gated downloads streamed by the host — no file URL is ever revealed. 1.1.0 migration: products created earlier keep their public `file_url` working but are flagged in the admin until their file is re-selected as private | `database` r/w, `settings` r/w, routes, admin menu, `email:admin`, `media:private_read` |
@@ -829,6 +829,6 @@ enforced grants, not just validated vocabulary: the host's `register-route` IPC 
 `plugin-isolate.ts` refuses to mount a route (logs a warning and drops the message) unless
 `express:register_route` is declared in the manifest and granted by the admin — the route-count cap and
 the HTTP-verb / path-charset allowlists are applied only after that check — and `wordjs.adminMenu.add`
-runs `verifyPermission('admin_menu', 'register')` in `plugin-api.ts`, which throws when the verb is not
-both declared and granted. Isolated plugins reach `adminMenu.add` through the same host bridge, so the
+runs `verifyPermission('admin_menu', 'register')` in `plugin-api.ts`, which refuses when the verb is not
+both declared and granted (the plugin's call then resolves `null` and the plugin keeps running). Isolated plugins reach `adminMenu.add` through the same host bridge, so the
 gate applies to them identically.)*

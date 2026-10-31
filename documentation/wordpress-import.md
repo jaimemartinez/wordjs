@@ -84,6 +84,7 @@ Runs the idempotent import and returns a summary. Options are sent as multipart 
 | `importComments` | `1` / `0` | `1` (any value other than `"0"`) | Import comments. |
 | `media` | `download` / `link` / `skip` | `download` (when `importAttachments` is absent too) | What to do with attachment items. A value that is not one of the three counts as absent. See [Media](#media-attachments). |
 | `allowHttp` | `1` / `0` | `0` | Allow `http://` attachment sources. Does not weaken the resolved-IP checks. |
+| `allowPrivateSource` | `1` / `0` | `0` | Allow attachment downloads from a private network address (the WordPress site is on your LAN). Only on the primary site, or anywhere with `WORDJS_IMPORT_ALLOW_PRIVATE_SOURCE=1`; otherwise `403 private_source_not_allowed`. The analyze step answers `privateSourceAllowed` so the panel knows whether to offer it. |
 | `importAttachments` | `1` / `0` | — | **Legacy**, and used only when `media` is absent: exactly `"0"` means `media=skip`; any other value, or the field omitted, means `media=download`. |
 
 ```bash

@@ -50,6 +50,7 @@ are in the [repository README](../README.md); security reports go through [SECUR
 - [notifications.md](notifications.md) — the real-time, multi-transport notification system.
 - [wordpress-import.md](wordpress-import.md) — migrating a WordPress site from its WXR export.
 - [mail-server.md](mail-server.md) — the mail-server plugin: inbound SMTP, direct-to-MX delivery and webmail.
+- [memberships.md](memberships.md) — member-only content, membership levels and the providers that grant them.
 
 ## Architecture and internals
 
