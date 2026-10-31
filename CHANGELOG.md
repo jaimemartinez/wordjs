@@ -6,6 +6,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+- **The documentation matches the code again.** Every operator, developer and admin-guide page was checked against
+  the current code: stale numbers and versions, renamed screens and labels, behaviour that changed since the page
+  was written (the per-request Content-Security-Policy, the plugin egress tunnel, `npm start` refusing to run
+  without a build, the mail relay modes), and features that had no docs (Site Health, Servers and Updates in the
+  admin guide, the «Maps» card, the mail server's «System sent» log, the agents' publish queue).
+
 ## [2.11.25] - 2026-10-30
 
 ### Added
@@ -17,11 +24,6 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   device.
 
 ### Changed
-- **The documentation matches the code again.** Every operator, developer and admin-guide page was checked against
-  the current code: stale numbers and versions, renamed screens and labels, behaviour that changed since the page
-  was written (the per-request Content-Security-Policy, the plugin egress tunnel, `npm start` refusing to run
-  without a build, the mail relay modes), and features that had no docs (Site Health, Servers and Updates in the
-  admin guide, the «Maps» card, the mail server's «System sent» log, the agents' publish queue).
 - **The sandbox parity check runs its macOS leg on macOS 15.** GitHub retires the macOS 14 runner image on
   2026-11-02 and its brownouts were already cancelling the job; the docs name the new image.
 - **follow-redirects 1.16.2 in the backend and the gateway** (GHSA-mrwp-f3q8-3g9p, high: custom credential headers
