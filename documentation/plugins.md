@@ -259,7 +259,9 @@ data={{ formData, setFormData, isNew }} />`), so `data` gives you the form state
 The account **Email** field takes its props from the `user_form_email_input_props` filter. The core hides it
 (`hidden: true`) on a new account and on one that has no email: an account's email is the address a plugin
 provides. A plugin that provides one fills `formData.email` and returns `hidden: false` (and `readOnly: true` if
-only an administrator may change it).
+only an administrator may change it). When its service is turned off it sets `formData.email` to `''` and
+returns `hidden: true`; the form then saves with `removeEmail: true`, which `PUT /users/:id` refuses
+(`rest_email_in_use_by_service`) while a granted capability with `locksEmail` still binds the address.
 
 ### Step 5: Build, then activate
 Run `node scripts/build-plugin.js greeting-card` from `backend/` (§4), restart the backend once so it

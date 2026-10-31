@@ -33,7 +33,9 @@ form:
 
 Plugins can add switches under **Plugin access for this account**, shown only when an active plugin offers one
 (a mailbox on the site's domain, for example). A switch that sets the user's email shows the **Email** field,
-read-only, while it is on; only an administrator can change that address.
+read-only, while it is on; only an administrator can change that address. Turning the switch off takes that
+address away and hides the field again: when you save, the account has no email. To remove any other address,
+empty the **Email** field and save.
 
 Press **Save User** («Guardar usuario»).
 

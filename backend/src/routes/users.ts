@@ -95,6 +95,7 @@ const ACCOUNT_SECURITY_FIELDS: Record<string, SuppliedCriterion> = {
     password: 'nonblank',            // the credential itself; sink = suppliedText() (see both PUT handlers)
     currentPassword: 'nonblank',     // …and the sudo proof for it — a blank proof proves nothing
     email: 'nonblank',               // recovery-bearing (recoveryTarget falls back to it); sink = suppliedText()
+    removeEmail: 'nonblank',         // clears that address (PUT /:id); sink = `=== true`, so a blank is inert
     personalEmail: 'presence',       // recovery-bearing (recoveryTarget PREFERS it); sink = `!== undefined`
     role: 'nonblank',                // privilege — the role guards below ignore a blank role
     accountCapabilities: 'presence', // the admin-owned per-account grants; blank/null = flagValue '0' = revoke
@@ -737,8 +738,9 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *         description: >-
  *           rest_weak_password (a new password under 8 characters), rest_invalid_email (malformed or already
  *           taken — one uniform message, so this is never an account-existence oracle),
- *           rest_invalid_personal_email, rest_invalid_role, or rest_invalid_param (an account capability
- *           change no active plugin declares).
+ *           rest_invalid_personal_email, rest_invalid_role, rest_email_in_use_by_service, or
+ *           rest_invalid_param (an account capability change no active plugin declares, or removeEmail with
+ *           an email).
  *         content:
  *           application/json:
  *             schema:
@@ -806,6 +808,13 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
  *             properties:
  *               email:
  *                 type: string
+ *                 description: The account's own address. Blank leaves it as it is; use removeEmail to remove it.
+ *               removeEmail:
+ *                 type: boolean
+ *                 description: >-
+ *                   true removes the account email (requires edit_users; refused with 400
+ *                   rest_email_in_use_by_service while a granted capability binds the address, judged after
+ *                   the accountCapabilities in the same body). Not with a non-blank email.
  *               displayName:
  *                 type: string
  *               url:
@@ -957,6 +966,14 @@ async function invalidatePendingPasswordReset(userId: number): Promise<void> {
         await User.updateMeta(userId, 'password_reset_hash', '');
         await User.updateMeta(userId, 'password_reset_expires', '0');
     } catch { /* best-effort: the address change itself already required sudo */ }
+}
+
+/** The account's address is gone: a verification link sent to it must not work any more. */
+async function invalidatePendingEmailVerification(userId: number): Promise<void> {
+    try {
+        await User.updateMeta(userId, 'email_verification_hash', '');
+        await User.updateMeta(userId, 'email_verification_expires', '0');
+    } catch { /* best-effort, like invalidatePendingPasswordReset */ }
 }
 
 /**
@@ -1545,6 +1562,14 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     // lookup used to run before the current-password check exactly as PUT /me's did.
     if (primaryEmailMalformed(email)) return unusableEmail(res);
 
+    // REMOVING THE ACCOUNT EMAIL. A blank `email` means "left alone" in this router (every form resends its
+    // whole object), so removing the address is its own explicit field. An account's email is the address a
+    // plugin provides (a professional mailbox); once that is turned off the account has none.
+    const removeEmail = req.body.removeEmail === true && String(user.userEmail || '').trim() !== '';
+    if (removeEmail && suppliedText(email) !== undefined) {
+        return res.status(400).json({ code: 'rest_invalid_param', message: 'Send either email or removeEmail, not both.', data: { status: 400 } });
+    }
+
     // SECURITY (PLUGIN-DECLARED ACCOUNT CAPABILITIES). This route also serves SELF-edits — `isOwn` skips
     // the `edit_users` check above — so both the grants and the address they may bind must be re-gated on
     // the capability, not on ownership.
@@ -1580,6 +1605,26 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     if (!canEditUsers) {
         const emailRefusal = await refuseSelfServiceEmailChange(user, email);
         if (emailRefusal) return res.status(403).json(emailRefusal);
+    }
+    if (removeEmail) {
+        // Admin-owned, like the grants: the address is assigned by a user manager, so only one removes it.
+        if (!canEditUsers) {
+            return res.status(403).json({
+                code: 'rest_forbidden',
+                message: 'Only a user manager can remove an account email.',
+                data: { status: 403 }
+            });
+        }
+        // Judged as the grants will stand after this write, so turning the service off and removing its
+        // address can be one save.
+        if (accountCapabilities.locksEmailAfter(user, capPlan.changes)) {
+            return res.status(400).json({
+                code: 'rest_email_in_use_by_service',
+                message: 'A service enabled for this account uses its email address. Turn that service off to remove it.',
+                data: { status: 400 }
+            });
+        }
+        updateData.removeEmail = true;
     }
 
     // Optional personal/recovery email (coexists with the primary/professional email). Stored as meta;
@@ -1673,7 +1718,7 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     // write) and driven by the same helper, so the two self-service doors cannot drift again. Only a real
     // change to a recovery-bearing field (or a new password) demands it; an admin editing SOMEONE ELSE is
     // untouched, because that path is gated on capabilities, not on proving personal ownership.
-    const recoveryChanged = await selfRecoveryAddressChanged(user, req.body);
+    const recoveryChanged = (await selfRecoveryAddressChanged(user, req.body)) || removeEmail;
     const selfRecoveryChanged = isOwn && recoveryChanged;
     // Same normalization as the sink a few lines up — see PUT /me.
     if (isOwn && (suppliedText(password) || selfRecoveryChanged) && await requireSudoPassword(req, res, req.body.currentPassword)) return;
@@ -1691,6 +1736,8 @@ router.put('/:id', asyncHandler(async (req: Request, res: Response) => {
     // A reset link already sent to an address that is no longer the account's must die with it, whoever
     // changed the address.
     if (recoveryChanged) await invalidatePendingPasswordReset(userId);
+    // ...and so must a verification link sent to the address that was just removed.
+    if (updateData.removeEmail) await invalidatePendingEmailVerification(userId);
 
     // AUDIT: exactly one row per security-relevant change — a role change. No secret material.
     if (updateData.role !== undefined) {

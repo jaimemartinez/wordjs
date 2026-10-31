@@ -27,6 +27,7 @@ import {
     SUDO_GATED_SELF_FIELDS,
     selfEditNeedsCurrentPassword,
     withSudoProof,
+    withEmailRemoval,
     isBadCurrentPassword,
 } from "@/lib/api";
 
@@ -61,6 +62,7 @@ const CASES: Case[] = [
     { why: "a blank primary email means 'left alone', never 'cleared'", submitted: { email: "" }, needsPassword: false },
     { why: "a whitespace-only primary email is equally 'left alone'", submitted: { email: "   " }, needsPassword: false },
     { why: "an absent primary email", submitted: { email: undefined }, needsPassword: false },
+    { why: "REMOVING the primary email moves where a reset link goes", submitted: { email: "", removeEmail: true }, needsPassword: true },
     // FALLOS 125: a grant that binds the email (the mail plugin's «Professional email account») rewrites it
     // in the form to <username>@<mail domain> — a primary-address change like any other.
     { why: "a primary email rewritten by a plugin grant", submitted: { email: "owner@mail.example.com", personalEmail: "owner@personal.test", accountCapabilities: { mail_server_mailbox: true } } as never, needsPassword: true },
@@ -102,6 +104,18 @@ describe("selfEditNeedsCurrentPassword", () => {
         expect(selfEditNeedsCurrentPassword({}, { personalEmail: "first@personal.test" })).toBe(true);
         expect(selfEditNeedsCurrentPassword({ personalEmail: "" }, { personalEmail: "first@personal.test" })).toBe(true);
         expect(selfEditNeedsCurrentPassword({ personalEmail: null }, { personalEmail: "" })).toBe(false);
+    });
+});
+
+describe("withEmailRemoval — an emptied account email is sent as removeEmail", () => {
+    it("an address that was there and is now blank is removed", () => {
+        expect(withEmailRemoval(STORED, { email: "" })).toEqual({ email: "", removeEmail: true });
+        expect(withEmailRemoval(STORED, { email: "  " })).toEqual({ email: "  ", removeEmail: true });
+    });
+    it("an unchanged, changed or never-set address is not", () => {
+        expect(withEmailRemoval(STORED, { email: "owner@example.com" })).not.toHaveProperty("removeEmail");
+        expect(withEmailRemoval(STORED, { email: "new@example.com" })).not.toHaveProperty("removeEmail");
+        expect(withEmailRemoval({ email: "" }, { email: "" })).not.toHaveProperty("removeEmail");
     });
 });
 

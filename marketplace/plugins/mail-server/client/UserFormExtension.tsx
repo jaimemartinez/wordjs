@@ -18,6 +18,7 @@ import { api } from '../../../../frontend/src/lib/api';
  *
  * What remains here is the address: while the grant is on, the account email is the corporate address
  * `<username>@<mailDomain>` — the address the mailbox receives at — and the email input is read-only.
+ * Turning the grant off takes that address away again and hides the field: the account then has no email.
  */
 const MAILBOX_CAPABILITY = 'mail_server_mailbox';
 
@@ -25,6 +26,8 @@ const MAILBOX_CAPABILITY = 'mail_server_mailbox';
 // filter below (registered once at module load, so it can't read React state) can see it. It is written
 // by the mounted component's effect and is NOT used to seed any form's initial state.
 let isAutoEmailActive = false;
+// Same mirror: the grant was turned off on this form and the mailbox address taken away, so the field hides.
+let mailboxAddressRemoved = false;
 
 export type MailboxEmailMemo = { generated: string | null; before: string | null };
 
@@ -32,8 +35,8 @@ export type MailboxEmailMemo = { generated: string | null; before: string | null
  * One step of the address field while the mailbox toggle is used: what to write into Email (undefined =
  * leave it), and what to remember. On: the field gets <username>@<mail domain>, and what it held before is
  * kept. Off: the field gets that value back (M2-24 — it used to keep the generated address, and what the
- * administrator typed was appended to it). Only an address this form generated is taken back, so an existing
- * account's stored address is never touched.
+ * administrator typed was appended to it). An account loaded with the mailbox address already stored had
+ * nothing before it, so off leaves it with no email. An address the administrator typed is never touched.
  */
 export function mailboxEmailStep(
     memo: MailboxEmailMemo,
@@ -41,7 +44,9 @@ export function mailboxEmailStep(
 ): { email?: string; memo: MailboxEmailMemo } {
     if (s.granted && s.username && s.domain) {
         const next = `${s.username.toLowerCase()}@${s.domain}`;
-        if (s.currentEmail.toLowerCase() === next) return { memo };
+        if (s.currentEmail.toLowerCase() === next) {
+            return { memo: memo.generated === null ? { generated: next, before: '' } : memo };
+        }
         return { email: next, memo: { generated: next, before: memo.generated === null ? s.currentEmail : memo.before } };
     }
     if (!s.granted && memo.generated !== null) {
@@ -81,8 +86,11 @@ const UserFormExtension = ({ data }: { data: any }) => {
 
     useEffect(() => {
         isAutoEmailActive = granted;
+        if (granted) mailboxAddressRemoved = false;
         pluginHooks.notify();
     }, [granted]);
+    // A form that unmounts must not leave its state to the next one.
+    useEffect(() => () => { isAutoEmailActive = false; mailboxAddressRemoved = false; }, []);
 
     // Generated address and what the field held before it (see mailboxEmailStep).
     const stepRef = useRef<MailboxEmailMemo>({ generated: null, before: null });
@@ -90,7 +98,10 @@ const UserFormExtension = ({ data }: { data: any }) => {
     useEffect(() => {
         const { email, memo } = mailboxEmailStep(stepRef.current, { granted, username, domain, currentEmail });
         stepRef.current = memo;
-        if (email !== undefined) setFormData?.((prev: any) => ({ ...prev, email }));
+        if (email !== undefined) {
+            setFormData?.((prev: any) => ({ ...prev, email }));
+            if (!granted && email === '' && !mailboxAddressRemoved) { mailboxAddressRemoved = true; pluginHooks.notify(); }
+        }
     }, [username, granted, domain, setFormData, currentEmail]);
 
     if (!granted) return null;
@@ -109,7 +120,7 @@ export const registerUserFormExtension = () => {
 
     // 2. Filter the core email input properties
     pluginHooks.addFilter('user_form_email_input_props', (props = {}, _data = {}) => {
-        if (!isAutoEmailActive) return props;
+        if (!isAutoEmailActive) return mailboxAddressRemoved ? { ...props, hidden: true } : props;
 
         return {
             ...props,

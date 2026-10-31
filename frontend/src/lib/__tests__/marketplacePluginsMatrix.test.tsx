@@ -179,12 +179,17 @@ describe("mail-server: the mailbox toggle gives the address field back (M2-24)",
         r = mailboxEmailStep(r.memo, { granted: false, username: "ana", domain: "d.test", currentEmail: "ana@d.test" });
         expect(r.email).toBe("");
     });
-    it("an existing account's stored address is never taken away", async () => {
+    it("an existing account's mailbox address goes with the mailbox: off leaves no email", async () => {
         const { mailboxEmailStep } = await load();
-        // Loaded with the grant on and the mailbox address already stored: nothing generated here.
+        // Loaded with the grant on and the mailbox address already stored: nothing to write yet.
         let r = mailboxEmailStep({ generated: null, before: null }, { granted: true, username: "ana", domain: "d.test", currentEmail: "ana@d.test" });
         expect(r.email).toBeUndefined();
         r = mailboxEmailStep(r.memo, { granted: false, username: "ana", domain: "d.test", currentEmail: "ana@d.test" });
+        expect(r.email).toBe("");
+    });
+    it("an account loaded with the grant off keeps the address it has", async () => {
+        const { mailboxEmailStep } = await load();
+        const r = mailboxEmailStep({ generated: null, before: null }, { granted: false, username: "ana", domain: "d.test", currentEmail: "ana@d.test" });
         expect(r.email).toBeUndefined();
     });
     it("an address the administrator edited after switching on is left alone", async () => {

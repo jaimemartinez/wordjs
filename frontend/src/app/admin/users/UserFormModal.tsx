@@ -2,7 +2,7 @@
 
 import { useState, useEffect, useId, useRef } from "react";
 import { useDialogFocus } from "@/components/useDialogFocus";
-import { usersApi, User, userSaveErrorText, selfEditNeedsCurrentPassword, withSudoProof } from "@/lib/api";
+import { usersApi, User, userSaveErrorText, selfEditNeedsCurrentPassword, withSudoProof, withEmailRemoval } from "@/lib/api";
 import { useOptionalAuth } from "@/contexts/AuthContext";
 import ModernSelect from "@/components/ModernSelect";
 import DialogLayer from "@/components/DialogLayer";
@@ -89,11 +89,11 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
         return pluginHooks.subscribe(() => setHookTick(t => t + 1));
     }, [user]);
 
-    const needsCurrentPassword = isOwn && selfEditNeedsCurrentPassword(loaded, {
+    const needsCurrentPassword = isOwn && selfEditNeedsCurrentPassword(loaded, withEmailRemoval(loaded, {
         email: formData.email,
         personalEmail: formData.personalEmail,
         password: formData.password,
-    });
+    }));
 
     const handleSubmit = async (e: React.FormEvent) => {
         e.preventDefault();
@@ -116,7 +116,7 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
 
         try {
             if (userId && user !== "new") {
-                await usersApi.update(userId, isOwn ? withSudoProof(loaded, formData, currentPassword) : { ...formData, ...stepUp.payload() });
+                await usersApi.update(userId, isOwn ? withSudoProof(loaded, withEmailRemoval(loaded, formData), currentPassword) : { ...withEmailRemoval(loaded, formData), ...stepUp.payload() });
                 setCurrentPassword("");
             } else {
                 await usersApi.create({ ...formData, ...stepUp.payload() });
@@ -138,10 +138,10 @@ export default function UserFormModal({ user, onClose, onSuccess }: UserFormModa
     // THE ACCOUNT EMAIL is the account's own address, which a plugin provides: its `user_form_email_input_props`
     // filter fills it in and sets `hidden: false`. Without one the field is not shown and the account has no
     // email — the personal address below is a different thing and is never copied into it. An existing account
-    // that already has one keeps the field.
+    // that already has one keeps the field, and emptying it removes the address (withEmailRemoval).
     const emailInputProps = pluginHooks.applyFilters('user_form_email_input_props', {
         className: "w-full px-4 py-4 bg-gray-50/50 border-2 border-gray-100 rounded-2xl focus:ring-4 focus:ring-blue-100 focus:border-blue-500 focus:bg-white transition-all outline-none font-medium",
-        required: true,
+        required: false,
         readOnly: false,
         hidden: isNew || !loaded.email,
     }, { formData, isNew });

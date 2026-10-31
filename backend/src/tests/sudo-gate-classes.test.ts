@@ -1285,7 +1285,7 @@ test('CLASS 3 — the blank/null axis, over the PRODUCT of the module\'s field t
     const victim = U.blankVictim;
     const REAL: Record<string, any> = {
         password: 'TokenOwned-9!', currentPassword: PASSWORD, email: 'attacker@evil.test',
-        personalEmail: 'attacker@evil.test', role: 'administrator', accountCapabilities: { test_plugin_cap: true }, professionalMailbox: true,
+        personalEmail: 'attacker@evil.test', role: 'administrator', accountCapabilities: { test_plugin_cap: true }, professionalMailbox: true, removeEmail: true,
     };
     const BLANKS: Array<[string, any]> = [['empty string', ''], ['whitespace', '   '], ['null', null]];
 

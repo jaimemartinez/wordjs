@@ -6,6 +6,15 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+- **Turning off a professional account takes its address away.** The account kept the mailbox address as its
+  email, and the **Email** field stayed on screen, required, with no way to empty it: the server read a blank
+  email as "left alone". mail-server 3.3.9 now clears the address and hides the field when the mailbox is turned
+  off, and the user forms send the new `removeEmail` field to `PUT /users/:id` whenever an account email that
+  was there is emptied. Only a user manager removes an address (on their own account, with their password), and
+  never while a service that binds it is still on (`rest_email_in_use_by_service`). Removing another
+  administrator's address takes the same step-up as changing it, and pending reset and verification links die with it.
+
 ## [2.11.26] - 2026-10-30
 
 ### Changed

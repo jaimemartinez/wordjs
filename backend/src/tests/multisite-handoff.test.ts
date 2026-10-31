@@ -395,6 +395,9 @@ describe('redeeming a handoff (the target site)', () => {
             const edit = await bearer('put', `${API}/users/${id}`, TWO, tokens.two).send({ password: 'Another-Horse-9!x', email: 'mine@two.example.com' });
             assert.strictEqual(edit.status, 403, JSON.stringify(edit.body));
             assert.strictEqual(edit.body.code, 'rest_network_handoff_account');
+            const strip = await bearer('put', `${API}/users/${id}`, TWO, tokens.two).send({ removeEmail: true });
+            assert.strictEqual(strip.status, 403, JSON.stringify(strip.body));
+            assert.strictEqual(strip.body.code, 'rest_network_handoff_account');
             const reset = await bearer('post', `${API}/users/${id}/mfa/reset`, TWO, tokens.two).send({});
             assert.strictEqual(reset.status, 403);
             assert.strictEqual(reset.body.code, 'rest_network_handoff_account');
