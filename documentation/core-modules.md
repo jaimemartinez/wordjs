@@ -210,7 +210,7 @@ post — receives the post's **teaser** (body, excerpt and Verso tree cut at the
 surface: `Post.toJSON` (REST, and GraphQL through it), the feeds (`routes/seo.ts`), search
 (`Post.buildWhere`, title-only match) and the post's comments (`routes/comments.ts`, `models/Comment.ts`,
 the comments feed). Levels are provided by plugins through the `content_access_levels` and
-`content_access_grants` filters — answering them takes the `content_access:provider` grant (the bundled `memberships` plugin is one); an unknown level fails closed.
+`content_access_grants` filters — answering them takes the `content_access:provider` grant (the marketplace `memberships` plugin is one); an unknown level fails closed.
 Full guide: [memberships.md](memberships.md).
 
 ---
@@ -327,7 +327,7 @@ The visual editor's page tree (`_puck_data`) is stored verbatim in `post_meta` a
 
 **Location:** `backend/src/core/install-token.ts`
 
-`POST /setup/install` and `POST /setup/test-db` run **before** the instance is configured, so they are necessarily unauthenticated and exempt from **both halves** of the CSRF defence — the Origin/Host check *and* the `X-CSRF-Token` double-submit gate. They are the only two paths that skip both. Without a gate, anyone reaching a not-yet-installed instance could complete the install themselves (pre-install takeover). This module is that gate.
+`POST /setup/install` and `POST /setup/test-db` run **before** the instance is configured, so they are necessarily unauthenticated and exempt from **both halves** of the CSRF defence — the Origin/Host check *and* the `X-CSRF-Token` double-submit gate. Together with `POST /setup/check-token` they are the only three paths that skip both. Without a gate, anyone reaching a not-yet-installed instance could complete the install themselves (pre-install takeover). This module is that gate.
 
 > **The CSRF exemption is real at runtime now.** `csrfProtection` is mounted **with** the API prefix (`app.use(config.api.prefix, csrfProtection)`), and Express strips a mount path from `req.url` before the middleware runs — so the old comparison of `req.path` against the full `/api/v1/setup` could never be true, and the declared exemption was dead code. It is now derived from `req.originalUrl` (via `pathAfterApiPrefix`, so it holds at any mount point) and matched against an **enumerated set of exact sub-paths** — `/setup/install` and `/setup/test-db` — never a `startsWith('/setup/')` prefix. The subtree spelling was rejected deliberately: it would also have exempted `POST /setup/migrate`, the one route of that subtree that stays alive *after* installation. It used to authenticate raw credentials from the body (an admin-password oracle any visitor's browser could have driven); it now answers `410 rest_migrate_removed` without evaluating anything, and stays non-exempt for one more release. Before the correction, a headless installer following this documentation received a misleading `403 rest_csrf_invalid` from a site that had no users at all; real callers only worked because they happened to send an `Origin` header. The install guard in `index.ts` uses the same idiom **correctly** only because it is mounted at the root — the two were copied without noticing the mounts differ.
 
@@ -413,7 +413,7 @@ Decides which addresses the site answers and is the one writer of "where does th
 
 The modules that let one install serve a network of sites. The operator guide is **[multisite.md](./multisite.md)**; the design, the isolation guarantees and what phases 1 and 2 built are in **[multisite-design.md](./multisite-design.md)**.
 
-*   **`network.ts`** — the network store: a SQLite file of its own (`network.db`, next to the main database) holding the sites, the addresses each one answers, the network administrators, the per-plugin grant ceilings and the network audit log. It is the single writer of that file; reads come from an in-memory snapshot each write replaces.
+*   **`network.ts`** — the network store: on SQLite a file of its own (`network.db`, next to the main database), on PostgreSQL a schema and on MySQL a database of its own, holding the sites, the addresses each one answers, the network administrators, the per-plugin grant ceilings and the network audit log. It is the single writer of that file; reads come from an in-memory snapshot each write replaces.
 *   **`network-sites.ts`** — `createSite()` provisions a site all-or-nothing (registry record, data directory, database, default options, first administrator); `prepareSite(id)` opens a site's database and loads its per-site runtime once per process; `setSiteStatus()` suspends and resumes; `forEachSite` walks the sites for background work.
 *   **`network-auth.ts`** — a network administrator is an administrator **of the main site** whose user id is listed in the network store; the role alone or the listing alone is not enough.
 *   **`site-context.ts`** — which site the current work belongs to, carried through the async call chain by one `AsyncLocalStorage`. In multisite mode, code that reaches site data outside any site context fails (`site_context_missing`) instead of falling back to site 1.

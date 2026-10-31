@@ -38,7 +38,8 @@ read-only, while it is on; only an administrator can change that address.
 Press **Save User** («Guardar usuario»).
 
 When editing another user who has two-factor authentication, **Reset two-factor** («Restablecer dos pasos»)
-turns it off for them (after a confirmation), for example when they lost their phone. It acts at once.
+turns it off for them, for example when they lost their phone. It asks for your own password (and your
+two-factor code if you use two-factor), then acts at once. The bulk **Change role to…** asks the same.
 
 ### Editing your own row
 

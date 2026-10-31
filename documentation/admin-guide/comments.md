@@ -14,7 +14,7 @@ user only writes the comment (**Commenting as <name>**). After **Post Comment**:
 - **Your comment is published.** when the comment is approved at once; it appears without reloading.
 - **Comment submitted successfully! It awaits moderation.** when it is held for you to review.
 
-The comment section's texts are in English whatever the site's language.
+The comment section's texts follow the site's language (Spanish, English or Portuguese).
 
 Which comments are held, and whether a visitor must sign in, is set in
 [Settings](settings.md#reading--discussion). To close comments on one post, set **Allow Comments** to **No**

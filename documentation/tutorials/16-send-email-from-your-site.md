@@ -124,8 +124,10 @@ Under the relay fields you now see one of these:
 - a red **Relay unavailable: …** with the reason, for example a wrong password or a host that does
   not answer. Fix the field it names and save again.
 
-While the relay is unavailable, outgoing mail waits in the **Queue** tab and is retried. It is never
-sent directly to recipients' servers instead.
+With **Use the relay: Always** (the default), outgoing mail waits in the **Queue** tab while the relay
+is unavailable and is retried; it is never sent directly to recipients' servers instead. Choose
+**Only when direct delivery fails** if you want the server to deliver directly and use the relay only
+as a backup.
 
 ## 6. Allow a relay on your private network
 
@@ -170,8 +172,9 @@ account, so WordJS sends them itself and never hands them to a plugin unless you
 
 - **Built-in transport (recommended).** Enter the same relay as in step 5 — host, port, STARTTLS,
   username and password, and a from address — type your own password to confirm, click **Save**, then
-  **Send test**. With Mailpit, use `127.0.0.1`, port `1025` and security **None** (allowed only for a
-  server on the same machine).
+  **Send test**. Security **None** is allowed only for a mail server on the WordJS machine itself, so
+  this works with Mailpit only when Mailpit runs on the WordJS server (`127.0.0.1`, port `1025`). With
+  Mailpit on another machine, as in this tutorial, use the next option.
 - **Let Mail Server carry them.** Under **Mail provider plugin**, click **Allow for account email** and
   confirm the warning. Mail Server then receives the reset links, so only do this if you trust it as
   much as an administrator.

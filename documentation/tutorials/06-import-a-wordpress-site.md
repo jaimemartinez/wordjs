@@ -71,7 +71,7 @@ matched, not duplicated, and an attachment that already downloaded is never fetc
 ## Good to know
 
 - **The same import from the command line or a script:** `POST /api/v1/import/wordpress` (multipart,
-  fields `file`, `media`, `importComments`, `allowHttp`). See [wordpress-import.md](../wordpress-import.md),
+  fields `file`, `media`, `importComments`, `allowHttp`, `allowPrivateSource`). See [wordpress-import.md](../wordpress-import.md),
   which also documents the limits, the idempotency rules and every field of the summary.
 - **Large sites:** the upload limit is 100 MB per file. Split a bigger export in WordPress (export by
   post type or date range) and import the parts one after another.

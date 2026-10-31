@@ -173,7 +173,7 @@ re-registers with the gateway by itself.
 - **Public certificate:** put nginx with Let's Encrypt in front of the gateway as in
   [Tutorial 2](02-nginx-and-https.md) (forwarding to `https://127.0.0.1:3000` and
   `proxy_ssl_verify off`, or set `"ssl": false` in the gateway's `gateway-config.json` to forward to plain
-  HTTP), or issue a certificate from **Admin → Security → SSL Certificate Manager**.
+  HTTP), or issue a certificate from **Admin → Security → SSL / HTTPS Configuration**.
 - **Firewall:** allow 3100/3101 only from the backend and frontend machines, 4000 and 3001 only from
   the gateway, and 3000 (or 443) from the world.
 - **More replicas:** a second backend or frontend joins the same way with a fresh token. Several

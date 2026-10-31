@@ -26,7 +26,7 @@ The list on the left groups the messages:
 
 A lock next to a message marks a **security message** (sign-in mail and the site-address notice): saving or
 resetting its text asks for **Your current password**. **Edited** marks a message you changed in at least one
-language. Plugins can add their own messages here; they appear under **Plugins**.
+language. Only the core's messages are listed for now: plugins cannot add their own yet.
 
 ## Editing a message
 

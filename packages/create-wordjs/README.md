@@ -80,7 +80,7 @@ Separate-mode options:
 
 **From the admin panel first.** On a standard install (the monolith started by its service, with its
 own files — the `--systemd` layout) **Admin → Updates** lists the newer releases with their notes and
-installs one with your password and a two-factor code: it takes a backup, runs this same command with
+installs one with your password (and a two-factor code when your account has two-factor authentication): it takes a backup, runs this same command with
 `--version <tag>`, restarts WordJS by itself and puts the previous version back if the new one fails to
 install or to start. In a container, a git checkout, split or separate mode, or when the code belongs
 to another account, the screen says so and gives you the command instead.

@@ -44,7 +44,7 @@ It is the only runtime dependency that needs its install script. The install wiz
 
 ## 🟦 Backend: dev vs prod
 
-The backend is TypeScript. **Production is compiled** — `ts-node` is only used in development or as a fallback when no build exists.
+The backend is TypeScript. **Production is compiled** — `ts-node` is only used in development.
 
 ### Build (production)
 
@@ -65,9 +65,9 @@ npm start          # node server.js (supervisor)
 `server.js` is a self-healing supervisor. On launch it checks for `backend/dist/index.js`:
 
 - **`dist/` exists** → spawns `node dist/index.js` (compiled — the production path).
-- **no `dist/`** → falls back to `node -r ts-node/register src/index.ts` (dev convenience).
+- **no `dist/`** → refuses to start and says to run `npm run build`. `WORDJS_ALLOW_SOURCE=1` (never with `NODE_ENV=production`) runs `node -r ts-node/register src/index.ts` instead — development only, because the source-mode worker runs without the production sandbox flags.
 
-So **always run `npm run build` for production**; otherwise you silently get the slower `ts-node` path. The supervisor restarts the child on crashes, pairing with the in-process CrashGuard for a self-healing backend. Crashes in a row are restarted after a delay that doubles each time (1 s, 2 s, 4 s … up to 30 s) and returns to 1 s once the app has stayed up for a minute; it never gives up, so a database that drops connections for a while costs that while, not the node.
+So **always run `npm run build` for production** (`npm run dev` is the usual way to run the sources). The supervisor restarts the child on crashes, pairing with the in-process CrashGuard for a self-healing backend. Crashes in a row are restarted after a delay that doubles each time (1 s, 2 s, 4 s … up to 30 s) and returns to 1 s once the app has stayed up for a minute; it never gives up, so a database that drops connections for a while costs that while, not the node.
 
 ### Develop (watch + ts-node)
 
@@ -106,7 +106,7 @@ npm run format
 
 Both test scripts run `node --test …` through `scripts/test-with-flake-retry.mjs` (repo root), a wrapper that re-runs the suite up to twice (three runs in all), and only when every failure in the run is node:test's known `--test-force-exit` deserialize flake ("Unable to deserialize cloned data …" reported against a file whose own suite passed). A run containing any real assertion failure is never retried.
 
-`npm test` runs the backend unit suite across every `src/tests/*.test.ts` file (over 300 — 324 in v2.6.0; node:test + supertest). `npm run lint` **is** a CI gate (the backend job runs it between the typecheck and the build; ESLint exits non-zero on errors only, so warnings are surfaced but tolerated). `npm run format` stays a local command.
+`npm test` runs the backend unit suite across every `src/tests/*.test.ts` file (over 450; node:test + supertest). `npm run lint` **is** a CI gate (the backend job runs it between the typecheck and the build; ESLint exits non-zero on errors only, so warnings are surfaced but tolerated). `npm run format` stays a local command.
 
 The DB driver conformance suite (`src/tests/driver-conformance.test.ts`) runs the **async** drivers it has a dialect-descriptor block for (`sqlite-native`, `postgres`, and `mysql`, each skipped gracefully when its backend isn't reachable — and hard-failed in CI via `WORDJS_CI_DB=1`) against the shared interface (`src/drivers/interface.ts`: `connect/get/all/run/exec/transaction/close`). The `mysql` (`mysql2`) block feeds the same SQLite-dialect SQL and asserts the driver's translation layer. The legacy `sqlite-legacy` (sql.js) driver uses the older **sync** shape and is intentionally out of scope here. The 6th interface method, `transaction(fn)`, is an atomic `BEGIN`/`COMMIT`/`ROLLBACK` wrapper that passes a `tx` bound to a single connection (the basis of the atomic-transaction guarantee). **Adding a new database** = implement that interface (including `transaction()`) and add a conformance block.
 

@@ -11,7 +11,6 @@ share nothing.
 - a WordJS site you administer. Settings → Network checks the rest for you: the database engine (an
   older `sqlite-legacy` install is moved to `sqlite-native` there, with one click), the database user's
   rights on Postgres and MySQL, and the main address;
-- two-factor authentication on your account (**My account → Two-factor authentication**);
 - a second domain name pointing at the same server — or nothing at all to try it on your own computer
   (step 1).
 
@@ -42,7 +41,8 @@ Sign in to the main site as an administrator and open **Settings → Network**.
    makes a backup, moves the database (a progress bar shows it) and restarts by itself.
 2. Under **Network administrators**, keep yourself ticked (and tick anyone else who should run the
    network).
-3. Enter your password and the code from your authenticator app, and click **Turn the network on**.
+3. Enter your password (and the code from your authenticator app, if your account has two-factor
+   authentication), and click **Turn the network on**.
 
 WordJS restarts itself (a few seconds) and opens **Admin → Network**. Your existing site is now **site 1,
 the main site**; nothing about it changed.

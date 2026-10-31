@@ -275,8 +275,9 @@ enlarges the trust surface:
   `smtp_listen_port`, default 25) + outbound MX delivery on port 25 + DKIM. With the trust tier gone, it ships as a normal sandboxed first-party
   plugin, granted at activation exactly the capabilities it declares (`network` for SMTP/MX, `email:provider`).
   **The code is out:** it lives in `marketplace/plugins/mail-server`, not in core — a fresh install has
-  no MTA until an admin installs it. The core keeps only `mail-provider.ts` (is a provider registered?)
-  and `mailbox.ts` (who holds a site mailbox); it cannot send mail on its own. **The dependencies are
+  no MTA until an admin installs it. The core keeps `mail-provider.ts` (is a provider registered?)
+  and `account-mail.ts`, which sends only account email (password resets, verification) through the
+  SMTP relay an administrator configures in Settings → Account email. **The dependencies are
   not:** `nodemailer`, `smtp-server` and `mailparser` are still declared in `backend/package.json`
   **`dependencies`** — no runtime module under `backend/src/` imports them (only the mail-server plugin
   and its tests do); they are there so the plugin can resolve them out of `backend/node_modules` (see the

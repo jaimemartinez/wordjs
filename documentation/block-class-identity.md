@@ -134,4 +134,4 @@ paid once and end when the alias does.
 The framework stylesheet paid the same window: at the time of the change `wordjs-ui.css` went from
 160 152 to 167 200 bytes raw (34.9 KB → 36.1 KB gzip, +3.6 %), and `core.css` grew 113 bytes. Both
 are separate, cacheable assets and do not travel with the HTML. (Those are the figures measured then;
-the framework has grown since for unrelated reasons and is 184 715 bytes today.)
+the framework has grown since for unrelated reasons and is about 190 KB today.)

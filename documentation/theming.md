@@ -28,7 +28,9 @@ plus its own CSS for whatever the tokens don't parameterize (see *What tokens co
 > declaration value **may** contain `var()`, and referencing a token is the normal thing to write:
 > css-tree cannot match a value tree containing `var()`, so instead of refusing the declaration the
 > compiler checks that every reference is a real `--wjs-*` token in the manifest and skips the
-> property matcher for that value — stricter than plain CSS, not looser. The compiler additionally
+> property matcher for that value; only the usual value functions (`calc`, `clamp`, colour functions,
+> gradients, …) may sit next to a token reference, and CSS escapes (`\`) are refused in every theme
+> value — stricter than plain CSS, not looser. The compiler additionally
 > *warns* (`TOKEN_VALUE_GRAMMAR`) when a token
 > value matches no grammar of any property the manifest lists as consuming that token — a
 > best-effort check with deliberately partial coverage, described in
@@ -128,14 +130,14 @@ the canonical token. These 22 are flagged `"alias"` in the manifest (see below).
 
 ### Per-block tokens (~600 more — see the manifest)
 
-The tables above are only the **core** tokens. Most of the framework's **778** tokens style
+The tables above are only the **core** tokens. Most of the framework's **781** tokens style
 individual visual-editor blocks (`--wjs-<block>-*`); they are documented exhaustively in the
 machine-readable manifest (next section), not here. Real group sizes, read from the manifest:
 `cta` 57 · `pricing` 53 · `accordion` 40 · `card` 40 · `hero` 38 · `form` 37 · `audio` 36 ·
 `testimonial` 30 · `tabs` 29 · `button` 26 · `search` 26 · `catposts` 24 · `posts` 22 ·
 `stats` 22 · `video` 22 · `heading` 14 · `quote` 13 · `table` 13 · `icon` 12 · `social` 9 ·
 `divider` 6 — plus smaller layout/shape groups (`columns`, `col`, `flex`, `grid`, `section`,
-`image`, `spacer`, …), 74 groups in total (a token's group is the first segment of its name).
+`image`, `spacer`, …), 75 groups in total (a token's group is the first segment of its name).
 
 ### Editor-internal tokens (`--wjs-r-*`) — never set these in a theme
 
@@ -192,7 +194,7 @@ too. Tokens are the normal way to build a theme, and everything past them is sti
   `styles.chromeHeader` and `animations` (4, 1 and 2 respectively). `styles.chromeFooter` is declared
   by circuito and gaceta but not by vergel. A distinctive chrome is built from those entries now,
   instead of hand-written CSS below the generated block. In practice their `style.css` files run 95–182 lines with 49–109
-  `--wjs-*` declarations; the hand-authored bundled **default** declares 76 tokens in a 562-line
+  `--wjs-*` declarations; the hand-authored bundled **default** declares 76 tokens in a 576-line
   stylesheet.
 
 The complete machine-readable contract is `backend/public/theme-tokens.json` (next section).
@@ -200,7 +202,7 @@ The complete machine-readable contract is `backend/public/theme-tokens.json` (ne
 ## The machine-readable contract (`theme-tokens.json`)
 
 `backend/public/theme-tokens.json` is the generated, complete token contract — the source of truth
-whenever this document and the CSS disagree. Current counts: **778 tokens**, **1777 `var()` uses**,
+whenever this document and the CSS disagree. Current counts: **781 tokens**, **1790 `var()` uses**,
 **51 element entries**. For every token it records:
 
 - `group` — first segment of the name (`hero`, `cta`, `color`, `radius`, …);
