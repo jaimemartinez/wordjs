@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.26] - 2026-10-30
+
 ### Changed
 - **An account can have no email, and the user form asks for one only when a plugin provides it.** The account
   email is the account's own address (a professional mailbox fills it in); the **Email** field of a new account is
