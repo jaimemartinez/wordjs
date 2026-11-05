@@ -339,7 +339,6 @@ function subscriberStream<T>(
         }
     };
 
-    const { setDispatchCharged } = require('./dispatch');
     // Reads still charged to the caller: the replayed events. Once they are through, the stream is live.
     let replayLeft = 0;
 
@@ -351,6 +350,7 @@ function subscriberStream<T>(
             const replayed = await feed.replay(opts.lastEventId, ctx.req.user ? tuning.maxReplay : tuning.maxAnonymousReplay);
             for (const e of replayed) queue.push(e);
             replayLeft = replayed.length;
+            if (replayLeft) replaying.add(ctx.req as object);
         }
         if (authenticated) {
             recheck = setInterval(() => { ensureCredential().catch(() => stop()); }, tuning.recheckMs);
@@ -364,7 +364,7 @@ function subscriberStream<T>(
                     continue;
                 }
                 const payload = await authorize(e);
-                if (replayLeft > 0) --replayLeft;
+                if (replayLeft > 0 && --replayLeft === 0) replaying.delete(ctx.req as object);
                 if (payload !== null && !closed) {
                     // The transport sends this as the SSE id, whether or not the client selected `cursor`.
                     (ctx as any).lastCursor = e.cursor;
@@ -390,11 +390,15 @@ function hasCredential(req: Request): boolean {
     catch { return false; }
 }
 
+/** The streams still replaying what a Last-Event-ID asked for. */
+const replaying = new WeakSet<object>();
+
 /** A fresh REST read as the subscriber — never the per-request memo, which would serve the state of an earlier event. */
 async function readAs(ctx: GraphQLContext, path: string) {
     const { restGet, createRestClient, setDispatchCharged } = require('./dispatch');
-    // The event's own read is the stream's; whatever the document selects under it is charged like any read.
-    setDispatchCharged(ctx.req, false);
+    // A live event's own read is the stream's, a replayed one is the caller's; whatever the document selects
+    // under either is charged like any read.
+    setDispatchCharged(ctx.req, replaying.has(ctx.req as object));
     let r;
     try { r = await restGet(ctx.req, path); } finally { setDispatchCharged(ctx.req, true); }
     // Nested fields of the delivered node (parent, comments, revisions) also read the current state.

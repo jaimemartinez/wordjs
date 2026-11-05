@@ -29,13 +29,22 @@
 /**
  * The single address-shape rule, shared by every caller.
  *
- * It is the SAME regex User.update() has always enforced, which matters: because `[^\s@]+` cannot
- * contain '@', an address is accepted only when it holds EXACTLY ONE '@'. That kills the whole
+ * It accepts what /^[^\s@]+@[^\s@]+\.[^\s@]+$/ accepts, which matters: an address holds EXACTLY ONE
+ * '@', with a non-empty local part and a dotted domain, and no whitespace. That kills the whole
  * "which @ is the separator?" ambiguity class — `a@gmail.com@acme.example` is simply not an address,
  * so no two readers can disagree about its domain (previously the plugin took the text after the
  * LAST '@' and the host after the FIRST, i.e. one saw acme.example and the other gmail.com).
+ *
+ * Written as a single pass rather than as that pattern, which backtracks polynomially on input the
+ * caller controls: the cost here is linear in the length, whatever the value holds.
  */
-const EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+function isAddressShape(s: string): boolean {
+    const at = s.indexOf('@');
+    if (at < 1 || s.indexOf('@', at + 1) !== -1 || /\s/.test(s)) return false;
+    const domain = s.slice(at + 1);
+    const dot = domain.indexOf('.', 1);
+    return dot !== -1 && dot <= domain.length - 2;
+}
 
 /**
  * Canonicalize an address for comparison: the SAME fold User.normalizeEmail applies before storing
@@ -45,24 +54,21 @@ function normalizeAddress(email: any): string {
     return String(email == null ? '' : email).trim().normalize('NFC').toLowerCase();
 }
 
-// Length cap applied BEFORE EMAIL_FORMAT_RE runs. The pattern is polynomial (quadratic backtracking on a
-// long run with no '@'), so testing it against an unbounded, attacker-controlled value is a ReDoS that
-// pins the single-threaded event loop for minutes (CodeQL js/polynomial-redos, reachable unauthenticated
-// via POST /register and guest comments). 254 = RFC 5321 max address length: no real address is rejected,
-// and the cost is bounded at 254². Every email-format check in the codebase routes through here.
+// 254 = RFC 5321 max address length: no real address is rejected. Every email-format check in the
+// codebase routes through here.
 const MAX_EMAIL_LEN = 254;
 
 /** The domain part of a well-formed address, or '' for anything that is not one. */
 function domainOfAddress(email: any): string {
     const s = normalizeAddress(email);
-    if (s.length > MAX_EMAIL_LEN || !EMAIL_FORMAT_RE.test(s)) return '';
+    if (s.length > MAX_EMAIL_LEN || !isAddressShape(s)) return '';
     return s.slice(s.indexOf('@') + 1); // exactly one '@' — indexOf === lastIndexOf
 }
 
 /** True when `email` is a syntactically valid address (the one shape rule, exposed for validators). */
 function isValidAddress(email: any): boolean {
     const s = normalizeAddress(email);
-    return s.length <= MAX_EMAIL_LEN && EMAIL_FORMAT_RE.test(s);
+    return s.length <= MAX_EMAIL_LEN && isAddressShape(s);
 }
 
 /**
@@ -144,7 +150,7 @@ async function refuseSelfServiceEmailChange(target: any, nextEmail: any): Promis
 }
 
 module.exports = {
-    EMAIL_FORMAT_RE,
+    isAddressShape,
     RESERVED_EMAIL_DOMAIN_REFUSAL,
     EMAIL_ADDRESS_LOCKED_REFUSAL,
     normalizeAddress,

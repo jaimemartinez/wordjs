@@ -83,7 +83,7 @@ describe("validateRegisterDraft — la política de contraseña, en sus dos extr
     });
 });
 
-describe("isValidEmailAddress — misma forma que EMAIL_FORMAT_RE del backend", () => {
+describe("isValidEmailAddress — misma forma que isAddressShape del backend", () => {
     it("acepta direcciones normales", () => {
         for (const ok of ["a@b.co", "ana.perez@sub.ejemplo.com", "ANA@EJEMPLO.COM"]) {
             expect(isValidEmailAddress(ok), ok).toBe(true);

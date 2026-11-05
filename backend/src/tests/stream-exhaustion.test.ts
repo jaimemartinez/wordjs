@@ -239,10 +239,17 @@ describe('GraphQL subscription streams', () => {
         const keepFeed = await open(streamPath(CONTENT), bearer('admin'));
         try {
             const anon = await open(streamPath(CONTENT), { 'Last-Event-ID': cursor });
+            await settle(300);
+            const limiter = require('../core/limiter-charge');
+            const realCharge = limiter.chargeLimiter;
+            let charged = 0;
+            limiter.chargeLimiter = (...args: any[]) => { charged++; return realCharge(...args); };
             const signedIn = await open(streamPath(CONTENT), { ...bearer('alice'), 'Last-Event-ID': cursor });
             await settle(600);
+            limiter.chargeLimiter = realCharge;
             assert.strictEqual((anon.body().match(/event: next/g) || []).length, 2);
             assert.strictEqual((signedIn.body().match(/event: next/g) || []).length, 6);
+            assert.ok(charged >= 5, `the replayed reads are the caller's (charged ${charged})`);
             anon.close();
             signedIn.close();
         } finally {
