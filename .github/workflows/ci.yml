@@ -1085,7 +1085,7 @@ jobs:
         run: npm run ci:all
       # The browser is cached per Playwright version, so a warm run downloads nothing.
       - name: Cache the Playwright browser
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('frontend/package-lock.json') }}
