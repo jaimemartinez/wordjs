@@ -627,8 +627,12 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
 }
 
 // Confine a plugin-supplied relative path to its own dir or the uploads dir; realpath-checked.
+function pluginBaseDir(slug: string): string {
+    return slug.startsWith('theme:') ? path.join(ROOT_DIR, 'themes', slug.slice(6)) : path.join(PLUGINS_DIR, slug);
+}
+
 function resolvePluginPath(slug: string, relPath: string, mustExist: boolean, allowUploads = true): string {
-    const base = slug.startsWith('theme:') ? path.join(ROOT_DIR, 'themes', slug.slice(6)) : path.join(PLUGINS_DIR, slug);
+    const base = pluginBaseDir(slug);
     const candidate = path.resolve(base, String(relPath || ''));
     const real = (() => {
         try { return fs.realpathSync(candidate); } catch { return candidate; }
@@ -1183,6 +1187,8 @@ function createPluginApi(slug: string) {
                 // in isPathSafe, and this bridge must not be the one door that skips them.
                 assertIoGuard(slug, src, false);
                 // Through a descriptor that refuses a link: the path was judged a moment ago, and this runs in the host.
+                const ownDir = pluginBaseDir(slug) + path.sep, ownData = require('./sandbox-paths').ownDataDir(ROOT_DIR, slug) + path.sep;
+                if (!src.startsWith(ownDir) && !src.startsWith(ownData)) throw new Error(`🛡️ Plugin path denied: '${relPath}'.`);
                 const reader = await fs.promises.open(src, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
                 try { return await reader.readFile(encoding); } finally { await reader.close(); }
             },
@@ -1224,6 +1230,8 @@ function createPluginApi(slug: string) {
                     if (used - existing + writeBytes > PLUGIN_DISK_QUOTA) throw new Error(`🛡️ plugin disk quota exceeded (${PLUGIN_DISK_QUOTA} bytes).`);
                 }
                 await fs.promises.mkdir(path.dirname(target), { recursive: true });
+                const ownDir = pluginBaseDir(slug) + path.sep, ownData = require('./sandbox-paths').ownDataDir(ROOT_DIR, slug) + path.sep;
+                if (!target.startsWith(ownDir) && !target.startsWith(ownData)) throw new Error(`🛡️ Plugin path denied: '${relPath}'.`);
                 const writer = await fs.promises.open(target, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW || 0), 0o644);
                 try { return await writer.writeFile(data); } finally { await writer.close(); }
             }
