@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.23',
+    version: '2.36.24',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -1394,14 +1394,14 @@ exports.init = async function (wordjs) {
     // A signed-in coordinator never meets this: the portal session is an opaque server-side id (see
     // PORTAL AUTH HELPER), not something carrying the code.
     const LOGIN_LIMITS = {
-        perClient: 6, clientWindowMs: 10 * 60 * 1000,
+        perClient: 6, perClientAll: 30, clientWindowMs: 10 * 60 * 1000,
         perLocation: 20, perSite: 100, sharedWindowMs: 60 * 60 * 1000,
         // Past a shared budget every attempt waits before its code is checked: delayBaseMs, doubling
         // every delayDoubleEvery further wrong codes, up to delayMaxMs.
         delayBaseMs: 250, delayDoubleEvery: 10, delayMaxMs: 8000,
     };
     const LOGIN_MAP_CAP = 5000;
-    const loginBuckets = { client: new Map(), location: new Map(), site: new Map() };
+    const loginBuckets = { client: new Map(), clientAll: new Map(), location: new Map(), site: new Map() };
     const loginBucket = (map, key, windowMs, now) => {
         let b = map.get(key);
         if (!b || now - b.first >= windowMs) {
@@ -1429,8 +1429,11 @@ exports.init = async function (wordjs) {
         const now = Date.now(), L = LOGIN_LIMITS;
         const clientKey = `${String((req && req.clientKey) || 'anon').slice(0, 64)}|${locationId}`;
         const own = loginBucket(loginBuckets.client, clientKey, L.clientWindowMs, now);
-        if (own.count >= L.perClient) return null;
+        // And across every target: ids are public, so a per-target budget alone multiplies by how many exist.
+        const everywhere = loginBucket(loginBuckets.clientAll, String((req && req.clientKey) || 'anon').slice(0, 64), L.clientWindowMs, now);
+        if (own.count >= L.perClient || everywhere.count >= L.perClientAll) return null;
         own.count++;
+        everywhere.count++;
         const excess = Math.max(
             loginCount(loginBuckets.location, String(locationId), L.sharedWindowMs, now) - L.perLocation,
             loginCount(loginBuckets.site, '*', L.sharedWindowMs, now) - L.perSite

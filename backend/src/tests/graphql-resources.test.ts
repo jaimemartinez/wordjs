@@ -83,6 +83,8 @@ async function parity(who: string, restPath: string, query: string, field: strin
 }
 
 before(async () => {
+    // The password step has its own suite (sudo-gate-classes).
+    require('../routes/users').requireSudoConfirmation = async () => false;
     config.nodeEnv = 'test';
     await database.init({ driver: 'sqlite-native' });
     await database.initializeDatabase();

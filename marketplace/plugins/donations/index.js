@@ -24,7 +24,7 @@
 
 exports.metadata = {
     name: 'Donations',
-    version: '1.0.4',
+    version: '1.0.5',
     description: 'Donation campaigns with goal thermometer, manual payment + optional Stripe Checkout, donor management and CSV export.',
     author: 'WordJS',
 };
@@ -511,7 +511,7 @@ exports.init = async function (wordjs) {
         if (session && session.payment_status === 'paid' && metaToken === token) {
             // Single-statement idempotent transition; only the request that flips it sends the receipt.
             const result = await db.run(
-                `UPDATE ${T.donations} SET payment_status = 'paid' WHERE id = ? AND payment_status != 'paid'`,
+                `UPDATE ${T.donations} SET payment_status = 'paid' WHERE id = ? AND payment_status = 'pending'`,
                 [donation.id]
             );
             await recomputeRaised(donation.campaign_id);
@@ -681,7 +681,7 @@ exports.init = async function (wordjs) {
         // mailed the donor a receipt.
         let flipped = false;
         if (status === 'paid') {
-            const r = await db.run(`UPDATE ${T.donations} SET payment_status = 'paid' WHERE id = ? AND payment_status != 'paid'`, [id]);
+            const r = await db.run(`UPDATE ${T.donations} SET payment_status = 'paid' WHERE id = ? AND payment_status = 'pending'`, [id]);
             flipped = !!(r && r.changes === 1);
         } else {
             await db.run(`UPDATE ${T.donations} SET payment_status = ? WHERE id = ?`, [status, id]);

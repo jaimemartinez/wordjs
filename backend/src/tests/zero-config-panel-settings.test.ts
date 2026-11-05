@@ -137,7 +137,7 @@ after(async () => {
 
 describe('a backup restore restarts the backend by itself', () => {
     test('the restore answers how it restarts, the supervisor is asked for 75, and it is audited', async () => {
-        const res = await as('owner', 'post', `${API}/backups/backup-2026-01-01.zip/restore`).send({});
+        const res = await as('owner', 'post', `${API}/backups/backup-2026-01-01.zip/restore`).send({ currentPassword: PASSWORD });
         assert.strictEqual(res.status, 200, JSON.stringify(res.body));
         assert.strictEqual(res.body.restart, 'supervisor');
         assert.deepStrictEqual(restoredNames, ['backup-2026-01-01.zip']);
@@ -172,14 +172,14 @@ describe('Security → Auto-renewal: the port 80 listener', () => {
         const bound: number[] = [];
         (global as any).__WORDJS_SET_ACME_HTTP01_PORT__ = (p: number) => bound.push(p);
         const base = { enabled: false, email: '', domains: [], staging: false, renewBeforeDays: 30, challengeType: 'http-01' };
-        const bad = await as('owner', 'post', `${API}/system/certs/acme-config`).send({ ...base, http01Port: 70000 });
+        const bad = await as('owner', 'post', `${API}/system/certs/acme-config`).send({ ...base, currentPassword: PASSWORD, http01Port: 70000 });
         assert.strictEqual(bad.status, 400, JSON.stringify(bad.body));
-        const ok = await as('owner', 'post', `${API}/system/certs/acme-config`).send({ ...base, http01Port: 8080 });
+        const ok = await as('owner', 'post', `${API}/system/certs/acme-config`).send({ ...base, currentPassword: PASSWORD, http01Port: 8080 });
         assert.strictEqual(ok.status, 200, JSON.stringify(ok.body));
         assert.strictEqual(fileConfig().acme.http01Port, 8080);
         const read = await as('owner', 'get', `${API}/system/certs/acme-config`);
         assert.strictEqual(read.body.http01Port, 8080);
-        const off = await as('owner', 'post', `${API}/system/certs/acme-config`).send({ ...base, http01Port: null });
+        const off = await as('owner', 'post', `${API}/system/certs/acme-config`).send({ ...base, currentPassword: PASSWORD, http01Port: null });
         assert.strictEqual(off.status, 200);
         assert.strictEqual(fileConfig().acme.http01Port, undefined);
         assert.deepStrictEqual(bound, [8080, 0], 'the listener followed each save at once');

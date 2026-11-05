@@ -11,11 +11,12 @@ import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
+const { auditOnSuccess } = require('../core/audit');
 const {
     getTaxonomies, getTaxonomy, saveCustomTaxonomy,
     deleteCustomTaxonomy, taxonomyExists
 } = require('../core/post-types');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, optionalAuth } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 // THE SCALAR QUERY RULE — see core/query-params.
@@ -64,7 +65,10 @@ const TAXONOMY_NAME_RE = /^[a-z0-9][a-z0-9_-]{0,31}$/;
  *       200:
  *         description: List of taxonomies
  */
-router.get('/', asyncHandler(async (req: Request, res: Response) => {
+/** A taxonomy that is not public is shown only to whoever manages terms. */
+const canSeeTaxonomy = (taxonomy: { public?: boolean }, req: Request) => taxonomy.public !== false || !!(req.user && req.user.can('manage_categories'));
+
+router.get('/', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     requireScalarQuery(req.query, TAXONOMY_LIST_QUERY_FIELDS);
 
     const showInRest = req.query.rest !== 'false';
@@ -76,7 +80,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
     }
     const taxonomies = getTaxonomies(filter);
 
-    res.json(taxonomies.map((t: any) => ({
+    res.json(taxonomies.filter((t: any) => canSeeTaxonomy(t, req)).map((t: any) => ({
         name: t.name,
         label: t.label,
         labels: t.labels,
@@ -104,10 +108,10 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
  *       200:
  *         description: Taxonomy details
  */
-router.get('/:name', asyncHandler(async (req: Request, res: Response) => {
+router.get('/:name', optionalAuth, asyncHandler(async (req: Request, res: Response) => {
     const taxonomy = getTaxonomy(req.params.name);
 
-    if (!taxonomy) {
+    if (!taxonomy || !canSeeTaxonomy(taxonomy, req)) {
         return res.status(404).json({ error: 'Taxonomy not found' });
     }
 
@@ -144,7 +148,7 @@ router.get('/:name', asyncHandler(async (req: Request, res: Response) => {
  *       201:
  *         description: Taxonomy created
  */
-router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/', authenticate, isAdmin, auditOnSuccess('taxonomy.update', 'taxonomy', (req: Request) => String(req.params.name || (req.body && req.body.name) || '')), asyncHandler(async (req: Request, res: Response) => {
     const { name, label, labels, postTypes, ...options } = req.body || {};
 
     if (!name) {
@@ -197,7 +201,7 @@ router.post('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: R
  *       200:
  *         description: Taxonomy deleted
  */
-router.delete('/:name', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:name', authenticate, isAdmin, auditOnSuccess('taxonomy.update', 'taxonomy', (req: Request) => String(req.params.name || (req.body && req.body.name) || '')), asyncHandler(async (req: Request, res: Response) => {
     const result = await deleteCustomTaxonomy(req.params.name);
 
     if (!result) {

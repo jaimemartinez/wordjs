@@ -3,6 +3,7 @@
 import { useEffect, useState } from "react";
 import Link from "next/link";
 import { apiGet, apiPost } from "@/lib/api";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 import { useI18n } from "@/contexts/I18nContext";
 import { plural, registerTranslations } from "@/lib/i18n";
 import { PageHeader, Button, Card } from "@/components/ui";
@@ -123,6 +124,7 @@ registerTranslations({
         "siteHealth.check.security.auditChain.broken.gap": "La cadena de hashes del registro de auditoría se rompe en la entrada {seq}: falta la entrada anterior. Se cambiaron o borraron entradas fuera de WordJS; compáralo con la copia externa.",
         "siteHealth.check.security.auditChain.broken.link": "La cadena de hashes del registro de auditoría se rompe en la entrada {seq}: no enlaza con la entrada anterior. Se cambiaron o borraron entradas fuera de WordJS; compáralo con la copia externa.",
         "siteHealth.check.security.auditChain.broken.start": "La cadena de hashes del registro de auditoría se rompe en la entrada {seq}: las entradas más antiguas no coinciden con lo que borró la retención. Se cambiaron o borraron entradas fuera de WordJS; compáralo con la copia externa.",
+        "siteHealth.check.security.auditChain.broken.truncated": "Faltan las entradas más recientes del registro de auditoría, a partir de la {seq}. Se borraron fuera de WordJS; compáralo con la copia externa.",
         "siteHealth.check.security.auditExport.title": "Copia del registro de auditoría",
         "siteHealth.check.security.auditExport.off": "El registro de auditoría solo se guarda en esta base de datos. Envía una copia a un servidor syslog o a un webhook, para que lo que registra no se pueda borrar desde aquí.",
         "siteHealth.check.security.auditExport.failing": "La copia a {target} está fallando ({error}); {count} entrada(s) esperan y se envían cuando vuelva a responder.",
@@ -220,6 +222,7 @@ registerTranslations({
         "siteHealth.check.security.auditChain.broken.gap": "The audit log's hash chain breaks at entry {seq}: the entry before it is missing. Entries were changed or removed outside WordJS; compare with the external copy.",
         "siteHealth.check.security.auditChain.broken.link": "The audit log's hash chain breaks at entry {seq}: it does not link to the entry before it. Entries were changed or removed outside WordJS; compare with the external copy.",
         "siteHealth.check.security.auditChain.broken.start": "The audit log's hash chain breaks at entry {seq}: the oldest entries do not match what retention removed. Entries were changed or removed outside WordJS; compare with the external copy.",
+        "siteHealth.check.security.auditChain.broken.truncated": "The newest entries of the audit log are gone, from entry {seq}. They were removed outside WordJS; compare with the external copy.",
         "siteHealth.check.security.auditExport.title": "Copy of the audit log",
         "siteHealth.check.security.auditExport.off": "The audit log is kept only in this database. Send a copy to a syslog server or a webhook, so what it records cannot be erased from here.",
         "siteHealth.check.security.auditExport.failing": "The copy to {target} is failing ({error}); {count} entr(ies) are waiting and are sent when it answers again.",
@@ -317,6 +320,7 @@ registerTranslations({
         "siteHealth.check.security.auditChain.broken.gap": "A cadeia de hashes do registro de auditoria quebra na entrada {seq}: falta a entrada anterior. Entradas foram alteradas ou apagadas fora do WordJS; compare com a cópia externa.",
         "siteHealth.check.security.auditChain.broken.link": "A cadeia de hashes do registro de auditoria quebra na entrada {seq}: não liga com a entrada anterior. Entradas foram alteradas ou apagadas fora do WordJS; compare com a cópia externa.",
         "siteHealth.check.security.auditChain.broken.start": "A cadeia de hashes do registro de auditoria quebra na entrada {seq}: as entradas mais antigas não conferem com o que a retenção apagou. Entradas foram alteradas ou apagadas fora do WordJS; compare com a cópia externa.",
+        "siteHealth.check.security.auditChain.broken.truncated": "Faltam as entradas mais recentes do registro de auditoria, a partir da {seq}. Foram apagadas fora do WordJS; compare com a cópia externa.",
         "siteHealth.check.security.auditExport.title": "Cópia do registro de auditoria",
         "siteHealth.check.security.auditExport.off": "O registro de auditoria fica só neste banco de dados. Envie uma cópia a um servidor syslog ou a um webhook, para que o que ele registra não possa ser apagado daqui.",
         "siteHealth.check.security.auditExport.failing": "A cópia para {target} está falhando ({error}); {count} entrada(s) aguardam e são enviadas quando ele voltar a responder.",
@@ -333,6 +337,8 @@ export default function SiteHealthPage() {
     const [error, setError] = useState<string | null>(null);
     const [running, setRunning] = useState(false);
     const [acting, setActing] = useState<string | null>(null);
+    const [proofFor, setProofFor] = useState<string | null>(null);
+    const stepUp = useMfaStepUp();
 
     const run = async () => {
         setRunning(true);
@@ -349,9 +355,15 @@ export default function SiteHealthPage() {
         if (!c.action) return;
         setActing(key);
         setError(null);
-        try { await apiPost(c.action.endpoint, c.action.body || {}); }
-        catch (e: any) { setError(e?.message || t("siteHealth.failed")); }
-        finally { setActing(null); }
+        try {
+            await apiPost(c.action.endpoint, { ...(c.action.body || {}), ...stepUp.payload() });
+            stepUp.reset();
+            setProofFor(null);
+        } catch (e: any) {
+            // Some fixes take the administrator's password: the fields open under the button, nothing failed.
+            if (stepUp.absorb(e)) { setProofFor(key); return; }
+            setError(e?.message || t("siteHealth.failed"));
+        } finally { setActing(null); }
         await run();
     };
 
@@ -404,7 +416,8 @@ export default function SiteHealthPage() {
                                                 </Link>
                                             )}
                                             {c.action && c.status !== "ok" && (
-                                                <div className="mt-2">
+                                                <div className="mt-2 space-y-2 max-w-sm">
+                                                    {proofFor === `${c.id}-${i}` && <MfaStepUpFields stepUp={stepUp} />}
                                                     <Button size="sm" onClick={() => act(c, `${c.id}-${i}`)} pending={acting === `${c.id}-${i}`} disabled={acting !== null} data-testid={`site-health-action-${c.id}`}>
                                                         {tr(c.action.labelKey, c.action.label)}
                                                     </Button>

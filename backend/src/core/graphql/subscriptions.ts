@@ -319,12 +319,22 @@ function subscriberStream<T>(
     const authenticated = hasCredential(ctx.req);
     const ensureCredential = async () => {
         if (!authenticated || closed) return;
-        const { restGet } = require('./dispatch');
-        const r = await restGet(ctx.req, '/users/me');
+        const { restGet, setDispatchCharged: charged } = require('./dispatch');
+        charged(ctx.req, false);
+        let r;
+        try { r = await restGet(ctx.req, '/users/me'); } finally { charged(ctx.req, true); }
         if (r.status !== 200) {
             failure = new GraphQLError('The credential this subscription was opened with no longer authenticates.', {
                 extensions: { code: (r.body && r.body.code) || 'rest_not_logged_in', status: r.status },
             });
+            stop();
+            return;
+        }
+        // The two-factor gate lives on the app, in front of the router this read goes through.
+        const mfa = require('../mfa');
+        const policy = await mfa.getPolicy();
+        if (policy.requiredRoles.length && (!ctx.req.isHeadless || policy.enforceForApiTokens) && ctx.req.user && (await mfa.evaluate(ctx.req.user)).enforced) {
+            failure = new GraphQLError('Two-factor authentication is required for your role.', { extensions: { code: 'mfa_enrollment_required', status: 403 } });
             stop();
         }
     };
@@ -337,11 +347,11 @@ function subscriberStream<T>(
         feed = await feedForCurrentSite();
         await feed.add(listener);
         if (opts.lastEventId) {
-            const replayed = await feed.replay(opts.lastEventId, authenticated ? tuning.maxReplay : tuning.maxAnonymousReplay);
+            // By who it resolved to, not by what was sent: a cookie that names nobody is still anonymous.
+            const replayed = await feed.replay(opts.lastEventId, ctx.req.user ? tuning.maxReplay : tuning.maxAnonymousReplay);
             for (const e of replayed) queue.push(e);
             replayLeft = replayed.length;
         }
-        if (!replayLeft) setDispatchCharged(ctx.req, false);
         if (authenticated) {
             recheck = setInterval(() => { ensureCredential().catch(() => stop()); }, tuning.recheckMs);
             if (recheck.unref) recheck.unref();
@@ -354,7 +364,7 @@ function subscriberStream<T>(
                     continue;
                 }
                 const payload = await authorize(e);
-                if (replayLeft > 0 && --replayLeft === 0) setDispatchCharged(ctx.req, false);
+                if (replayLeft > 0) --replayLeft;
                 if (payload !== null && !closed) {
                     // The transport sends this as the SSE id, whether or not the client selected `cursor`.
                     (ctx as any).lastCursor = e.cursor;
@@ -375,15 +385,18 @@ function subscriberStream<T>(
 }
 
 function hasCredential(req: Request): boolean {
-    try { if (require('../../middleware/auth').bearerToken(req)) return true; } catch { /* unreadable header: the cookie check below decides */ }
+    try { if (require('../../middleware/auth').bearerToken(req)) return true; } catch { /* unreadable header: the cookie check below */ }
     try { return !!require('../../middleware/auth').SESSION_COOKIE && !!(req.cookies && req.cookies[require('../../middleware/auth').SESSION_COOKIE]); }
     catch { return false; }
 }
 
 /** A fresh REST read as the subscriber — never the per-request memo, which would serve the state of an earlier event. */
 async function readAs(ctx: GraphQLContext, path: string) {
-    const { restGet, createRestClient } = require('./dispatch');
-    const r = await restGet(ctx.req, path);
+    const { restGet, createRestClient, setDispatchCharged } = require('./dispatch');
+    // The event's own read is the stream's; whatever the document selects under it is charged like any read.
+    setDispatchCharged(ctx.req, false);
+    let r;
+    try { r = await restGet(ctx.req, path); } finally { setDispatchCharged(ctx.req, true); }
     // Nested fields of the delivered node (parent, comments, revisions) also read the current state.
     ctx.rest = createRestClient(ctx.req);
     return r;

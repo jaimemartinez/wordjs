@@ -85,6 +85,8 @@ async function seedUser(login: string, role: string) {
 }
 
 before(async () => {
+    // The password step has its own suite (sudo-gate-classes).
+    require('../routes/users').requireAccountStepUp = async () => false;
     await database.init({ driver: 'sqlite-native' });
     await database.initializeDatabase();
     dbAsync = database.getDbAsync();

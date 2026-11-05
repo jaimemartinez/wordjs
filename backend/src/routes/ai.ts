@@ -24,13 +24,15 @@ const ai = require('../core/ai-provider');
 const { TASKS, suggestFromText, suggestAltText } = require('../core/ai-suggest');
 
 const SUGGESTIONS_PER_MINUTE = 20;
-const windows = new Map<number, number[]>();
+const windows = new Map<string, number[]>();
 function overUserLimit(userId: number): boolean {
+    // Per site: user ids repeat across the sites of a network.
+    const key = `${require('../core/site-context').siteKeyPrefix()}${userId}`;
     const now = Date.now();
-    const recent = (windows.get(userId) || []).filter((t) => now - t < 60_000);
-    if (recent.length >= SUGGESTIONS_PER_MINUTE) { windows.set(userId, recent); return true; }
+    const recent = (windows.get(key) || []).filter((t) => now - t < 60_000);
+    if (recent.length >= SUGGESTIONS_PER_MINUTE) { windows.set(key, recent); return true; }
     recent.push(now);
-    windows.set(userId, recent);
+    windows.set(key, recent);
     return false;
 }
 
@@ -101,6 +103,7 @@ router.get('/settings', authenticate, sessionOnly, isAdmin, asyncHandler(async (
 }));
 
 router.put('/settings', authenticate, sessionOnly, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    if (await ai.storedKeyWouldMove(req.body || {}) && await require('./users').requireSudoConfirmation(req, res)) return;
     let changed;
     try {
         changed = await ai.saveSettings(req.body || {});

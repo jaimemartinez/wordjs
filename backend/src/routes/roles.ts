@@ -13,6 +13,14 @@ const { getRoles, setRole, getRole, removeRole, getAllAvailableCapabilities, isP
 const { authenticate, accountAuthorityOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
+const { recordAudit } = require('../core/audit');
+
+/** The capability names of a role, from either form setRole takes (a list, or a map of name → true). */
+function capabilityNames(caps: unknown): string[] {
+    if (Array.isArray(caps)) return caps.filter((c): c is string => typeof c === 'string');
+    if (caps && typeof caps === 'object') return Object.entries(caps).filter(([, v]) => v === true).map(([k]) => k);
+    return [];
+}
 
 /**
  * Plugin-declared roles (core/plugin-roles.ts, core/roles.ts) are the plugin's while it is installed:
@@ -149,7 +157,8 @@ router.get('/:slug', authenticate, isAdmin, asyncHandler(async (req: Request, re
  *         description: >-
  *           rest_forbidden (not an administrator), rest_token_management_forbidden (an API token), or
  *           rest_account_bound_session (a session started at an address other than the main one): neither
- *           may change what a role may do.
+ *           may change what a role may do. rest_sudo_required / rest_mfa_step_up_required: adding a
+ *           privileged capability takes the caller's password and, with two-factor authentication, a code.
  *       409:
  *         description: >-
  *           rest_role_plugin_managed — the role was declared by a plugin that is still installed, so it
@@ -176,6 +185,12 @@ router.post('/', authenticate, isAdmin, accountAuthorityOnly, asyncHandler(async
             data: { status: 409, plugin: owning.plugin }
         });
     }
+    // Giving a role a privileged capability promotes everyone who holds it: the same proof as promoting one
+    // account (routes/users.ts requireAccountStepUp). A plugin's role never holds one: setRole refuses it.
+    const users = require('./users');
+    const held = capabilityNames(getRole(slug) && getRole(slug).capabilities);
+    const next = capabilityNames(capabilities);
+    if (!owning && next.some((c) => users.PRIVILEGED_CAPS.includes(c) && !held.includes(c)) && await users.requireAccountStepUp(req, res)) return;
     try {
         await setRole(slug, { name, capabilities }, { installedPluginIds: installedPluginIds() });
     } catch (e: any) {
@@ -184,6 +199,10 @@ router.post('/', authenticate, isAdmin, accountAuthorityOnly, asyncHandler(async
         }
         throw e;
     }
+    await recordAudit(req.user.id, 'role.update', 'role', slug, {
+        added: next.filter((c) => !held.includes(c)),
+        removed: held.filter((c) => !next.includes(c)),
+    });
     res.status(201).json(getRole(slug));
 }));
 
@@ -260,6 +279,7 @@ router.delete('/:slug', authenticate, isAdmin, accountAuthorityOnly, asyncHandle
         });
     }
 
+    await recordAudit(req.user.id, 'role.delete', 'role', slug, {});
     res.json({ deleted: true, slug });
 }));
 

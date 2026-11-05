@@ -25,6 +25,7 @@ const log = require('./module-logger').moduleLogger('core/audit-export');
 const CONFIG_OPTION = 'audit_export';
 const SECRET_OPTION = 'audit_export_secret';
 const CURSOR_OPTION = 'audit_export_cursor';
+const LAST_TARGET_OPTION = 'audit_export_last_target';
 const BATCH = 100;
 const TIMEOUT_MS = 10_000;
 
@@ -94,16 +95,20 @@ async function advanceCursor(seq: number): Promise<number> {
 }
 
 /**
- * Save the configuration. Turning the copy on (or pointing it somewhere else) starts at the chain's
- * current head: the receiver gets what happens from now on, not years of history in one burst.
+ * Save the configuration. Pointing the copy at a NEW receiver starts at the chain's current head: it gets
+ * what happens from now on, not years of history in one burst. Turning it back on towards the receiver it
+ * last had keeps the cursor, so that receiver also gets what happened while the copy was off.
  */
 async function saveConfig(next: ExportConfig, secret?: string | null): Promise<void> {
     const options = require('./options');
     const prev = await getConfig();
     const target = (c: ExportConfig) => (c.mode === 'off' ? '' : c.mode === 'webhook' ? `w|${c.url}` : `s|${c.transport}|${c.host}|${c.port}`);
+    const last = target(prev) || String((await options.getOptionFresh(LAST_TARGET_OPTION, '')) || '');
     await options.updateOption(CONFIG_OPTION, JSON.stringify(next), 'no');
     if (secret !== undefined && secret !== null) await options.updateOption(SECRET_OPTION, String(secret), 'no');
-    if (next.mode !== 'off' && target(next) !== target(prev)) {
+    if (next.mode === 'off') return;
+    await options.updateOption(LAST_TARGET_OPTION, target(next), 'no');
+    if (target(next) !== last) {
         const { dbAsync } = require('../config/database');
         const head = await dbAsync.get('SELECT MAX(chain_seq) AS s FROM audit_log');
         await setCursor(head && head.s ? Number(head.s) : 0);
@@ -145,13 +150,52 @@ function toEvent(row: any) {
     };
 }
 
-/** Resolve a host for a connect: under the SSRF rule unless the administrator allowed a private receiver. */
+/** A refusal the administrator can act on. Every other failure is reported in general terms (sendErrorText). */
+function refusal(message: string): Error {
+    return Object.assign(new Error(message), { forAdministrator: true });
+}
+
+/**
+ * What the screen shows of a failed delivery. Never the socket's own words: "connection refused" against
+ * "HTTP 404" would tell whoever can read it which ports answer on the host's network. The log keeps them.
+ */
+function sendErrorText(e: any): string {
+    return e && e.forAdministrator ? String(e.message) : 'The receiver could not be reached or did not accept the copy. The server log has the details.';
+}
+
+/** A private receiver is the main site's to allow; a site of a network is held to the SSRF rule whatever it saved. */
+function allowsPrivate(c: ExportConfig): boolean {
+    return !!c.allowPrivate && !require('./multisite-guards').onSecondarySite();
+}
+
+const NEVER = 'That address can never receive the copy.';
+
+/** Resolve a host for a connect: under the SSRF rule, or, for a private receiver, refusing what no approval opens. */
 function lookupFor(c: ExportConfig): any {
-    return c.allowPrivate ? undefined : require('./egress-guard').validatingLookup;
+    const egress = require('./egress-guard');
+    if (!allowsPrivate(c)) return egress.validatingLookup;
+    return (host: string, opts: any, cb: any) => require('dns').lookup(host, opts, (err: any, address: any, family: any) => {
+        if (err) return cb(err);
+        const all = Array.isArray(address) ? address : [{ address }];
+        if (all.some((a: any) => egress.isNeverExemptIp(a.address))) return cb(refusal(NEVER));
+        return cb(null, address, family);
+    });
+}
+
+/** The lookup never runs for an IP literal, so a literal is judged here. */
+function assertLiteralAllowed(c: ExportConfig, host: string): void {
+    const ip = host.replace(/^\[|\]$/g, '');
+    if (!net.isIP(ip)) return;
+    const egress = require('./egress-guard');
+    if (allowsPrivate(c)) {
+        if (egress.isNeverExemptIp(ip)) throw refusal(NEVER);
+    } else if (egress.isBlockedIp(ip)) {
+        throw refusal(`${host} is a private address; tick "the receiver is on a private network" to allow it`);
+    }
 }
 
 function resolveHost(c: ExportConfig): Promise<string> {
-    const lookup = lookupFor(c) || require('dns').lookup;
+    const lookup = lookupFor(c);
     return new Promise((resolve, reject) => {
         lookup(c.host.replace(/^\[|\]$/g, ''), {}, (err: any, address: string) => (err ? reject(err) : resolve(address)));
     });
@@ -165,9 +209,7 @@ function syslogLine(site: string, ev: any): string {
 }
 
 async function sendSyslog(c: ExportConfig, events: any[]): Promise<void> {
-    if (!c.allowPrivate && net.isIP(c.host.replace(/^\[|\]$/g, ''))) {
-        if (require('./egress-guard').isBlockedIp(c.host.replace(/^\[|\]$/g, ''))) throw new Error(`${c.host} is a private address; tick "the receiver is on a private network" to allow it`);
-    }
+    assertLiteralAllowed(c, c.host);
     const site = await siteLabel();
     const lines = events.map((ev) => syslogLine(site, ev));
     if (c.transport === 'udp') {
@@ -198,7 +240,10 @@ async function sendSyslog(c: ExportConfig, events: any[]): Promise<void> {
 async function sendWebhook(c: ExportConfig, events: any[], secret: string): Promise<void> {
     const u = new URL(c.url);
     const egress = require('./egress-guard');
-    if (!c.allowPrivate) await egress.assertUrlAllowed(u.href);
+    assertLiteralAllowed(c, u.hostname);
+    if (!allowsPrivate(c)) {
+        try { await egress.assertUrlAllowed(u.href); } catch (e: any) { throw refusal(String((e && e.message) || e)); }
+    }
     const body = JSON.stringify({ source: 'wordjs', site: await siteLabel(), events });
     const ts = Math.floor(Date.now() / 1000);
     const headers: Record<string, string> = {
@@ -213,9 +258,21 @@ async function sendWebhook(c: ExportConfig, events: any[], secret: string): Prom
             headers, timeout: TIMEOUT_MS, lookup: lookupFor(c),
         }, (res: any) => {
             res.resume();
-            res.on('end', () => (res.statusCode >= 200 && res.statusCode < 300 ? resolve() : reject(new Error(`the webhook answered HTTP ${res.statusCode}`))));
+            res.on('end', () => (res.statusCode >= 200 && res.statusCode < 300 ? done() : done(new Error(`the webhook answered HTTP ${res.statusCode}`))));
+            res.on('error', done);
+            res.on('close', () => done(new Error('the webhook closed the connection before finishing its answer')));
         });
-        req.on('error', reject);
+        // `timeout` only sees silence: a receiver trickling bytes would hold the delivery for ever.
+        const deadline = setTimeout(() => req.destroy(new Error('the webhook did not answer in time')), TIMEOUT_MS);
+        if (deadline.unref) deadline.unref();
+        let settled = false;
+        const done = (err?: any) => {
+            if (settled) return;
+            settled = true;
+            clearTimeout(deadline);
+            if (err) reject(err); else resolve();
+        };
+        req.on('error', done);
         req.on('timeout', () => req.destroy(new Error('the webhook did not answer in time')));
         req.end(body);
     });
@@ -266,7 +323,7 @@ async function flushExport(): Promise<number> {
             }
             state.delivered += delivered;
         } catch (e: any) {
-            state.lastError = String((e && e.message) || e);
+            state.lastError = sendErrorText(e);
             log.warn({ err: e }, '[audit-export] the external copy could not be delivered; it is retried');
             scheduleRetry();
         }
@@ -302,9 +359,13 @@ function scheduleRetry(): void {
 /** Send one test event through a saved config, without touching the cursor. */
 async function sendTest(c: ExportConfig): Promise<void> {
     const ev = { seq: 0, id: 0, createdAt: new Date().toISOString().slice(0, 19).replace('T', ' '), actorId: null, action: 'audit.export.test', targetType: 'audit_log', targetId: '', detail: {}, prevHash: '', rowHash: '' };
-    if (c.mode === 'webhook') return sendWebhook(c, [ev], await getSecret());
-    if (c.mode === 'syslog') return sendSyslog(c, [ev]);
-    throw new Error('The external copy is off.');
+    if (c.mode === 'off') throw new Error('The external copy is off.');
+    try {
+        await (c.mode === 'webhook' ? sendWebhook(c, [ev], await getSecret()) : sendSyslog(c, [ev]));
+    } catch (e: any) {
+        log.warn({ err: e }, '[audit-export] the test event could not be delivered');
+        throw e;
+    }
 }
 
 /** For the screen and Site Health: configuration (never the secret), how far delivery is, last outcome. */
@@ -329,6 +390,6 @@ async function exportStatus() {
 }
 
 module.exports = {
-    getConfig, saveConfig, parseConfig, configProblem, flushExport, scheduleFlush, sendTest, exportStatus,
-    CONFIG_OPTION, SECRET_OPTION, CURSOR_OPTION,
+    getConfig, saveConfig, parseConfig, configProblem, flushExport, scheduleFlush, sendTest, sendErrorText, exportStatus,
+    CONFIG_OPTION, SECRET_OPTION, CURSOR_OPTION, LAST_TARGET_OPTION,
 };

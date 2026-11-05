@@ -90,6 +90,8 @@ async function seedPost(status: string, type = 'post') {
 }
 
 before(async () => {
+    // The password step has its own suite (sudo-gate-classes).
+    require('../routes/users').requireSudoConfirmation = async () => false;
     await database.init({ driver: 'sqlite-native' });
     await database.initializeDatabase();
     dbAsync = database.getDbAsync();

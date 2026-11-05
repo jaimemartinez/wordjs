@@ -13,6 +13,7 @@ const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const Webhook = require('../models/Webhook');
+const { recordAudit } = require('../core/audit');
 const WebhookDelivery = require('../models/WebhookDelivery');
 
 // Whole resource is admin-only.
@@ -317,6 +318,8 @@ router.post('/', sessionOnly, asyncHandler(async (req: Request, res: Response) =
     if (!url || typeof url !== 'string') {
         return res.status(400).json({ code: 'rest_missing_param', message: 'A webhook url is required.', data: { status: 400 } });
     }
+    // A webhook keeps sending content out long after the session that made it is gone.
+    if (await require('./users').requireSudoConfirmation(req, res)) return;
     if ((await Webhook.list()).length >= MAX_WEBHOOKS) {
         return res.status(400).json({ code: 'rest_webhook_limit', message: `Maximum of ${MAX_WEBHOOKS} webhooks reached.`, data: { status: 400 } });
     }
@@ -326,6 +329,7 @@ router.post('/', sessionOnly, asyncHandler(async (req: Request, res: Response) =
     } catch (e: any) {
         return res.status(400).json({ code: 'rest_invalid_webhook', message: e && e.message ? e.message : 'Invalid webhook.', data: { status: 400 } });
     }
+    await recordAudit(req.user.id, 'webhook.create', 'webhook', String(created.id), { events: created.events });
     res.status(201).json({ ...created, message: 'Save this signing secret now — it will not be shown again.' });
 }));
 
@@ -563,10 +567,13 @@ router.get('/:id', asyncHandler(async (req: Request, res: Response) => {
 router.patch('/:id', sessionOnly, asyncHandler(async (req: Request, res: Response) => {
     const id = parseId(req.params.id);
     if (!id) return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid id.', data: { status: 400 } });
-    if (!(await Webhook.findById(id))) return res.status(404).json({ code: 'rest_not_found', message: 'Webhook not found.', data: { status: 404 } });
+    const existing = await Webhook.findById(id);
+    if (!existing) return res.status(404).json({ code: 'rest_not_found', message: 'Webhook not found.', data: { status: 404 } });
     const { name, url, events, active } = req.body || {};
+    if (url !== undefined && url !== existing.url && await require('./users').requireSudoConfirmation(req, res)) return;
     try {
         const updated = await Webhook.update(id, { name, url, events, active });
+        await recordAudit(req.user.id, 'webhook.update', 'webhook', String(id), { urlChanged: url !== undefined && url !== existing.url });
         res.json(updated);
     } catch (e: any) {
         res.status(400).json({ code: 'rest_invalid_webhook', message: e && e.message ? e.message : 'Invalid webhook.', data: { status: 400 } });

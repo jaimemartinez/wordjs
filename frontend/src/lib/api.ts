@@ -1318,7 +1318,7 @@ export type ChromeMigrationOutcome = "migrated" | "site-composition" | "theme-co
 export const rolesApi = {
     list: () => apiGet<Record<string, Role>>("/roles"),
     getCapabilities: () => apiGet<string[]>("/roles/capabilities"),
-    save: (slug: string, data: { name: string; capabilities: string[] }) => apiPost<Role>("/roles", { slug, ...data }),
+    save: (slug: string, data: { name: string; capabilities: string[]; currentPassword?: string; mfaCode?: string }) => apiPost<Role>("/roles", { slug, ...data }),
     delete: (slug: string) => apiDelete(`/roles/${slug}`),
 };
 
@@ -1588,7 +1588,7 @@ export const backupsApi = {
     list: () => apiGet<BackupFile[]>("/backups"),
     create: () => apiPost<{ filename: string; size: number; date: string }>("/backups", {}),
     /** restart: how the backend restarts itself to load what was restored (manual: restart it by hand; null: nothing to restart). */
-    restore: (filename: string) => apiPost<{ success: boolean; results: any; restart?: "supervisor" | "watch" | "service" | "manual" | null }>(`/backups/${filename}/restore`, {}),
+    restore: (filename: string, stepUp: { currentPassword?: string; mfaCode?: string } = {}) => apiPost<{ success: boolean; results: any; restart?: "supervisor" | "watch" | "service" | "manual" | null }>(`/backups/${filename}/restore`, stepUp),
     delete: (filename: string) => apiDelete<{ success: boolean }>(`/backups/${filename}`),
     download: (filename: string) => {
         const baseUrl = getBaseUrl();
@@ -1843,7 +1843,7 @@ export interface AiSettings {
 export const aiApi = {
     status: () => apiGet<{ enabled: boolean; tasks: AiSuggestTask[] }>("/ai/status"),
     getSettings: () => apiGet<AiSettings>("/ai/settings"),
-    saveSettings: (data: { provider: AiProviderId; model?: string; baseUrl?: string; apiKey?: string; clearKey?: boolean }) =>
+    saveSettings: (data: { provider: AiProviderId; model?: string; baseUrl?: string; apiKey?: string; clearKey?: boolean; currentPassword?: string }) =>
         apiPut<AiSettings>("/ai/settings", data),
     test: () => apiPost<{ ok: boolean; provider: string; model: string; ms: number }>("/ai/test", {}),
     suggest: (data: { task: AiSuggestTask; title?: string; content?: string; mediaId?: number; language?: string }) =>
@@ -1884,7 +1884,7 @@ export interface WebhookEventGroup {
 export const webhooksApi = {
     list: () => apiGet<{ webhooks: Webhook[] }>("/webhooks"),
     events: () => apiGet<{ events: string[]; groups?: WebhookEventGroup[]; optIn?: string[] }>("/webhooks/events"),
-    create: (data: { name?: string; url: string; events?: string[]; active?: boolean }) =>
+    create: (data: { name?: string; url: string; events?: string[]; active?: boolean; currentPassword?: string }) =>
         apiPost<Webhook & { secret: string; message: string }>("/webhooks", data),
     update: (id: number, data: { name?: string; url?: string; events?: string[]; active?: boolean }) =>
         api<Webhook>(`/webhooks/${id}`, { method: "PATCH", body: data }),
@@ -2130,6 +2130,8 @@ export const auditApi = {
     /** One test event through the SAVED copy (the backend never takes an address from the request). */
     testExport: () => apiPost<{ ok: boolean; error?: string }>("/audit/export/test", {}),
     flushExport: () => apiPost<{ delivered: number; export: AuditExportStatus }>("/audit/export/flush", {}),
+    /** After a `truncated` report: record the loss in the log and go on from the head that remains. */
+    acceptHeadLoss: (body: { currentPassword?: string; mfaCode?: string }) => apiPost<{ ok: boolean; fromSeq: number; toSeq: number }>("/audit/head/accept", body),
 };
 
 export interface AuditChainReport {
@@ -2140,7 +2142,8 @@ export interface AuditChainReport {
     oldestPendingAt: string | null;
     head: { seq: number; hash: string } | null;
     anchor: { seq: number; hash: string } | null;
-    firstBreak: { seq: number | null; id: number | null; reason: "start" | "gap" | "link" | "altered" } | null;
+    firstBreak: { seq: number | null; id: number | null; reason: "start" | "gap" | "link" | "altered" | "truncated" } | null;
+    rewinds: { action: string; fromSeq: number; toSeq: number; at: string; actorId: number | null }[];
 }
 export interface AuditExportConfig {
     mode: "off" | "syslog" | "webhook";
@@ -2227,7 +2230,7 @@ export const mfaApi = {
     // `enforceForApiTokensDefault`: true only on a freshly installed site whose policy has never required a
     // role — the screen then pre-checks the API-token switch (the admin can still uncheck it).
     getPolicy: () => apiGet<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure; enforceForApiTokensDefault?: boolean }>("/auth/mfa/policy"),
-    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean }) => apiPut<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure; enforceForApiTokensDefault?: boolean }>("/auth/mfa/policy", policy),
+    savePolicy: (policy: { requiredRoles: string[]; graceDays: number; enforceForApiTokens: boolean; currentPassword?: string; mfaCode?: string }) => apiPut<{ policy: MfaPolicy; tokenExposure?: MfaTokenExposure; enforceForApiTokensDefault?: boolean }>("/auth/mfa/policy", policy),
     /**
      * Administrative two-factor reset — the way OUT of a 2FA lockout, and the reason enrolment above can
      * be password-gated without creating an unrecoverable state. It lives under the USERS router

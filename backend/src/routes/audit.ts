@@ -13,7 +13,7 @@
 import type { Request, Response } from 'express';
 const express = require('express');
 const router = express.Router();
-const { authenticate } = require('../middleware/auth');
+const { authenticate, sessionOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 const { asyncHandler } = require('../middleware/errorHandler');
 const { listAudit, recordAudit, auditRetentionDays, retentionShortens, AUDIT_RETENTION_CHOICES } = require('../core/audit');
@@ -58,18 +58,45 @@ router.get('/', authenticate, isAdmin, asyncHandler(async (req: Request, res: Re
  * /audit/verify:
  *   get:
  *     summary: Check the audit log's hash chain (admin only)
- *     description: Recomputes every sealed row's hash in chain order and checks that each row links to the one before it, with no gap. ok is false when a row was changed (altered), removed (gap / link) or the oldest remaining row does not match the retention anchor (start); firstBreak names the place. pending counts rows not sealed yet.
+ *     description: Recomputes every sealed row's hash in chain order and checks that each row links to the one before it, with no gap. ok is false when a row was changed (altered), removed (gap / link), the oldest remaining row does not match the retention anchor (start), or the newest rows are gone with nothing to account for it (truncated); firstBreak names the place. rewinds lists the times the log went back on purpose (a restore, an accepted loss). pending counts rows not sealed yet.
  *     tags: [Audit]
  *     security:
  *       - bearerAuth: []
  *     responses:
  *       200:
- *         description: "{ ok, complete, checked, pending, oldestPendingAt, head, anchor, firstBreak }"
+ *         description: "{ ok, complete, checked, pending, oldestPendingAt, head, anchor, firstBreak, rewinds }"
  */
 router.get('/verify', authenticate, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
     res.set('Cache-Control', 'no-store');
     await chain.sealPending();
     res.json(await chain.verifyAuditChain());
+}));
+
+/**
+ * @swagger
+ * /audit/head/accept:
+ *   post:
+ *     summary: Accept that the newest audit rows are gone (admin only)
+ *     description: After GET /audit/verify reports truncated. Records the loss in the log itself, with the places it covers, and checks continue from the head that remains. Takes the caller's password and, with two-factor authentication, a current code.
+ *     tags: [Audit]
+ *     security:
+ *       - bearerAuth: []
+ *     responses:
+ *       200:
+ *         description: "{ ok: true, fromSeq, toSeq }"
+ *       403:
+ *         description: rest_sudo_required / rest_mfa_step_up_required
+ *       409:
+ *         description: rest_audit_nothing_lost - no loss to accept
+ */
+router.post('/head/accept', authenticate, sessionOnly, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+    await chain.sealPending();
+    const loss = await chain.headLoss();
+    if (!loss) return res.status(409).json({ code: 'rest_audit_nothing_lost', message: 'No audit entries are missing.', data: { status: 409 } });
+    if (await require('./users').requireAccountStepUp(req, res)) return;
+    await recordAudit(req.user.id, 'audit.head.accept', 'audit_log', '', loss);
+    await chain.sealPending();
+    res.json({ ok: true, ...loss });
 }));
 
 /**
@@ -143,6 +170,10 @@ router.put('/settings', authenticate, isAdmin, asyncHandler(async (req: Request,
         exportConfig = auditExport.parseConfig(b.export);
         const problem = auditExport.configProblem(exportConfig);
         if (problem) return invalid(res, problem, 'export');
+        // The private network is the host's, not one site's: a site of a network sends to public receivers.
+        if (exportConfig.allowPrivate && require('../core/multisite-guards').onSecondarySite()) {
+            return invalid(res, 'Only the main site can send the copy to a private network.', 'export.allowPrivate');
+        }
         if (b.export.secret !== undefined) {
             if (typeof b.export.secret !== 'string' || b.export.secret.length > 512) return invalid(res, 'secret must be text (at most 512 characters).', 'export.secret');
             secret = b.export.secret;
@@ -197,7 +228,7 @@ router.post('/export/test', authenticate, isAdmin, asyncHandler(async (_req: Req
         await auditExport.sendTest(c);
         res.json({ ok: true });
     } catch (e: any) {
-        res.json({ ok: false, error: String((e && e.message) || e) });
+        res.json({ ok: false, error: auditExport.sendErrorText(e) });
     }
 }));
 

@@ -13,6 +13,7 @@ import type { Request, Response } from 'express';
 
 const express = require('express');
 const router = express.Router();
+const { auditOnSuccess } = require('../core/audit');
 const { updateOption, deleteOption } = require('../core/options');
 const { authenticate } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
@@ -70,7 +71,7 @@ const invalidPart = (res: Response) => res.status(400).json({
  *       400:
  *         description: Invalid part or composition (body carries the validator errors)
  */
-router.put('/:part', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.put('/:part', authenticate, isAdmin, auditOnSuccess('chrome.update', 'chrome', (req: Request) => String(req.params.part || '')), asyncHandler(async (req: Request, res: Response) => {
     const { part } = req.params as { part: string };
     if (!PARTS.includes(part)) return invalidPart(res);
 
@@ -113,7 +114,7 @@ router.put('/:part', authenticate, isAdmin, asyncHandler(async (req: Request, re
  *       400:
  *         description: Invalid part
  */
-router.delete('/:part', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:part', authenticate, isAdmin, auditOnSuccess('chrome.update', 'chrome', (req: Request) => String(req.params.part || '')), asyncHandler(async (req: Request, res: Response) => {
     const { part } = req.params as { part: string };
     if (!PARTS.includes(part)) return invalidPart(res);
 
@@ -170,7 +171,7 @@ router.get('/:part/legacy', authenticate, isAdmin, asyncHandler(async (req: Requ
  *       200:
  *         description: "{ footer, header } — each one of migrated | site-composition | theme-composition | nothing-to-migrate"
  */
-router.post('/migrate-legacy', authenticate, isAdmin, asyncHandler(async (_req: Request, res: Response) => {
+router.post('/migrate-legacy', authenticate, isAdmin, auditOnSuccess('chrome.update', 'chrome', (req: Request) => String(req.params.part || '')), asyncHandler(async (_req: Request, res: Response) => {
     res.json(await migrateLegacyChrome());
 }));
 

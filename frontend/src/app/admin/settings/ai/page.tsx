@@ -12,6 +12,7 @@ import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button, Card, Checkbox, Input, Select } from "@/components/ui";
 import { resetAiStatusCache } from "@/components/AiSuggest";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 export default function AiSettingsPage() {
     const { t } = useI18n();
@@ -39,6 +40,9 @@ export default function AiSettingsPage() {
         aiApi.getSettings().then(apply).catch((e: any) => addToast(e?.message || t("ai.settings.loadFailed"), "error"));
     }, []);
 
+    // The stored key going to another server takes the administrator's password (rest_sudo_required).
+    const stepUp = useMfaStepUp();
+
     const save = async (e: React.FormEvent) => {
         e.preventDefault();
         setSaving(true);
@@ -50,11 +54,14 @@ export default function AiSettingsPage() {
                 baseUrl: provider === "openai-compatible" ? baseUrl : "",
                 apiKey: apiKey.trim() || undefined,
                 clearKey: clearKey || undefined,
+                ...stepUp.payload(),
             });
+            stepUp.reset();
             apply(s);
             resetAiStatusCache();
             addToast(t("ai.settings.saved"), "success");
         } catch (err: any) {
+            if (stepUp.absorb(err)) return;
             addToast(err?.message || t("ai.settings.saveFailed"), "error");
         } finally {
             setSaving(false);
@@ -143,6 +150,7 @@ export default function AiSettingsPage() {
                             )}
 
                             <div className="flex flex-wrap gap-3 items-center">
+                                <MfaStepUpFields stepUp={stepUp} withCode={false} />
                                 <Button type="submit" icon="fa-floppy-disk" loading={saving}>{t("ai.settings.save")}</Button>
                                 {settings.provider && (
                                     <Button type="button" variant="secondary" icon="fa-plug-circle-check" loading={testing} onClick={test}>{t("ai.settings.test")}</Button>

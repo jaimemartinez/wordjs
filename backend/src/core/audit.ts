@@ -130,6 +130,26 @@ const AUDIT_ACTIONS = Object.freeze({
     // ── Backups (a restore is the most destructive operation the product offers) ─────────────────────
     BACKUP_CREATE: 'backup.create',
     BACKUP_RESTORE: 'backup.restore',
+    AUDIT_HEAD_ACCEPT: 'audit.head.accept',
+    ROLE_UPDATE: 'role.update',
+    ROLE_DELETE: 'role.delete',
+    FORM_SUBMISSION_DELETE: 'form.submission.delete',
+    WEBHOOK_CREATE: 'webhook.create',
+    WEBHOOK_UPDATE: 'webhook.update',
+    WEBHOOK_DELETE: 'webhook.delete',
+    WEBHOOK_ROTATE: 'webhook.rotate_secret',
+    WEBHOOK_REDELIVER: 'webhook.redeliver',
+    WIDGET_UPDATE: 'widget.update',
+    CHROME_UPDATE: 'chrome.update',
+    TAXONOMY_UPDATE: 'taxonomy.update',
+    THEME_UPLOAD: 'theme.upload',
+    THEME_CREATE: 'theme.create',
+    THEME_EDIT: 'theme.edit',
+    THEME_RESTORE_DEFAULT: 'theme.restore_default',
+    THEME_DELETE: 'theme.delete',
+    CERT_CHANGE: 'system.cert.change',
+    CERT_RENEW: 'system.cert.renew',
+    PLUGIN_FILES_ACCEPT: 'plugin.files.accept',
     BACKUP_DELETE: 'backup.delete',
 
     // ── Extensions ──────────────────────────────────────────────────────────────────────────────────
@@ -617,7 +637,23 @@ async function runAuditRetention(): Promise<number> {
     }
 }
 
+
+/**
+ * Route middleware: one audit row when the request ends in success, for writes whose handler has nothing
+ * more to say than what was touched. `target` reads the id from the request.
+ */
+function auditOnSuccess(action: string, targetType: string, target: (req: any) => string = () => '') {
+    return (req: any, res: any, next: any) => {
+        res.once('finish', () => {
+            if (res.statusCode >= 400) return;
+            Promise.resolve(recordAudit(req.user && req.user.id, action as any, targetType, target(req), {})).catch(() => { /* recordAudit logs its own failure */ });
+        });
+        next();
+    };
+}
+
 module.exports = {
+    auditOnSuccess,
     recordAudit, listAudit, listAuditForTarget, sanitizeDetail, onAuditRecorded,
     AUDIT_ACTIONS,
     pruneAuditLog, runAuditRetention, auditRetentionState, auditRetentionDays,

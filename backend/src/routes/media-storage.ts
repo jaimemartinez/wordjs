@@ -150,6 +150,14 @@ function candidateStore(block: Record<string, any>) {
     return mediaStorage.resolveMediaStorage(process.env, { mediaStorage: { ...block, driver: 's3' } });
 }
 
+/** Would `store` use the saved secret with another endpoint, region or bucket than the one it belongs to? */
+function storedSecretMoves(current: any, store: any): boolean {
+    if (!store.s3 || !store.s3.secretAccessKey) return false;
+    const saved = candidateStore(current.mediaStorage && typeof current.mediaStorage === 'object' ? current.mediaStorage : {});
+    if (!saved.s3 || saved.s3.secretAccessKey !== store.s3.secretAccessKey) return false;
+    return saved.s3.endpoint !== store.s3.endpoint || saved.s3.region !== store.s3.region || saved.s3.bucket !== store.s3.bucket;
+}
+
 /**
  * @swagger
  * tags:
@@ -222,6 +230,9 @@ router.put('/', authenticate, isAdmin, networkAdminOnly, asyncHandler(async (req
         if (store.driver !== 's3') {
             return badRequest(res, `The S3 configuration is incomplete or invalid: ${(store.incomplete || []).join(', ')}.`, store.incomplete || []);
         }
+        // Saving is how a test or an upload comes to use the secret: the same proof as testing it elsewhere.
+        const typedSecret = typeof req.body.secretAccessKey === 'string' && req.body.secretAccessKey !== '';
+        if (!typedSecret && storedSecretMoves(current, store) && await require('./users').requireSudoConfirmation(req, res)) return;
     } else {
         // Every site of a network follows this block, so the media still in the bucket is counted on all
         // of them (core/media-storage-migrate bucketUsage), not only on the site making the request.
@@ -290,12 +301,7 @@ router.post('/test', authenticate, isAdmin, networkAdminOnly, asyncHandler(async
     // The stored secret signs requests for the bucket it belongs to. A test that keeps it (no secret typed)
     // but points at another endpoint, region or bucket needs the administrator's own password first.
     const typedSecret = typeof fields.secretAccessKey === 'string' && fields.secretAccessKey !== '';
-    if (!typedSecret && store.s3 && store.s3.secretAccessKey) {
-        const saved = candidateStore(current.mediaStorage && typeof current.mediaStorage === 'object' ? current.mediaStorage : {});
-        const sameBucket = !!(saved.s3 && saved.s3.secretAccessKey === store.s3.secretAccessKey
-            && saved.s3.endpoint === store.s3.endpoint && saved.s3.region === store.s3.region && saved.s3.bucket === store.s3.bucket);
-        if (!sameBucket && await require('./users').requireSudoConfirmation(req, res)) return;
-    }
+    if (!typedSecret && storedSecretMoves(current, store) && await require('./users').requireSudoConfirmation(req, res)) return;
     const target = await testTarget(store);
     if (!target) {
         return badRequest(res, 'The endpoint is a private or internal address. To use a storage server on your own network, save the configuration first, then test it.', ['endpoint']);

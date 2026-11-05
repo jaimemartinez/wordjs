@@ -116,7 +116,7 @@ const PROTECTED_OPTION_NAMES = new Set([
     // The audit log's retention, its hash chain's anchor and its external copy (core/audit, audit-chain,
     // audit-export): a plugin rewriting them could shorten the log, break its verification or redirect
     // the copy that keeps it honest. Written only through PUT /audit/settings, which re-authenticates.
-    'audit_retention_days', 'audit_chain_anchor', 'audit_export', 'audit_export_cursor',
+    'audit_retention_days', 'audit_chain_anchor', 'audit_export', 'audit_export_cursor', 'audit_export_last_target',
     // 'author_legacy_slugs' turns on resolving retired, login-derived author slugs on the public site
     // (core/author-aliases) — an administrator's informed choice, never a plugin's.
     'author_legacy_slugs',
@@ -279,6 +279,10 @@ function lexSql(sql: string): { toks: SqlTok[]; cleaned: string } {
         }
         if (c === '(' || c === ')' || c === ',') { toks.push({ k: 'p', v: c }); cleaned += c; i++; continue; }
         if (isWord(c)) { let w = ''; while (i < n && isWord(s[i])) { w += s[i]; i++; } const lw = w.toLowerCase(); toks.push({ k: 'w', v: lw }); cleaned += lw; continue; }
+        // Outside a literal or a quoted identifier the name of anything a plugin owns is ASCII. Each engine
+        // reads other characters its own way (SQLite takes them as identifier characters), and this lexer
+        // would not see them as part of a name.
+        if (c > '\x7f') throw new Error(`🛡️ Plugin DB access denied: non-ASCII characters are only permitted inside string literals and quoted identifiers.`);
         cleaned += c; i++; // operators / whitespace / ';' preserved for the denylist + multi-statement check
     }
     return { toks, cleaned };
@@ -325,11 +329,19 @@ function collectTableTokens(toks: SqlTok[]): string[] {
     let parenTableList = false;
     let prevWord = '', prevPunct = '';
     let lastCaptured = '';
+    // SQLite's `x IN tbl` names a table with no FROM. `IN (` is a list or a subquery, and `IN` inside these
+    // functions' own syntax is not a table slot.
+    const NOT_A_TABLE_IN = new Set(['position', 'against']);
+    const fnStack: string[] = [];
+    let afterIn = false;
     const isCreateTable = toks.length > 1 && toks[0].k === 'w' && toks[0].v === 'create'
         && toks.slice(1, 4).some((x) => x.k === 'w' && !x.q && x.v === 'table');
     for (const tk of toks) {
         if (tk.k === 'p') {
             prevPunct = tk.v;
+            if (afterIn) { afterIn = false; expectTable = false; }
+            if (tk.v === '(') fnStack.push(prevWord);
+            else if (tk.v === ')') fnStack.pop();
             // A paren opened in a table slot / FROM list is itself a table-or-subquery: propagate fromClause
             // in so an intra-paren comma cross-join `FROM (a , b)` re-arms expectTable; restore on `)`.
             if (tk.v === '(') {
@@ -349,6 +361,7 @@ function collectTableTokens(toks: SqlTok[]): string[] {
         const before = prevWord;
         const afterPunct = prevPunct;
         prevWord = quoted ? '' : t; prevPunct = '';
+        afterIn = false;
         if (expectTable) {
             if (!quoted && MODIFIERS.has(t)) continue;                                         // IF [NOT] EXISTS / ONLY / IGNORE …
             if (!quoted && OPENERS_FROM.has(t)) { fromClause = true; listKind = ''; continue; } // `DELETE FROM t` — the FROM list starts here
@@ -377,6 +390,7 @@ function collectTableTokens(toks: SqlTok[]): string[] {
         else if (!quoted && t === 'of' && before === 'partition') { expectTable = true; pendingList = ''; }
         else if (!quoted && t === 'inherits') { parenTableList = true; pendingList = ''; }
         else if (!quoted && t === 'like' && isCreateTable && (afterPunct === '(' || before === lastCaptured)) { expectTable = true; pendingList = ''; }
+        else if (!quoted && t === 'in' && !NOT_A_TABLE_IN.has(fnStack[fnStack.length - 1] || '')) { expectTable = true; afterIn = true; pendingList = ''; }
         else if (!quoted && t === 'on') { expectTable = false; }                              // keep fromClause: `JOIN y ON a=b , z` — z is still a cross-join
         else if (!quoted && t === 'as') { /* alias marker — ignore */ }
         else if (!quoted && ENDERS.has(t)) { fromClause = false; expectTable = false; }
@@ -463,7 +477,7 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     // bypass the table-prefix attribution below. Inert on the default better-sqlite3 driver (no such
     // functions / load_extension SQL not authorized), but deny TEXTUALLY so a driver swap or an enabled
     // extension can never open a file-read / file-write / RCE channel from a scoped query.
-    if (/\b(?:readfile|writefile|load_extension|fsdir|zipfile|sqlite3_\w+|lo_import|lo_export|pg_read_file|pg_read_binary_file|pg_ls_dir|pg_stat_file|dblink|dblink_exec)\s*\(/.test(lower)) {
+    if (/\b(?:readfile|writefile|load_extension|load_file|fsdir|zipfile|sqlite3_\w+|lo_\w+|pg_read_file|pg_read_binary_file|pg_ls_\w+|pg_stat_file|pg_sleep\w*|pg_terminate_backend|pg_cancel_backend|pg_reload_conf|set_config|sleep|benchmark|get_lock|release_lock|dblink\w*)\s*\(/.test(lower)) {
         throw new Error(`🛡️ Plugin DB access denied: file/extension/program SQL functions are not permitted.`);
     }
     // Postgres' xml-export family takes a SQL QUERY as a string argument and executes it. That breaks this
@@ -472,7 +486,7 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
     // so both the prefix allowlist and the PROTECTED_TABLES regex pass vacuously, and
     // `SELECT query_to_xml('select user_pass from users', ...)` reads the users table from a read-scoped
     // plugin. Same reasoning as the file/extension family above, so deny textually on every driver.
-    if (/\b(?:query_to_xml|query_to_xmlschema|query_to_xml_and_xmlschema|table_to_xml|table_to_xmlschema|table_to_xml_and_xmlschema|schema_to_xml|schema_to_xmlschema|schema_to_xml_and_xmlschema|database_to_xml|database_to_xmlschema|database_to_xml_and_xmlschema|cursor_to_xml|cursor_to_xmlschema)\s*\(/.test(lower)) {
+    if (/\b(?:query_to_xml|query_to_xmlschema|query_to_xml_and_xmlschema|table_to_xml|table_to_xmlschema|table_to_xml_and_xmlschema|schema_to_xml|schema_to_xmlschema|schema_to_xml_and_xmlschema|database_to_xml|database_to_xmlschema|database_to_xml_and_xmlschema|cursor_to_xml|cursor_to_xmlschema|ts_stat|ts_rewrite)\s*\(/.test(lower)) {
         throw new Error(`🛡️ Plugin DB access denied: query/table/schema-to-XML functions are not permitted.`);
     }
     // Single statement only — strip a single trailing ';' then reject any remaining one.
@@ -613,8 +627,12 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
 }
 
 // Confine a plugin-supplied relative path to its own dir or the uploads dir; realpath-checked.
+function pluginBaseDir(slug: string): string {
+    return slug.startsWith('theme:') ? path.join(ROOT_DIR, 'themes', slug.slice(6)) : path.join(PLUGINS_DIR, slug);
+}
+
 function resolvePluginPath(slug: string, relPath: string, mustExist: boolean, allowUploads = true): string {
-    const base = slug.startsWith('theme:') ? path.join(ROOT_DIR, 'themes', slug.slice(6)) : path.join(PLUGINS_DIR, slug);
+    const base = pluginBaseDir(slug);
     const candidate = path.resolve(base, String(relPath || ''));
     const real = (() => {
         try { return fs.realpathSync(candidate); } catch { return candidate; }
@@ -1168,7 +1186,12 @@ function createPluginApi(slug: string) {
                 // proves "inside the plugin dir"; the file-name blocks (manifest/DB/secret-named) live
                 // in isPathSafe, and this bridge must not be the one door that skips them.
                 assertIoGuard(slug, src, false);
-                return fs.promises.readFile(src, encoding);
+                // Through a descriptor that refuses a link: the path was judged a moment ago, and this runs in the host.
+                const ownDir = pluginBaseDir(slug) + path.sep, ownData = require('./sandbox-paths').ownDataDir(ROOT_DIR, slug) + path.sep;
+                const readable = path.resolve(src);
+                if (!readable.startsWith(readable.startsWith(ownData) ? ownData : ownDir)) throw new Error(`🛡️ Plugin path denied: '${relPath}'.`);
+                const reader = await fs.promises.open(readable, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+                try { return await reader.readFile(encoding); } finally { await reader.close(); }
             },
             async write(relPath: string, data: any) {
                 verifyPermission('filesystem', 'write');
@@ -1208,7 +1231,11 @@ function createPluginApi(slug: string) {
                     if (used - existing + writeBytes > PLUGIN_DISK_QUOTA) throw new Error(`🛡️ plugin disk quota exceeded (${PLUGIN_DISK_QUOTA} bytes).`);
                 }
                 await fs.promises.mkdir(path.dirname(target), { recursive: true });
-                return fs.promises.writeFile(target, data);
+                const ownDir = pluginBaseDir(slug) + path.sep, ownData = require('./sandbox-paths').ownDataDir(ROOT_DIR, slug) + path.sep;
+                const writable = path.resolve(target);
+                if (!writable.startsWith(writable.startsWith(ownData) ? ownData : ownDir)) throw new Error(`🛡️ Plugin path denied: '${relPath}'.`);
+                const writer = await fs.promises.open(writable, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW || 0), 0o644);
+                try { return await writer.writeFile(data); } finally { await writer.close(); }
             }
         },
 

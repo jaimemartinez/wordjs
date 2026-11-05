@@ -900,7 +900,7 @@ async function installPluginFromZip(zipPathIn: string, originalName: string, exp
                 catch (e: any) { log.warn({ err: e }, `[plugins] the previous data directory of ${logSafe(pluginSlug)} could not be removed from os-tmp`); }
                 discardedDataAside = null;
             }
-            try { await require('../core/plugins').uninstallPluginData(pluginSlug, { dropTables: true, retireSandbox: false }); }
+            try { await require('../core/plugins').uninstallPluginData(pluginSlug, { dropTables: true, retireSandbox: false, networkWide: true }); }
             catch (e: any) { log.warn({ err: e }, `[plugins] the previous tables of ${logSafe(pluginSlug)} could not be removed`); }
             await recordAudit(actorId, 'plugin.discard_previous_data', 'plugin', pluginSlug, { via: 'install' });
         }

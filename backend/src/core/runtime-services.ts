@@ -43,6 +43,8 @@ async function startRuntimeServices(): Promise<void> {
     // already scheduled" shape every default event uses, so a restart never duplicates it.
     try {
         const { HOOK: ANALYTICS_PRUNE_HOOK } = require('./analytics-retention');
+        const { HOOK: RECORD_PRUNE_HOOK } = require('./record-retention');
+        if (!(await nextScheduled(RECORD_PRUNE_HOOK))) await scheduleEvent(Date.now(), 'daily', RECORD_PRUNE_HOOK);
         if (!(await nextScheduled(ANALYTICS_PRUNE_HOOK))) {
             await scheduleEvent(Date.now(), 'daily', ANALYTICS_PRUNE_HOOK);
         }

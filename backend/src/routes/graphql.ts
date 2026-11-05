@@ -28,7 +28,7 @@ import type { Request, Response, NextFunction } from 'express';
 const express = require('express');
 const multer = require('multer');
 const { createHandler } = require('graphql-http/lib/use/express');
-const { specifiedRules, GraphQLError, validate, getOperationAST, subscribe } = require('graphql');
+const { specifiedRules, GraphQLError, getOperationAST, subscribe } = require('graphql');
 const graphql = require('../core/graphql');
 const config = require('../config/app');
 const { sameOriginRequest, SESSION_COOKIE, optionalAuth } = require('../middleware/auth');
@@ -80,6 +80,7 @@ function contextFor(req: Request, res?: Response, extra: Record<string, any> = {
 const handler = createHandler({
     schema: () => graphql.getSchema(),
     parse: graphql.parseWithLimits,
+    validate: graphql.validateWithLimits,
     validationRules: async () => [...specifiedRules, ...(await graphql.extraValidationRules())],
     context: (req: { raw: Request; context: { res: Response } }) => contextFor(req.raw, req.context && req.context.res),
     // The cost limit bounds the work at validation; this bounds what is written. The result is measured
@@ -355,7 +356,8 @@ function clientKey(req: Request): string {
     // Per signed-in user: every session and token carries its own id (core/session-revocation), so a
     // key made of the raw credential let one account open five streams per token it held.
     const userId = req.user && Number(req.user.id);
-    if (userId) return `u:${userId}`;
+    // Per site too: user ids repeat across the sites of a network.
+    if (userId) return `${require('../core/site-context').siteKeyPrefix()}u:${userId}`;
     // Everyone else is their address's rate-limit identity (an IPv6 client is its /64), whatever cookie or
     // header it sends: a credential that resolves to nobody is a string the caller chose, not an identity.
     return `ip:${clientIpBucket(req)}`;
@@ -492,7 +494,7 @@ async function serveStream(req: Request, res: Response): Promise<any> {
     let document: any;
     try { document = graphql.parseWithLimits(params.query); }
     catch (e: any) { return res.status(400).json({ errors: [formatError(e instanceof GraphQLError ? e : new GraphQLError(String(e && e.message)))] }); }
-    const errors = validate(schema, document, [...specifiedRules, ...(await graphql.extraValidationRules())]);
+    const errors = graphql.validateWithLimits(schema, document, [...specifiedRules, ...(await graphql.extraValidationRules())]);
     if (errors.length) return res.status(400).json({ errors: errors.map(formatError) });
     const op = getOperationAST(document, params.operationName);
     if (!op || op.operation !== 'subscription') {

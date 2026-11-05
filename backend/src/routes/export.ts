@@ -248,7 +248,8 @@ router.get('/export/wxr', authenticate, isAdmin, asyncHandler(async (req: Reques
  *           Not an administrator; rest_token_management_forbidden: an API token may not import accounts
  *           (importUsers) nor change the registration settings; or rest_account_bound_session: neither
  *           may a session started at an address other than the main one (data.params names what was
- *           refused).
+ *           refused); rest_sudo_required / rest_mfa_step_up_required: importing accounts takes the
+ *           caller's password and, with two-factor authentication, a current code.
  */
 router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandler(async (req: ImportRequest, res: Response) => {
     let data;
@@ -296,6 +297,9 @@ router.post('/import', authenticate, isAdmin, upload.single('file'), asyncHandle
         : {};
     const refused = [...(options.importUsers ? ['importUsers'] : []), ...(await changedRegistrationSettings(bundleSettings))];
     if (refused.length && refuseAccountAuthority(req, res, refused)) return;
+    // Importing accounts hands out the same authority as POST /users and PUT /users/:id, so it takes the
+    // same proof (`currentPassword`, and `mfaCode` with two-factor authentication).
+    if (options.importUsers && await require('./users').requireAccountStepUp(req, res)) return;
 
     const results = await importSite(data, options);
 

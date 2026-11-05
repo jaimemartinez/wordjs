@@ -1,5 +1,6 @@
 "use client";
 
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 import { Fragment, useEffect, useState, type ReactNode } from "react";
 import { apiGet, apiPost } from "@/lib/api";
 import { useModal } from "@/contexts/ModalContext";
@@ -37,6 +38,7 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
     const [domainsText, setDomainsText] = useState("");
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const stepUp = useMfaStepUp();
     const [renewing, setRenewing] = useState(false);
 
     const load = async () => {
@@ -74,11 +76,14 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                 renewBeforeDays: Number(cfg.renewBeforeDays) || 30,
                 challengeType: 'http-01',
                 // Sent every time: leaving it out used to drop a port set earlier.
-                http01Port: cfg.http01Port || null
+                http01Port: cfg.http01Port || null,
+                ...stepUp.payload(),
             });
+            stepUp.reset();
             if (res?.error) { await alert(t('ssl.auto.saveFailed').replace('{error}', () => res.error)); }
             else { await alert(t('ssl.auto.saved')); await load(); }
         } catch (e: any) {
+            if (stepUp.absorb(e)) return;
             await alert(t('ssl.auto.saveFailed').replace('{error}', () => e.message || t('ssl.auto.unknownError')));
         } finally {
             setSaving(false);
@@ -224,6 +229,7 @@ export default function AutoRenewalPanel({ adminEmail }: { adminEmail?: string }
                 <Button variant="secondary" size="md" icon="fa-bolt" onClick={renewNow} pending={renewing} pendingLabel={t('ssl.auto.renewing')}>
                     {t('ssl.auto.renewNow')}
                 </Button>
+                <MfaStepUpFields stepUp={stepUp} withCode={false} />
                 <Button type="submit" size="md" icon="fa-floppy-disk" pending={saving} pendingLabel={t('ssl.auto.saving')}>
                     {t('ssl.auto.save')}
                 </Button>

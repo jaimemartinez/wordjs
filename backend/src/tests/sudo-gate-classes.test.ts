@@ -61,6 +61,7 @@ app.use((req: any, res: any, next: any) => siteContext.runWithSite(1, next));
 app.use(express.json());
 app.use(cookieParser());
 app.use(B, csrfProtection);
+app.use(`${B}/backups`, require('../routes/backups'));
 app.use(B, require('../routes'));
 
 /** Multisite on for one call (the network doors exist only then), and off again before the next. */
@@ -98,7 +99,7 @@ const metaOf = (userId: number, key: string) => dbAsync.get(
 /** Every persona that a per-door test needs its OWN copy of, so one door's failures never fund another's. */
 const DOOR_PERSONAS = ['doorMe', 'doorTwin', 'doorMfa', 'doorMfaEnable', 'doorSessions', 'doorPassword', 'doorDeleteMe'];
 /** …and the doors that need a privileged caller to be reachable at all (DELETE /plugins/:slug is isAdmin). */
-const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorEmailTemplateSave', 'doorEmailTemplateReset', 'doorNetworkEnable', 'doorServerSettings', 'doorRedisSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate', 'doorRedisTest', 'doorMediaTest', 'doorUserCreateAdmin', 'doorUserMfaReset', 'doorAuditSettings', 'doorDuplicates'];
+const ADMIN_DOOR_PERSONAS = ['doorPluginAdmin', 'doorCertUpload', 'doorCertConfig', 'doorCertAcme', 'doorCertProvision', 'doorCertDnsFinish', 'doorWebhookCreate', 'doorWebhookMove', 'doorMfaPolicy', 'doorRestore', 'doorImportAccounts', 'doorRolePrivileged', 'doorAiKeyMove', 'doorMediaSave', 'doorAuditHeadAccept', 'doorPluginFilesAccept', 'doorSiteCanonical', 'doorSiteAliases', 'doorSitePolicy', 'doorAccountMailSmtp', 'doorAccountMailProvider', 'doorEmailTemplateSave', 'doorEmailTemplateReset', 'doorNetworkEnable', 'doorServerSettings', 'doorRedisSettings', 'doorClusterToken', 'doorClusterRevoke', 'doorClusterRemove', 'doorClusterForwards', 'doorUpdate', 'doorRedisTest', 'doorMediaTest', 'doorUserCreateAdmin', 'doorUserMfaReset', 'doorAuditSettings', 'doorDuplicates'];
 /** …and the network doors (routes/network.ts), whose caller must also be a NETWORK administrator. */
 const NETWORK_DOOR_PERSONAS = ['doorNetworkCreate', 'doorNetworkAddress', 'doorNetworkSuspend', 'doorNetworkResume', 'doorNetworkOffer', 'doorNetworkWithdraw', 'doorNetworkQuotaDefault', 'doorNetworkQuotaSite', 'doorNetworkDelete', 'doorNetworkCertIssue', 'doorNetworkCertInstall', 'doorNetworkHandoff', 'doorNetworkDisable', 'doorNetworkAdminAdd', 'doorNetworkAdminRemove'];
 /** …and the code-checking doors that ask for the password only past the account's failure ceiling. */
@@ -371,6 +372,8 @@ function routerMounts(): Record<string, string> {
         if (file) out[`${file}.ts`] = m[1];
     }
     assert.ok(Object.keys(out).length > 5, 'routes/index.ts mount table could not be read — this gate is blind');
+    // The one sudo-gated router index.ts (the app's) mounts itself, after its own limiter and network guard.
+    out['backups.ts'] = '/backups';
     return out;
 }
 
@@ -736,6 +739,9 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
     const originalGetConfig = configManager.getConfig;
     const stubConfig = (extra: Record<string, unknown>) => { configManager.getConfig = () => ({ ...(originalGetConfig() || {}), ...extra }); };
     const restoreConfig = () => { configManager.getConfig = originalGetConfig; };
+    let originalIntegrity: any = null;
+    let doorWebhook: any = null;
+    let originalUpdateConfig: any = null;
 
     // One row per door that calls requireSudoPassword — and the rows are CHECKED AGAINST THE SOURCE
     // below, so this list cannot quietly fall behind the routers again.
@@ -1089,6 +1095,113 @@ test('CLASS 2 — EVERY sudo-gated door recovers, not just the one the report na
             send: (p: string, pw: string) => request(app).post(`${B}/users`).set('Authorization', asUser(p))
                 .send({ username: `made_by_${p}_${Date.now()}`, email: `made_${Date.now()}@example.com`, password: 'Str0ng-Passw0rd-xyz!', role: 'administrator', currentPassword: pw }),
             alsoExpect: (r: any) => r.status === 201,
+        },
+        // A restore: the password comes before the file is looked at, so an unknown file answers after it.
+        {
+            site: 'backups.ts POST /:filename/restore', name: 'POST /backups/:filename/restore', persona: 'doorRestore',
+            send: (p: string, pw: string) => request(app).post(`${B}/backups/none.zip/restore`).set('Authorization', asUser(p)).send({ currentPassword: pw }),
+            alsoExpect: (r: any) => r.status >= 400 && r.status !== 403,
+        },
+        {
+            site: 'export.ts POST /import', name: 'POST /import {importUsers}', persona: 'doorImportAccounts',
+            send: (p: string, pw: string) => request(app).post(`${B}/import`).set('Authorization', asUser(p))
+                .send({ importUsers: true, currentPassword: pw, data: { version: '1.0', content: { users: [] } } }),
+            alsoExpect: (r: any) => r.status === 200,
+        },
+        {
+            site: 'roles.ts POST /', name: 'POST /roles (a privileged capability)', persona: 'doorRolePrivileged',
+            cleanup: async () => { await roles.removeRole('door_role'); },
+            send: (p: string, pw: string) => request(app).post(`${B}/roles`).set('Authorization', asUser(p))
+                .send({ slug: 'door_role', name: 'Door role', capabilities: ['edit_users'], currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 201,
+        },
+        {
+            site: 'ai.ts PUT /settings', name: 'PUT /ai/settings (the stored key to another server)', persona: 'doorAiKeyMove',
+            prepare: async () => { await require('../core/ai-provider').saveSettings({ provider: 'openai-compatible', baseUrl: 'https://one.example/v1', model: 'm', apiKey: 'sk-door' }); },
+            cleanup: async () => { await require('../core/ai-provider').saveSettings({ provider: '', clearKey: true }); },
+            send: (p: string, pw: string) => request(app).put(`${B}/ai/settings`).set('Authorization', asUser(p))
+                .send({ provider: 'openai-compatible', baseUrl: 'https://two.example/v1', model: 'm', currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 200,
+        },
+        {
+            site: 'media-storage.ts PUT /', name: 'PUT /media-storage (another endpoint, saved secret)', persona: 'doorMediaSave',
+            // The save itself is stubbed: it writes wordjs-config.json, which later test files read.
+            prepare: async () => {
+                stubConfig({ mediaStorage: { driver: 's3', bucket: 'media', region: 'us-east-1', endpoint: 'https://10.0.0.10', accessKeyId: 'AK', secretAccessKey: 'stored' } });
+                originalUpdateConfig = configManager.updateConfig;
+                configManager.updateConfig = () => ({ ok: true });
+            },
+            cleanup: async () => { restoreConfig(); configManager.updateConfig = originalUpdateConfig; },
+            send: (p: string, pw: string) => request(app).put(`${B}/media-storage`).set('Authorization', asUser(p))
+                .send({ driver: 's3', bucket: 'media', endpoint: 'https://10.0.0.11', currentPassword: pw }),
+        },
+        {
+            site: 'audit.ts POST /head/accept', name: 'POST /audit/head/accept', persona: 'doorAuditHeadAccept',
+            prepare: async () => {
+                const chain = require('../core/audit-chain');
+                for (let i = 0; i < 2; i++) await require('../core/audit').recordAudit(null, 'test.event', 'test', '', {});
+                await chain.sealPending();
+                await database.getDbAsync().run('DELETE FROM audit_log WHERE chain_seq = ?', [await chain.chainHeadSeq()]);
+            },
+            send: (p: string, pw: string) => request(app).post(`${B}/audit/head/accept`).set('Authorization', asUser(p)).send({ currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 200,
+        },
+        {
+            site: 'health.ts POST /sandbox/plugin-files/accept', name: 'POST /health/sandbox/plugin-files/accept', persona: 'doorPluginFilesAccept',
+            prepare: async () => {
+                const integrity = require('../core/plugin-integrity');
+                originalIntegrity = { list: integrity.listIntegrityMismatches, accept: integrity.acceptPluginIntegrity };
+                integrity.listIntegrityMismatches = () => ['door-plugin'];
+                integrity.acceptPluginIntegrity = () => {};
+            },
+            cleanup: async () => {
+                const integrity = require('../core/plugin-integrity');
+                integrity.listIntegrityMismatches = originalIntegrity.list;
+                integrity.acceptPluginIntegrity = originalIntegrity.accept;
+            },
+            send: (p: string, pw: string) => request(app).post(`${B}/health/sandbox/plugin-files/accept`).set('Authorization', asUser(p)).send({ slug: 'door-plugin', currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 200,
+        },
+        {
+            site: 'certs.ts POST /upload-custom', name: 'POST /system/certs/upload-custom', persona: 'doorCertUpload',
+            send: (p: string, pw: string) => request(app).post(`${B}/system/certs/upload-custom`).set('Authorization', asUser(p)).send({ key: 'x', cert: 'x', currentPassword: pw }),
+        },
+        {
+            site: 'certs.ts POST /config', name: 'POST /system/certs/config', persona: 'doorCertConfig',
+            send: (p: string, pw: string) => request(app).post(`${B}/system/certs/config`).set('Authorization', asUser(p)).send({ port: 'not-a-port', currentPassword: pw }),
+        },
+        {
+            site: 'certs.ts POST /acme-config', name: 'POST /system/certs/acme-config', persona: 'doorCertAcme',
+            send: (p: string, pw: string) => request(app).post(`${B}/system/certs/acme-config`).set('Authorization', asUser(p)).send({ enabled: 'not-a-boolean', currentPassword: pw }),
+        },
+        {
+            site: 'certs.ts POST /auto-provision', name: 'POST /system/certs/auto-provision', persona: 'doorCertProvision',
+            send: (p: string, pw: string) => request(app).post(`${B}/system/certs/auto-provision`).set('Authorization', asUser(p)).send({ currentPassword: pw }),
+        },
+        {
+            site: 'certs.ts POST /dns-finish', name: 'POST /system/certs/dns-finish', persona: 'doorCertDnsFinish',
+            send: (p: string, pw: string) => request(app).post(`${B}/system/certs/dns-finish`).set('Authorization', asUser(p)).send({ currentPassword: pw }),
+        },
+        {
+            site: 'webhooks.ts POST /', name: 'POST /webhooks', persona: 'doorWebhookCreate',
+            send: (p: string, pw: string) => request(app).post(`${B}/webhooks`).set('Authorization', asUser(p))
+                .send({ url: 'not a url', currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 400,
+        },
+        {
+            site: 'webhooks.ts PATCH /:id', name: 'PATCH /webhooks/:id (a new url)', persona: 'doorWebhookMove',
+            prepare: async () => { doorWebhook = await require('../models/Webhook').create({ userId: U.admin, name: 'door', url: 'https://one.example/hook', events: ['*'], active: true }); },
+            send: (p: string, pw: string) => request(app).patch(`${B}/webhooks/${doorWebhook.id}`).set('Authorization', asUser(p))
+                .send({ url: 'not a url', currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 400,
+        },
+        {
+            site: 'auth.ts PUT /mfa/policy', name: 'PUT /auth/mfa/policy (loosened)', persona: 'doorMfaPolicy',
+            prepare: async () => { await mfa.setPolicy({ requiredRoles: ['subscriber'], graceDays: 30 }); },
+            cleanup: async () => { await mfa.setPolicy({ requiredRoles: [], graceDays: 0 }); },
+            send: (p: string, pw: string) => request(app).put(`${B}/auth/mfa/policy`).set('Authorization', asUser(p))
+                .send({ requiredRoles: [], graceDays: 0, enforceForApiTokens: false, currentPassword: pw }),
+            alsoExpect: (r: any) => r.status === 200,
         },
         // Resetting someone's second factor: the caller's password first.
         {

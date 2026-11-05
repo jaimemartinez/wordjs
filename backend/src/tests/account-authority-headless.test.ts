@@ -140,7 +140,7 @@ describe('POST /import with importUsers', () => {
 
     it('the same account import from an interactive administrator session is accepted (control)', async () => {
         const res = await request(app).post(`${B}/import`).set('Authorization', session('owner'))
-            .send({ importUsers: true, data: { version: '1.0', content: { users: [{ id: 902, username: 'migrated', email: 'migrated@example.com', role: 'author' }] } } });
+            .send({ importUsers: true, currentPassword: PASSWORD, data: { version: '1.0', content: { users: [{ id: 902, username: 'migrated', email: 'migrated@example.com', role: 'author' }] } } });
         assert.strictEqual(res.status, 200, JSON.stringify(res.body));
         assert.ok(await User.findByLogin('migrated'), 'the interactive import created the account');
     });

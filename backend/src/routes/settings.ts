@@ -859,7 +859,10 @@ router.put('/:key', authenticate, isAdmin, asyncHandler(async (req: Request, res
     const network = await changedNetworkSettings(req, { [key]: value });
     if (network.length) return refuseNetworkSettings(res, network);
 
-    if (!(networkSettingsReadOnly(req) && NETWORK_WIDE_SETTINGS.has(key))) await updateOption(key, normalizedSettingValue(key, value));
+    if (!(networkSettingsReadOnly(req) && NETWORK_WIDE_SETTINGS.has(key))) {
+        await updateOption(key, normalizedSettingValue(key, value));
+        await recordAudit(req.user && req.user.id, 'settings.update', 'settings', '', { keys: [key] });
+    }
 
     res.json({
         key,

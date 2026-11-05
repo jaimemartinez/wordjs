@@ -289,6 +289,7 @@ describe('hook-access policy', () => {
             for (const m of fs.readFileSync(f, 'utf8').matchAll(/\bconst\s+([A-Z][A-Z0-9_]*)\s*=\s*'([^']+)'/g)) consts.set(m[1], m[2]);
         }
         consts.set('ANALYTICS_PRUNE_HOOK', consts.get('HOOK')!); // index.ts: const { HOOK: ANALYTICS_PRUNE_HOOK }
+        consts.set('RECORD_PRUNE_HOOK', 'wordjs_record_retention_prune'); // core/record-retention HOOK
         const resolve = (expr: string): string | null => {
             const e = expr.trim();
             const lit = e.match(/^['"`]([^'"`$]+)['"`]$/);

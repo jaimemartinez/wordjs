@@ -63,7 +63,7 @@ function limiterStore(config, logger, prefix) {
  * The cap must be generous — the edge proxies whole page loads (HTML + every asset) per client — while
  * still bounding an abusive flood. Health probes are exempt so infra liveness checks are never throttled.
  */
-function createPublicLimiter(config, logger) {
+function createPublicLimiter(config, logger, { isSsrRead } = {}) {
     const rl = (config && config.rateLimit) || {};
     const windowMs = Number(rl.windowMs) > 0 ? Number(rl.windowMs) : 60 * 1000;
     const max = Number(rl.max) > 0 ? Number(rl.max) : 1000;
@@ -76,10 +76,22 @@ function createPublicLimiter(config, logger) {
         passOnStoreError: true, // fail-open: a store outage must not take the edge down (logged above)
         skip: (req) => {
             const p = (req.url || '/').split('?')[0];
-            return p === '/healthz' || p === '/readyz';
+            // The frontend rendering pages: its reads are counted by the backend, not as one visitor here.
+            return p === '/healthz' || p === '/readyz' || (typeof isSsrRead === 'function' && isSsrRead(req));
         },
         message: { error: 'Too many requests, please try again later.' },
     });
+}
+
+/** One budget per IPv6 /64, as everywhere else: one host holds the whole of it. */
+function addressBucket(client) {
+    const a = String(client || 'unknown').replace(/^::ffff:/, '');
+    if (!a.includes(':')) return a;
+    const [head, tail] = a.split('::');
+    const left = head ? head.split(':') : [];
+    const right = tail ? tail.split(':') : [];
+    const full = tail === undefined ? left : [...left, ...new Array(Math.max(0, 8 - left.length - right.length)).fill('0'), ...right];
+    return `${full.slice(0, 4).map((h) => h.toLowerCase().replace(/^0+(?=.)/, '')).join(':')}::/64`;
 }
 
 /**
@@ -128,7 +140,7 @@ function createUpgradeLimiter(config, { onShared, sharedThreshold = 5 } = {}) {
                 windowStart = now;
                 totals = new Map(); pairs = new Map(); distinct = new Map(); reported = new Set();
             }
-            const peer = String(client || 'unknown');
+            const peer = addressBucket(client);
             const fwd = forwarded ? String(forwarded) : '';
             let seen = distinct.get(peer);
             if (fwd && fwd !== peer) {

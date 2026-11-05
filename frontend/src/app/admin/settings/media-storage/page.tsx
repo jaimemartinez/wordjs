@@ -47,6 +47,7 @@ export default function MediaStoragePage() {
     const [test, setTest] = useState<MediaStorageTestResult | null>(null);
     // Testing another endpoint, region or bucket with the SAVED secret: the server asks for your password.
     const testStepUp = useMfaStepUp();
+    const saveStepUp = useMfaStepUp();
     const [deleteLocal, setDeleteLocal] = useState(false);
 
     const load = useCallback(async (resetForm: boolean) => {
@@ -91,11 +92,13 @@ export default function MediaStoragePage() {
     const save = async () => {
         setSaving(true);
         try {
-            const v = await mediaStorageApi.save(form);
+            const v = await mediaStorageApi.save(form, saveStepUp.payload());
+            saveStepUp.reset();
             setView(v);
             setForm(formFromView(v));
             addToast(t("mediaStorage.toast.saved"), "success");
         } catch (e: any) {
+            if (saveStepUp.absorb(e)) return;
             addToast(e?.message || t("mediaStorage.toast.saveFailed"), "error");
         } finally {
             setSaving(false);
@@ -262,6 +265,7 @@ export default function MediaStoragePage() {
                         )}
                     </div>
                     {s3 && <MfaStepUpFields stepUp={testStepUp} withCode={false} />}
+                    {s3 && <MfaStepUpFields stepUp={saveStepUp} withCode={false} />}
 
                     {test && (
                         <ul className="space-y-1 text-sm" aria-live="polite" data-testid="media-storage-test">

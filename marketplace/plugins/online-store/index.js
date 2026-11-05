@@ -50,7 +50,7 @@
 
 exports.metadata = {
     name: 'Online Store',
-    version: '2.0.5',
+    version: '2.0.6',
     description: 'Tienda completa: variantes, galerías, zonas de envío, impuestos, reembolsos, informes, webhooks de Stripe y pedidos por cuenta.',
     author: 'WordJS',
 };
@@ -1161,7 +1161,7 @@ exports.init = async function (wordjs) {
     // Stripe webhook — see the file header: the body is an UNTRUSTED HINT (no signature check is
     // possible in the sandbox). State only changes after re-fetching the session from Stripe with
     // the secret key, so a forged event is a no-op. Always answers fast so Stripe stops retrying.
-    http.route('post', '/public/stripe-webhook', quietly('Stripe webhook', async (req, res) => {
+    http.route('post', '/public/stripe-webhook', { webhook: true }, quietly('Stripe webhook', async (req, res) => {
         if (rateLimited('stripe-webhook', 120, 60 * 1000)) {
             return res.status(429).json({ received: false });
         }

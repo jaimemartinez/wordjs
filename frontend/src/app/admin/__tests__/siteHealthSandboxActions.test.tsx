@@ -39,7 +39,8 @@ describe("Site Health — plugin sandbox checks", () => {
     it("renders an action as a button that POSTs its endpoint and runs the checks again", () => {
         const src = fs.readFileSync(path.resolve(__dirname, "../site-health/page.tsx"), "utf8");
         expect(src).toMatch(/action\?: \{ endpoint: string; label: string; labelKey\?: string; body\?: Record<string, string> \}/);
-        expect(src).toMatch(/await apiPost\(c\.action\.endpoint, c\.action\.body \|\| \{\}\);[\s\S]{0,200}await run\(\);/);
+        expect(src).toMatch(/await apiPost\(c\.action\.endpoint, \{ \.\.\.\(c\.action\.body \|\| \{\}\), \.\.\.stepUp\.payload\(\) \}\);[\s\S]{0,400}await run\(\);/);
+        expect(src).toMatch(/stepUp\.absorb\(e\)/);
         expect(src).toMatch(/\{c\.action && c\.status !== "ok" && \(/);
         expect(src).toMatch(/data-testid=\{`site-health-action-\$\{c\.id\}`\}/);
     });

@@ -41,7 +41,8 @@ function checkedTrustProxy(raw: unknown): { ok: true; value: string | null } | {
         if (extra !== undefined) return { ok: false };
         const kind = net.isIP(addr);
         if (!kind) return { ok: false };
-        if (bits !== undefined && (!/^[0-9]{1,3}$/.test(bits) || Number(bits) > (kind === 4 ? 32 : 128))) return { ok: false };
+        // Upper AND lower bound: /0 stops the server at boot, and a few very wide ranges together trust everyone.
+        if (bits !== undefined && (!/^[0-9]{1,3}$/.test(bits) || Number(bits) < (kind === 4 ? 8 : 32) || Number(bits) > (kind === 4 ? 32 : 128))) return { ok: false };
     }
     return { ok: true, value: parts.join(', ') };
 }

@@ -412,7 +412,7 @@ describe('redeeming a handoff (the target site)', () => {
             const data = { version: '1.0', content: { users: [
                 { id: 900, username: me.body.username, email: 'taken@two.example.com', displayName: 'Rewritten', role: 'subscriber' },
             ] } };
-            const imp = await bearer('post', `${API}/import`, TWO, tokens.two).send({ data, updateExisting: true, importUsers: true });
+            const imp = await bearer('post', `${API}/import`, TWO, tokens.two).send({ data, updateExisting: true, importUsers: true, currentPassword: PASSWORD });
             assert.strictEqual(imp.status, 200, JSON.stringify(imp.body));
             const row = await siteContext.runWithSite(siteTwo, () => database.getDbAsync().get('SELECT user_email, display_name FROM users WHERE id = ?', [id]));
             assert.ok(row, 'the handoff account still exists');

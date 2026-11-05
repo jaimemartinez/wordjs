@@ -370,6 +370,7 @@ async function checkAuditLog(): Promise<HealthCheck[]> {
         const why: Record<string, string> = {
             altered: 'its content was changed', gap: 'the entry before it is missing',
             link: 'it does not link to the entry before it', start: 'the oldest entries do not match what retention removed',
+            truncated: 'the newest entries are gone',
         };
         const reason = r.firstBreak.reason;
         out.push(check('security.auditChain', 'security', 'fail', `broken.${reason}`, 'Audit log integrity', `The audit log's hash chain breaks at entry ${r.firstBreak.seq}: ${why[reason]}. Entries were changed or removed outside WordJS; compare with the external copy.`, { seq: r.firstBreak.seq ?? '' }, FIX.audit));

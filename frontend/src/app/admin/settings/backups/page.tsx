@@ -7,6 +7,7 @@ import { format } from "date-fns";
 import { useModal } from "@/contexts/ModalContext";
 import { useToast } from "@/contexts/ToastContext";
 import { useI18n } from "@/contexts/I18nContext";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 export default function BackupsPage() {
     const { t } = useI18n();
@@ -37,6 +38,9 @@ export default function BackupsPage() {
     // success toast away before anyone read it, and the admin was never told the service must restart.
     const [restored, setRestored] = useState<string | null>(null);
     const [restoring, setRestoring] = useState(false);
+    // A restore takes the administrator's password: the file waiting for it, while the fields are on screen.
+    const [awaitingProof, setAwaitingProof] = useState<string | null>(null);
+    const stepUp = useMfaStepUp();
     // The restore was followed by an automatic restart (nothing for the administrator to do).
     const [restartedAuto, setRestartedAuto] = useState(false);
 
@@ -152,11 +156,16 @@ export default function BackupsPage() {
         );
 
         if (!confirmed) return;
+        await runRestore(filename);
+    };
 
+    const runRestore = async (filename: string) => {
         setRestored(null);
         setRestoring(true);
         try {
-            const r = await backupsApi.restore(filename);
+            const r = await backupsApi.restore(filename, stepUp.payload());
+            stepUp.reset();
+            setAwaitingProof(null);
             addToast(t('backups.toast.restored'), "success");
             setRestored(filename);
             // The backend restarts itself to load the restored plugins, themes and settings (backend
@@ -170,6 +179,7 @@ export default function BackupsPage() {
                 window.location.reload();
             }
         } catch (err: any) {
+            if (stepUp.absorb(err)) { setAwaitingProof(filename); return; }
             addToast(t('backups.toast.restoreFailed') + err.message, "error");
         } finally {
             setRestoring(false);
@@ -196,6 +206,13 @@ export default function BackupsPage() {
                 <div role="status" className="mb-6 p-4 bg-blue-50 text-blue-700 rounded-xl border border-blue-100 flex items-center gap-3">
                     <i className="fa-solid fa-spinner fa-spin" aria-hidden="true"></i>
                     {t('backups.restoring')}
+                </div>
+            )}
+
+            {awaitingProof && (
+                <div className="mb-6 max-w-md space-y-3" data-testid="backup-restore-proof">
+                    <MfaStepUpFields stepUp={stepUp} />
+                    <Button variant="danger" onClick={() => runRestore(awaitingProof)} pending={restoring}>{t('backups.action.restore')}</Button>
                 </div>
             )}
 

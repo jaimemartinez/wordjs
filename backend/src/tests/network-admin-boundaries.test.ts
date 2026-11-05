@@ -193,7 +193,7 @@ describe('a network administrator account is out of reach of a main-site-only ad
             ] },
             settings: { redis_cache_enabled: '1', blogdescription: 'imported' },
         };
-        const res = await as('main', 'post', `${API}/import`).send({ data, updateExisting: true, importUsers: true });
+        const res = await as('main', 'post', `${API}/import`).send({ data, updateExisting: true, importUsers: true, currentPassword: PASSWORD });
         assert.strictEqual(res.status, 200, JSON.stringify(res.body));
         const net = await userRow(U.netadmin);
         assert.strictEqual(net.user_email, 'netadmin@main.example.com', 'the network administrator was rewritten by the import');

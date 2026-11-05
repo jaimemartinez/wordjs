@@ -124,7 +124,8 @@ just before you restore, so that you can go back to the present if you need to.
 
 ## Good to know
 
-- Only an administrator signed in with their own account can restore; an API token can't.
+- Only an administrator signed in with their own account can restore; an API token can't. WordJS asks
+  for your password first, and for a code if you use two-factor authentication.
 - A backup taken on an older version restores on a newer one. In this tutorial, a 2.6.0 backup was
   restored on 2.7.0.
 - On Postgres or MySQL, back up the database with its own tools as well (`pg_dump`, `mysqldump`).

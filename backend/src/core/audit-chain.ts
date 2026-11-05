@@ -21,12 +21,21 @@
  * removed (`seq`/`hash`). A gap in the sequence then verifies only if the row after it links to the hash
  * recorded for the place just before it: a row removed by the prune is accounted for, any other is not.
  *
+ * THE HEAD MARK is the last sealed place and its hash, kept in a file next to the database (host-only state
+ * under data/, no plugin reads or writes it), so it survives whatever happens to the rows. The newest rows
+ * leave no gap when they go, so the chain alone cannot tell they ever existed: the mark can. It moves forward
+ * only while the place it names still holds that hash; otherwise it stays where it is and verify reports
+ * `truncated`. A restore is the legitimate way back: its audit row names the places it went from and to
+ * (`rewinds` in the report), and an administrator can accept any other loss (acceptHeadLoss).
+ *
  * What it does not do on its own: someone with write access to the database itself can rebuild a whole
  * chain. The external copy (core/audit-export) is what makes that visible — the receiver already holds
  * every row's hash.
  */
 
 const crypto = require('crypto');
+const fs = require('fs');
+const path = require('path');
 const log = require('./module-logger').moduleLogger('core/audit-chain');
 
 const CHAIN_VERSION = 'wordjs-audit-v1';
@@ -179,6 +188,93 @@ function siteKey(): string {
     try { return String(require('./site-context').currentSiteIdOrNull() ?? 'none'); } catch { return 'none'; }
 }
 
+type HeadMark = { seq: number; hash: string; spent?: string[] };
+export type ChainRewind = { action: string; fromSeq: number; toSeq: number; at: string; actorId: number | null };
+
+/** The rows that say the log went back on purpose. */
+const REWIND_ACTIONS = ['backup.restore', 'audit.head.accept'];
+
+function headMarkFile(): string {
+    const dbPath = path.resolve(require('../config/app').dbPath || './data/wordjs-native.db');
+    return path.join(path.dirname(dbPath), 'sandbox', 'audit-head', `${path.basename(dbPath)}.${siteKey()}.json`);
+}
+
+function readHeadMark(): HeadMark | null {
+    try {
+        const m = JSON.parse(fs.readFileSync(headMarkFile(), 'utf8'));
+        return m && Number.isInteger(m.seq) && m.seq > 0 && typeof m.hash === 'string'
+            ? { seq: m.seq, hash: m.hash, spent: Array.isArray(m.spent) ? m.spent.map(String) : [] }
+            : null;
+    } catch { return null; }
+}
+
+function writeHeadMark(mark: HeadMark): void {
+    const file = headMarkFile();
+    fs.mkdirSync(path.dirname(file), { recursive: true, mode: 0o700 });
+    const tmp = `${file}.${process.pid}.tmp`;
+    fs.writeFileSync(tmp, JSON.stringify(mark), { encoding: 'utf8', mode: 0o600 });
+    fs.renameSync(tmp, file);
+}
+
+/** A new installation starts a new log: the mark of the one before it says nothing about this one. */
+function forgetHeadMark(): void {
+    try { fs.rmSync(headMarkFile(), { force: true }); } catch { /* nothing to forget */ }
+}
+
+/** Does the place the mark names still hold its row? A row the prune removed is accounted for by the anchor. */
+async function headMarkHolds(mark: HeadMark, q: Q): Promise<boolean> {
+    const row = await q.get('SELECT row_hash FROM audit_log WHERE chain_seq = ?', [mark.seq]);
+    if (row) return String(row.row_hash) === mark.hash;
+    return mark.seq <= (await readAnchor()).seq;
+}
+
+/** Every recorded rewind, newest first. */
+async function chainRewinds(q: Q): Promise<ChainRewind[]> {
+    const rows = (await q.all(
+        'SELECT action, actor_id, detail, created_at FROM audit_log WHERE action IN (?, ?) ORDER BY id DESC LIMIT 100',
+        REWIND_ACTIONS
+    )) || [];
+    const out: ChainRewind[] = [];
+    for (const row of rows) {
+        let d: any = null;
+        try { d = typeof row.detail === 'string' ? JSON.parse(row.detail) : row.detail; } catch { /* not one */ }
+        const fromSeq = Number(d && d.fromSeq);
+        const toSeq = Number(d && d.toSeq);
+        if (!Number.isInteger(fromSeq) || !Number.isInteger(toSeq) || fromSeq <= toSeq) continue;
+        out.push({ action: String(row.action), fromSeq, toSeq, at: canonicalTs(row.created_at), actorId: row.actor_id === null || row.actor_id === undefined ? null : Number(row.actor_id) });
+    }
+    return out;
+}
+
+const rewindKey = (r: ChainRewind) => `${r.at}|${r.fromSeq}|${r.toSeq}`;
+
+/** A rewind accounts for one loss: the numbers it took back are used again, so the mark keeps the ones it has moved past. */
+const explainsLoss = (r: ChainRewind, mark: HeadMark) =>
+    r.fromSeq >= mark.seq && r.toSeq < mark.seq && !(mark.spent || []).includes(rewindKey(r));
+
+/** Move the mark to the head, unless the place it names was lost with nothing to account for it. */
+async function advanceHeadMark(q: Q): Promise<void> {
+    const head = await chainHead(q);
+    if (!head.seq) return;
+    const mark = readHeadMark();
+    if (mark && mark.seq === head.seq && mark.hash === head.hash) return;
+    const rewinds = await chainRewinds(q);
+    if (mark && !(await headMarkHolds(mark, q)) && !rewinds.some((r) => explainsLoss(r, mark))) return;
+    writeHeadMark({ seq: head.seq, hash: head.hash, spent: rewinds.map(rewindKey) });
+}
+
+/** The place of the newest sealed row (0 for an empty log). */
+async function chainHeadSeq(q: Q = defaultQ()): Promise<number> {
+    return (await chainHead(q)).seq;
+}
+
+/** What an administrator accepting a reported loss needs: the place the mark names, and the head now. */
+async function headLoss(q: Q = defaultQ()): Promise<{ fromSeq: number; toSeq: number } | null> {
+    const mark = readHeadMark();
+    if (!mark || await headMarkHolds(mark, q)) return null;
+    return { fromSeq: mark.seq, toSeq: Math.min((await chainHead(q)).seq, mark.seq - 1) };
+}
+
 /** Seal every unsealed row. Never throws; returns how many rows were sealed. */
 function sealPending(q: Q = defaultQ()): Promise<number> {
     const key = siteKey();
@@ -192,6 +288,7 @@ function sealPending(q: Q = defaultQ()): Promise<number> {
                 total += await sealOnce(q);
             } while (again.has(key));
             if (total) require('./audit-export').scheduleFlush();
+            await advanceHeadMark(q);
         } catch (e: any) {
             log.warn({ err: e }, '[audit-chain] sealing failed (the rows stay pending and are sealed by the next pass)');
         }
@@ -201,7 +298,7 @@ function sealPending(q: Q = defaultQ()): Promise<number> {
     return p;
 }
 
-export type ChainBreak = { seq: number | null; id: number | null; reason: 'start' | 'gap' | 'link' | 'altered' };
+export type ChainBreak = { seq: number | null; id: number | null; reason: 'start' | 'gap' | 'link' | 'altered' | 'truncated' };
 export type ChainReport = {
     ok: boolean;
     complete: boolean;
@@ -211,6 +308,7 @@ export type ChainReport = {
     head: { seq: number; hash: string } | null;
     anchor: { seq: number; hash: string } | null;
     firstBreak: ChainBreak | null;
+    rewinds: ChainRewind[];
 };
 
 /**
@@ -228,6 +326,7 @@ async function verifyAuditChain(opts: { maxMs?: number; batch?: number } = {}, q
         ok: true, complete: true, checked: 0, pending,
         oldestPendingAt: pending && pendingRow ? canonicalTs(pendingRow.oldest) || null : null,
         head: null, anchor: anchor.seq ? { seq: anchor.seq, hash: anchor.hash } : null, firstBreak: null,
+        rewinds: await chainRewinds(q),
     };
     let last: Anchor | null = null;
     let after = 0;
@@ -257,6 +356,11 @@ async function verifyAuditChain(opts: { maxMs?: number; batch?: number } = {}, q
         }
     }
     report.head = last;
+    const mark = report.complete ? readHeadMark() : null;
+    if (mark && !(await headMarkHolds(mark, q)) && !report.rewinds.some((r) => explainsLoss(r, mark))) {
+        report.ok = false;
+        report.firstBreak = { seq: mark.seq, id: null, reason: 'truncated' };
+    }
     return report;
 }
 
@@ -271,5 +375,6 @@ async function prunableRows(cutoff: string, limit: number, q: Q = defaultQ()): P
 
 module.exports = {
     sealPending, verifyAuditChain, prunableRows, recordRemoval, readAnchor, rowHash, canonicalTs,
+    chainHeadSeq, headLoss, forgetHeadMark,
     ANCHOR_OPTION,
 };

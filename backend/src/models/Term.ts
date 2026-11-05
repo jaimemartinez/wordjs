@@ -61,11 +61,12 @@ class Term {
      * next '<', so each pass is linear even on hostile input. Passes repeat until nothing changes:
      * one pass over `<scr<script>ipt>` removes the inner tag and splices a new `<script>` together, so a
      * single replace is not enough. Each pass removes at least one '<', so the loop is bounded by the
-     * number of '<' in the name. Non-strings are returned unchanged.
+     * number of '<' in the first 1000 characters, which is all that is read. Non-strings are returned unchanged.
      */
     static sanitizeName(name: any) {
         if (typeof name !== 'string') return name;
-        let out = name;
+        // Bounded before the passes: each pass is linear, but a crafted name needs one pass per tag.
+        let out = name.length > 1000 ? name.slice(0, 1000) : name;
         let prev;
         do {
             prev = out;

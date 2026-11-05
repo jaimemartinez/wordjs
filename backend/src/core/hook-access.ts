@@ -247,6 +247,7 @@ const POLICY_TABLE: Record<string, HookPolicy> = {
     'wordjs_collab_sweep': HOST_MAINTENANCE,
     'wordjs_audit_prune': HOST_MAINTENANCE,
     'wordjs_analytics_prune': HOST_MAINTENANCE,
+    'wordjs_record_retention_prune': HOST_MAINTENANCE,
 };
 const CORE_HOOK_POLICY: Readonly<Record<string, HookPolicy>> =
     Object.freeze(Object.assign(Object.create(null) as Record<string, HookPolicy>, POLICY_TABLE));

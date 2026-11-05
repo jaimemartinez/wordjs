@@ -12,7 +12,7 @@
  * callbacks change, so activating/deactivating host code that extends it takes effect on the next query.
  */
 
-import { NoSchemaIntrospectionCustomRule, parse as graphqlParse } from 'graphql';
+import { NoSchemaIntrospectionCustomRule, parse as graphqlParse, validate as graphqlValidate } from 'graphql';
 import type { GraphQLSchema, ValidationRule } from 'graphql';
 import { buildCoreSchema } from './schema';
 import { applyExtensions, hookFingerprint, registryVersion } from './extensions';
@@ -85,6 +85,17 @@ export async function extraValidationRules(): Promise<ValidationRule[]> {
     const rules: ValidationRule[] = [createLimitRule(limitOptions())];
     if (!(await introspectionEnabled())) rules.push(NoSchemaIntrospectionCustomRule);
     return rules;
+}
+
+/**
+ * Validate in two steps. graphql-js runs every rule in one walk and does not stop at the first error, so the
+ * limits alone would not spare a document the pairwise field checks: the limits go first, by themselves.
+ * With introspection off, "did you mean" hints would hand out the field names it hides.
+ */
+export function validateWithLimits(schema: any, document: any, rules: any) {
+    const limited = graphqlValidate(schema, document, [createLimitRule(limitOptions())], { maxErrors: 5 });
+    if (limited.length) return limited;
+    return graphqlValidate(schema, document, rules, { hideSuggestions: (rules || []).includes(NoSchemaIntrospectionCustomRule) });
 }
 
 /**

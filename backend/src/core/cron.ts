@@ -87,7 +87,16 @@ function assertCronCapacity(events: any, pluginSlug: any, args: any) {
  * Schedule an event (Async)
  * Equivalent to wp_schedule_event()
  */
+/** The schedule's keys are built from these two, so only a real time and a plain hook name reach it. */
+function assertSchedulable(timestamp: any, hook: any): number {
+    const ts = Number(timestamp);
+    if (!Number.isSafeInteger(ts) || ts < 0) throw new Error('Cron schedule denied: the timestamp is not a time.');
+    if (typeof hook !== 'string' || !/^[A-Za-z0-9_:./-]{1,200}$/.test(hook)) throw new Error('Cron schedule denied: invalid hook name.');
+    return ts;
+}
+
 async function scheduleEvent(timestamp: any, recurrence: any, hook: any, args = []) {
+    timestamp = assertSchedulable(timestamp, hook);
     const events = await getCronEventsForWrite();
     const pluginSlug = getCurrentPlugin();
     assertCronCapacity(events, pluginSlug, args);
@@ -115,6 +124,7 @@ async function scheduleEvent(timestamp: any, recurrence: any, hook: any, args = 
  * Equivalent to wp_schedule_single_event()
  */
 async function scheduleSingleEvent(timestamp: any, hook: any, args = []) {
+    timestamp = assertSchedulable(timestamp, hook);
     const events = await getCronEventsForWrite();
     const pluginSlug = getCurrentPlugin();
     assertCronCapacity(events, pluginSlug, args);
@@ -233,7 +243,7 @@ async function runCron() {
  * certificates, maintenance) act on the main site's database and files — an event naming one of them on
  * another site is dropped, not run.
  */
-const SECONDARY_SITE_CRON_HOOKS = new Set(['publish_future_post', 'wordjs_analytics_prune', 'wordjs_collab_sweep', 'wordjs_scheduled_backup']);
+const SECONDARY_SITE_CRON_HOOKS = new Set(['publish_future_post', 'wordjs_analytics_prune', 'wordjs_record_retention_prune', 'wordjs_collab_sweep', 'wordjs_scheduled_backup']);
 
 /**
  * The recurring core events of a site other than the main one, scheduled when the site is prepared
@@ -245,6 +255,8 @@ async function initSiteCronEvents(): Promise<void> {
         if (!(await nextScheduled('wordjs_collab_sweep'))) await scheduleEvent(Date.now(), 'hourly', 'wordjs_collab_sweep');
         const { HOOK: ANALYTICS_PRUNE_HOOK } = require('./analytics-retention');
         if (!(await nextScheduled(ANALYTICS_PRUNE_HOOK))) await scheduleEvent(Date.now(), 'daily', ANALYTICS_PRUNE_HOOK);
+        const { HOOK: RECORD_PRUNE_HOOK } = require('./record-retention');
+        if (!(await nextScheduled(RECORD_PRUNE_HOOK))) await scheduleEvent(Date.now(), 'daily', RECORD_PRUNE_HOOK);
         const backupFreq = await getOption('backup_schedule', 'off');
         if (backupFreq !== 'off' && !(await nextScheduled('wordjs_scheduled_backup'))) {
             await scheduleEvent(Date.now(), backupFreq, 'wordjs_scheduled_backup');
@@ -263,7 +275,7 @@ function cronHookAllowedHere(event: any): boolean {
  * The core events of a site other than the main one that never reach plugin or theme code (no hook a
  * plugin can listen to fires during them), so they run without starting the site's workers.
  */
-const WORKERLESS_CRON_HOOKS = new Set(['wordjs_analytics_prune', 'wordjs_collab_sweep', 'wordjs_scheduled_backup']);
+const WORKERLESS_CRON_HOOKS = new Set(['wordjs_analytics_prune', 'wordjs_record_retention_prune', 'wordjs_collab_sweep', 'wordjs_scheduled_backup']);
 
 /** Start the current site's workers if a due event of this pass may need them (no-op on the main site). */
 async function wakeForDueEvents(events: any, timestamps: string[], now: number): Promise<void> {

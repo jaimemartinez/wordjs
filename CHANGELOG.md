@@ -6,6 +6,50 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Security
+- **More actions ask for your password.** Restoring a backup, importing accounts, adding a privileged capability to
+  a role, and accepting a plugin's changed files now take your password (and a code with two-factor authentication).
+  So does pointing a stored AI key or S3 secret at another server. `POST /users` only takes a role as a name.
+- **The audit log notices when its newest entries disappear.** A mark kept outside the database lets `GET /audit/verify`
+  and Site Health report them as `truncated`, even after new entries are written. A restore records how far it went
+  back (`rewinds`), and Admin → Audit can accept any other loss with your password (`POST /audit/head/accept`). Role
+  changes and accepted plugin files are now audited.
+- **The audit copy is stricter about where it connects.** A private receiver can never be a link-local address, only
+  the main site of a network can allow one, and delivery errors no longer describe the network.
+- **Accepting changed plugin files is for network administrators**, as plugin code is shared by the whole network.
+
+- **Plugin routes answer with a short list of headers.** Caching and content metadata and the plugin's own `x-`
+  headers; everything else is dropped, and cookie options are copied by name.
+- **The plugin SQL guard is stricter.** It reads the table of `x IN tbl`, refuses non-ASCII text outside literals and
+  quoted names, and refuses more file, session and query-in-a-string functions.
+- **A plugin's options and tables are its own.** Slugs that spell a core setting (`upload`, `comment`, `media`…) are
+  reserved, core settings stay out of reach whatever the slug, and deleting a plugin never drops the tables of another
+  plugin whose slug starts the same way. A cron entry must be a real time and a plain hook name.
+- **More actions ask for your password:** installing a certificate and changing HTTPS or auto-renewal settings
+  (interactive sessions only), creating a webhook or changing its address, and loosening the two-factor policy.
+- **More changes reach the audit log:** certificates, webhooks, single settings, role deletion, theme files, widgets,
+  the site chrome, taxonomies and deleted form submissions.
+- **A removed cluster node loses its certificate.** It can no longer come back on another port.
+- **Rendering pages no longer shares a visitor's budget.** Server-side reads have their own limit, and a page built
+  from a refused read is never cached.
+- **Other limits:** an unanswered WebSocket handshake ends after 5 seconds, `Accept: text/event-stream` extends a
+  timeout only on GET, GraphQL checks its limits before the costlier validation and hides field suggestions when
+  introspection is off, portal sign-in has a budget across all locations, and subscription streams recheck the
+  two-factor rule and charge what an event selects.
+- **Form submissions and webhook deliveries have an age:** 730 and 30 days by default (`forms_retention_days`,
+  `webhook_deliveries_retention_days`; 0 keeps them).
+
+### Fixed
+- The audit copy keeps its place when it is turned off and back on towards the same receiver, and a delivery can no
+  longer hang on a receiver that trickles its answer or closes in the middle of it.
+- Two simultaneous requests can no longer both start an update.
+- The online store's Stripe webhook reaches the plugin, and a reloaded payment link no longer turns a cancelled
+  donation or order back to paid.
+- `/menus/location/constructor` answers 404 instead of 500, and hidden taxonomies are not listed to visitors.
+- The trusted proxy list refuses ranges that would stop the server or trust everyone.
+- The Docker image refuses an external database without `WORDJS_DB_PASSWORD`.
+- AI suggestions and GraphQL streams count per site: user ids repeat across a network.
+
 ## [2.11.27] - 2026-10-31
 
 ### Changed

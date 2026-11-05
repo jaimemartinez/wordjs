@@ -956,8 +956,8 @@ describe('R2: retiring an address retires the sessions minted on it', () => {
             refused(await onMain('delete', `${API}/roles/${slug}`, bound), 'DELETE /roles/:slug');
             assert.strictEqual((await onMain('delete', `${API}/roles/${slug}`, main)).status, 200);
 
-            refused(await onMain('put', `${API}/auth/mfa/policy`, bound).send({ requiredRoles: [] }), 'PUT /auth/mfa/policy');
-            assert.strictEqual((await onMain('put', `${API}/auth/mfa/policy`, main).send({ requiredRoles: [] })).status, 200);
+            refused(await onMain('put', `${API}/auth/mfa/policy`, bound).send({ currentPassword: PASSWORD, requiredRoles: [] }), 'PUT /auth/mfa/policy');
+            assert.strictEqual((await onMain('put', `${API}/auth/mfa/policy`, main).send({ currentPassword: PASSWORD, requiredRoles: [] })).status, 200);
 
             const current = (await onMain('get', `${API}/settings/all`, main)).body;
             const blogname = current.blogname;
@@ -985,9 +985,9 @@ describe('R2: retiring an address retires the sessions minted on it', () => {
             const options = require('../core/options');
             const main = sessionFrom(await login(direct('post', `${API}/auth/login`, 'example.com'), 'http://example.com'));
             const bound = await aliasSession();
-            const importing = (token: string, settings: Record<string, unknown>) => onMain('post', `${API}/import`, token).send({ data: { version: '1.0', settings } });
+            const importing = (token: string, settings: Record<string, unknown>) => onMain('post', `${API}/import`, token).send({ currentPassword: PASSWORD, data: { version: '1.0', settings } });
             const saved = { rev: await options.getOption('require_email_verification', '0'), ready: await options.getOption('mail_delivery_ready', '0') };
-            const set = await onMain('put', `${API}/auth/mfa/policy`, main).send({ requiredRoles: ['editor'], graceDays: 7 });
+            const set = await onMain('put', `${API}/auth/mfa/policy`, main).send({ currentPassword: PASSWORD, requiredRoles: ['editor'], graceDays: 7 });
             assert.strictEqual(set.status, 200, JSON.stringify(set.body));
             try {
                 // The two-factor policy has one writer, PUT /auth/mfa/policy: an import skips it, whoever sends it.
@@ -1025,7 +1025,7 @@ describe('R2: retiring an address retires the sessions minted on it', () => {
                 assert.deepStrictEqual(registration.body.results.settings.skipped.sort(), ['default_role', 'users_can_register']);
                 assert.strictEqual(String(await options.getOption('users_can_register', '0')), '0');
             } finally {
-                await onMain('put', `${API}/auth/mfa/policy`, main).send({ requiredRoles: [] });
+                await onMain('put', `${API}/auth/mfa/policy`, main).send({ currentPassword: PASSWORD, requiredRoles: [] });
                 await options.updateOption('require_email_verification', saved.rev);
                 await options.updateOption('mail_delivery_ready', saved.ready);
             }

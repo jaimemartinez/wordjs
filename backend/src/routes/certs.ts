@@ -3,7 +3,8 @@ const express = require('express');
 const log = require('../core/module-logger').moduleLogger('routes/certs');
 const router = express.Router();
 const certManager = require('../core/cert-manager');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, sessionOnly, accountAuthorityOnly } = require('../middleware/auth');
+const { auditOnSuccess } = require('../core/audit');
 const { isAdmin } = require('../middleware/permissions');
 // Every catch-all below answers 500 with the caught error. An error nobody recognised is the
 // driver's, not ours, so its words go to the log and the caller gets the operation that failed.
@@ -123,7 +124,8 @@ function badFlag(res: Response, name: string) {
  *             schema:
  *               $ref: '#/components/schemas/PlainError'
  */
-router.post('/auto-provision', async (req: Request, res: Response) => {
+router.post('/auto-provision', sessionOnly, accountAuthorityOnly, auditOnSuccess('system.cert.change', 'config', () => 'auto-provision'), async (req: Request, res: Response) => {
+    if (await require('./users').requireSudoConfirmation(req, res)) return;
     try {
         const { domain, domains, email } = req.body;
         const staging = bodyFlag(req.body.staging);
@@ -407,7 +409,8 @@ router.post('/dns-check', async (req: Request, res: Response) => {
  *             schema:
  *               $ref: '#/components/schemas/PlainError'
  */
-router.post('/dns-finish', async (req: Request, res: Response) => {
+router.post('/dns-finish', sessionOnly, accountAuthorityOnly, auditOnSuccess('system.cert.change', 'config', () => 'dns-finish'), async (req: Request, res: Response) => {
+    if (await require('./users').requireSudoConfirmation(req, res)) return;
     try {
         const { step1Data, email } = req.body;
         const staging = bodyFlag(req.body.staging);
@@ -494,7 +497,8 @@ router.post('/dns-finish', async (req: Request, res: Response) => {
  *             schema:
  *               $ref: '#/components/schemas/PlainError'
  */
-router.post('/upload-custom', async (req: Request, res: Response) => {
+router.post('/upload-custom', sessionOnly, accountAuthorityOnly, auditOnSuccess('system.cert.change', 'config', () => 'upload-custom'), async (req: Request, res: Response) => {
+    if (await require('./users').requireSudoConfirmation(req, res)) return;
     try {
         const { key, cert } = req.body;
         if (!key || !cert) return res.status(400).json({ error: 'Certificate and Key content required' });
@@ -729,7 +733,8 @@ router.post('/check', async (req: Request, res: Response) => {
  *             schema:
  *               $ref: '#/components/schemas/PlainError'
  */
-router.post('/config', async (req: Request, res: Response) => {
+router.post('/config', sessionOnly, accountAuthorityOnly, auditOnSuccess('system.cert.change', 'config', () => 'config'), async (req: Request, res: Response) => {
+    if (await require('./users').requireSudoConfirmation(req, res)) return;
     try {
         const { port } = req.body;
         const sslEnabled = bodyFlag(req.body.sslEnabled);
@@ -967,7 +972,8 @@ router.get('/acme-config', async (req: Request, res: Response) => {
  *             schema:
  *               $ref: '#/components/schemas/PlainError'
  */
-router.post('/acme-config', async (req: Request, res: Response) => {
+router.post('/acme-config', sessionOnly, accountAuthorityOnly, auditOnSuccess('system.cert.change', 'config', () => 'acme-config'), async (req: Request, res: Response) => {
+    if (await require('./users').requireSudoConfirmation(req, res)) return;
     try {
         const body = req.body || {};
         const { email, domains, challengeType, http01Port } = body;
@@ -1109,7 +1115,7 @@ router.post('/acme-config', async (req: Request, res: Response) => {
  *             schema:
  *               $ref: '#/components/schemas/PlainError'
  */
-router.post('/renew-now', async (req: Request, res: Response) => {
+router.post('/renew-now', auditOnSuccess('system.cert.renew', 'config'), async (req: Request, res: Response) => {
     try {
         const result = await certManager.renewIfDue({ force: true });
         res.json(result);

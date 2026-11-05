@@ -1904,6 +1904,15 @@ const ALLOWED_BRIDGE_METHODS = new Set([
     'dns.resolveMx', 'dns.resolveTxt', 'dns.resolve4', 'dns.resolve6', 'dns.resolve',
 ]);
 // Navigate "options.get" / "mail" on the api object and call it with args.
+/** The response headers a plugin route may set: caching and content metadata, and its own `x-` headers. */
+const PLUGIN_RESPONSE_HEADERS = new Set(['cache-control', 'etag', 'last-modified', 'expires', 'content-language', 'content-disposition', 'vary', 'retry-after']);
+const HOST_X_HEADER_RE = /^x-(?:frame-options|content-type-options|xss-protection|powered-by|forwarded|real-ip|wordjs|request-id|csrf|dns-prefetch-control|permitted-cross-domain-policies|download-options)/;
+function pluginHeaderAllowed(name: string): boolean {
+    if (!/^[A-Za-z0-9-]{1,64}$/.test(name)) return false;
+    const lower = name.toLowerCase();
+    return PLUGIN_RESPONSE_HEADERS.has(lower) || (lower.startsWith('x-') && !HOST_X_HEADER_RE.test(lower));
+}
+
 function callApi(api: any, method: string, args: any[]) {
     if (!ALLOWED_BRIDGE_METHODS.has(String(method))) throw new Error(`Bridge method not permitted via call: ${method}`);
     const parts = String(method).split('.');
@@ -3337,14 +3346,12 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                             // XSS on the API origin, #15), refresh (open redirect, #21) and every access-control-*
                             // header (CORS override, #21). The body is ALWAYS sent via res.json below, so dropping
                             // content-type lets Express set the correct application/json.
-                            const UNSAFE = new Set(['set-cookie', 'set-cookie2', 'content-security-policy', 'strict-transport-security', 'location', 'content-type', 'refresh']);
-                            const safe: any = {};
+                            // An ALLOWLIST, written header by header: a list of what to refuse has to name every
+                            // header that matters, and handing Express an object lets it walk inherited keys.
                             for (const [k, v] of Object.entries(r.headers)) {
-                                const lk = String(k).toLowerCase();
-                                if (UNSAFE.has(lk) || lk.startsWith('access-control-')) continue;
-                                safe[k] = v;
+                                if (!pluginHeaderAllowed(k) || (typeof v !== 'string' && typeof v !== 'number')) continue;
+                                res.setHeader(k, String(v));
                             }
-                            res.set(safe);
                         }
                         // Replay cookies the isolate set/cleared on the real response.
                         applyRouteCookies(r.cookies);
@@ -3370,19 +3377,21 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                         if (Array.isArray(cookies)) {
                             for (const c of cookies.slice(0, 20)) { // (#5) cap cookies per reply
                                 let name = String(c.name || '');
-                                let options = c.options || {};
+                                // Only the fields a plugin may choose, copied by name: nothing it sends is merged.
+                                const given = c.options && typeof c.options === 'object' ? c.options : {};
+                                const options: any = {};
+                                for (const f of ['httpOnly', 'secure', 'sameSite', 'maxAge', 'signed']) {
+                                    if (Object.prototype.hasOwnProperty.call(given, f)) options[f] = given[f];
+                                }
                                 // (#5) Plugins may set cookies ONLY in their own namespace and scope: never
                                 // overwrite a host cookie (wordjs_token/session), never widen scope via
                                 // `domain`, and never escape their route path; clamp lifetime. Applied to ALL
                                 // plugins (no trust exemption).
                                 if (HOST_AUTH_COOKIE_RE.test(name)) { log.warn({ slug: logSafe(slug), name: logSafe(name) }, `[Isolate ${logSafe(slug)}] dropped cookie '${logSafe(name)}' (would shadow a host cookie).`); continue; }
                                 if (!name.startsWith(cookieNs)) name = cookieNs + name;
-                                options = { ...options };
-                                delete options.domain;
                                 options.path = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}`;
                                 const MAX_AGE = 7 * 24 * 3600 * 1000;
                                 if (typeof options.maxAge === 'number' && options.maxAge > MAX_AGE) options.maxAge = MAX_AGE;
-                                delete options.expires; // prefer clamped maxAge over an arbitrary far-future expiry
                                 if (c.clear) res.clearCookie(name, options);
                                 else res.cookie(name, c.value, options);
                             }
@@ -3530,7 +3539,9 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value });
             } else if (msg.kind === 'smtp-status') {
                 const st = require('./inbound-smtp').getStatus();
-                worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value: { ...st, mine: st.owner === slug && siteId === siteContext.PRIMARY_SITE_ID } });
+                // The listener's addresses and TLS state are its owner's: any other plugin learns only that it is not its own.
+                const mine = st.owner === slug && siteId === siteContext.PRIMARY_SITE_ID;
+                worker.postMessage({ kind: 'reply', id: msg.id, ok: true, value: mine ? { ...st, mine } : { mine: false } });
             } else if (msg.kind === 'smtp-reply') {
                 rpcSettle(pendingSmtp, msg, msg.value);
             }
@@ -3826,7 +3837,7 @@ async function reloadIsolatedPlugin(slug: string): Promise<any> {
     return result;
 }
 
-module.exports = {
+module.exports = { _pluginHeaderAllowed: pluginHeaderAllowed,
     loadIsolatedPlugin, unloadIsolatedPlugin, reloadIsolatedPlugin,
     isIsolated: (slug: string) => isolates.has(isolateKey(slug)),
     // The policy fingerprint the RUNNING child of `slug` was spawned with (undefined when none is running).

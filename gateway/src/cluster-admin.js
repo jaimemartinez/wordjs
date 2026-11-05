@@ -32,6 +32,8 @@ function removedStore(file) {
     return {
         has: (url) => set.has(String(url)),
         add: (url) => { set.add(String(url)); save(); },
+        addCertificate: (fingerprint) => { if (fingerprint) { set.add(`cert:${fingerprint}`); save(); } },
+        hasCertificate: (fingerprint) => !!fingerprint && set.has(`cert:${fingerprint}`),
         /** Forget every removed URL on `host` (a new join token was minted for it). */
         clearHost: (host) => {
             const h = String(host || '').toLowerCase();
@@ -45,7 +47,7 @@ function removedStore(file) {
             if (n) save();
             return n;
         },
-        list: () => [...set],
+        list: () => [...set].filter((u) => !u.startsWith('cert:')),
         reload: () => { set = load(); },
     };
 }

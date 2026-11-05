@@ -12,6 +12,7 @@ import type {} from 'multer';
 
 const express = require('express');
 const router = express.Router();
+const { auditOnSuccess } = require('../core/audit');
 const AdmZip = require('adm-zip');
 const multer = require('multer');
 const fs = require('fs');
@@ -187,7 +188,7 @@ function writeJsonAtomic(target: string, text: string): void {
  *       400:
  *         description: Invalid file or zip slip
  */
-router.post('/upload', authenticate, isAdmin, networkThemeFiles, upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
+router.post('/upload', authenticate, isAdmin, networkThemeFiles, auditOnSuccess('theme.upload', 'theme', (req: Request) => String(req.params.slug || '')), upload.single('theme'), asyncHandler(async (req: Request, res: Response) => {
     if (!req.file) {
         return res.status(400).json({ error: 'No file uploaded' });
     }
@@ -423,7 +424,7 @@ router.get('/', asyncHandler(async (req: Request, res: Response) => {
  *       409:
  *         description: Theme already exists
  */
-router.post('/', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
+router.post('/', authenticate, isAdmin, networkThemeFiles, auditOnSuccess('theme.create', 'theme', (req: Request) => String(req.params.slug || '')), asyncHandler(async (req: Request, res: Response) => {
     const body = isPlainObject(req.body) ? req.body : {};
     // SECURITY: Validate slug (same gate as the sibling routes; typeof first — the regex
     // would stringify a missing slug into the literal "undefined", which passes the charset)
@@ -546,7 +547,7 @@ router.post('/', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (r
  *       409:
  *         description: Theme was not created by the WordJS writer
  */
-router.put('/:slug', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
+router.put('/:slug', authenticate, isAdmin, networkThemeFiles, auditOnSuccess('theme.edit', 'theme', (req: Request) => String(req.params.slug || '')), asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: the slug picks the directory this handler WRITES theme.json and style.css into, so it
     // uses the resolved-and-contained path the gate returns rather than re-joining the raw param.
     const themeDir = resolveThemeDirOr400(req.params.slug);
@@ -847,7 +848,7 @@ router.put('/:slug/permissions', authenticate, isAdmin, asyncHandler(async (req:
  *       200:
  *         description: Default theme restored
  */
-router.post('/default', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
+router.post('/default', authenticate, isAdmin, networkThemeFiles, auditOnSuccess('theme.restore_default', 'theme', (req: Request) => String(req.params.slug || '')), asyncHandler(async (req: Request, res: Response) => {
     // Admin explicitly asked to restore the default theme → force overwrite. This is the ONLY path
     // that clobbers files inside themes/: boot no longer scaffolds anything (it verifies and warns —
     // see index.ts), and the install wizard provisions once, without force. A plain
@@ -882,7 +883,7 @@ router.post('/default', authenticate, isAdmin, networkThemeFiles, asyncHandler(a
  *       200:
  *         description: Theme deleted
  */
-router.delete('/:slug', authenticate, isAdmin, networkThemeFiles, asyncHandler(async (req: Request, res: Response) => {
+router.delete('/:slug', authenticate, isAdmin, networkThemeFiles, auditOnSuccess('theme.delete', 'theme', (req: Request) => String(req.params.slug || '')), asyncHandler(async (req: Request, res: Response) => {
     // SECURITY: Validate slug
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid theme slug' });

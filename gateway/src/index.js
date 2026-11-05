@@ -9,6 +9,7 @@
     }
 })();
 
+const crypto = require('crypto');
 require('dotenv').config();
 const express = require('express');
 const rateLimit = require('express-rate-limit');
@@ -507,6 +508,7 @@ if (cluster.isPrimary) {
                 inflight.set(key, axios.get(`${url}/health`, {
                     timeout: 5000,
                     httpsAgent,
+                    maxRedirects: 0, // a node's answer never sends this probe somewhere else
                     validateStatus: (status) => status < 500 // Accept 4xx as "alive" if path missing
                 }).then((res) => {
                     // The certificate the node answered with: when it expires, for Admin → Servers (QA
@@ -679,7 +681,7 @@ if (cluster.isPrimary) {
                 // Extracted to src/identity.js so the cluster control plane's ONE authorization
                 // primitive is reachable from a test (gateway/test/cluster-secret.test.js drives it
                 // over a real mTLS handshake). Behaviour is unchanged for every call site below.
-                const requireIdentity = (allowedCns) => identity.requireIdentity(allowedCns, logger);
+                const requireIdentity = (allowedCns) => identity.requireIdentity(allowedCns, logger, removedNodes.hasCertificate);
 
                 // A registering node may only claim routes that belong to its ROLE (its cert CN) — mTLS
                 // proves *who* the peer is, but without this it could serve *anything*. The exploit: a
@@ -704,6 +706,8 @@ if (cluster.isPrimary) {
                     const san = (cert && cert.subjectaltname) || ''; // "DNS:host, IP Address:1.2.3.4"
                     return san.split(',').some(e => { const v = e.trim(); const i = v.indexOf(':'); return (i >= 0 ? v.slice(i + 1) : v).trim().toLowerCase() === h; });
                 };
+                // The certificate each node last registered with, so removing the node can revoke it.
+                const nodeCertificates = new Map();
                 internalApp.post('/register', requireIdentity(['backend', 'frontend']), (req, res) => {
                     const cert = req.socket.getPeerCertificate();
                     const cn = cert && cert.subject && cert.subject.CN;
@@ -756,6 +760,7 @@ if (cluster.isPrimary) {
                         logger.warn(`[Gateway] [Internal] REGISTER DENIED: '${logSafe(targetUrl)}' was removed from the cluster by an administrator`);
                         return res.status(403).json({ error: 'This node was removed from the cluster. Mint a new join token to admit it again.', code: 'node_removed' });
                     }
+                    if (cert.fingerprint256) nodeCertificates.set(targetUrl, cert.fingerprint256);
                     // Ownership: a peer may only (re)register a target url that is unowned or already its own — it
                     // can NEVER touch (and thus evict) another identity's target (e.g. the backend's /api, which
                     // otherwise let a frontend evict it and capture /api/v1/auth via the `/` catch-all).
@@ -998,6 +1003,8 @@ if (cluster.isPrimary) {
                     // NEXT requests; the backend answering now finishes its answer.
                     const routes = clusterAdmin.removeNode(registry, targetOwner, nodeUrl);
                     removedNodes.add(nodeUrl);
+                    // Its certificate goes with it: one node, whichever port it comes back on.
+                    if (nodeCertificates.has(nodeUrl)) removedNodes.addCertificate(nodeCertificates.get(nodeUrl));
                     saveRegistry();
                     broadcastRegistry();
                     logger.info(`[Gateway] [Cluster] a ${known.role === 'frontend' ? 'frontend' : 'backend'} node was removed from the admin panel (${Number(routes)} route(s))`);
@@ -1420,7 +1427,17 @@ if (cluster.isPrimary) {
     // cannot rotate X-Forwarded-For past it. Mounted before routing so it covers proxied traffic too.
     const { createPublicLimiter } = require('./rate-limit');
     app.use((req, res, next) => { warnUntrustedProxy(req); next(); });
-    app.use(createPublicLimiter(config, logger));
+    const ssrReadProof = () => {
+        const secret = config.revalidateSecret;
+        return secret ? crypto.createHmac('sha256', String(secret)).update('wordjs-ssr-read-v1').digest() : null;
+    };
+    const isSsrRead = (req) => {
+        if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+        const expected = ssrReadProof();
+        const given = Buffer.from(String(req.headers['x-wordjs-ssr'] || ''), 'hex');
+        return !!expected && given.length === expected.length && crypto.timingSafeEqual(given, expected);
+    };
+    app.use(createPublicLimiter(config, logger, { isSsrRead }));
 
     app.get('/gateway-status', requireAuth, (req, res) => {
         res.send('<h1>Gateway Active</h1>');
@@ -1540,6 +1557,8 @@ if (cluster.isPrimary) {
         // XFP/XFPort are dropped for xfwd to write the listener's own (src/host-edge.js).
         // (The internal mTLS listener is a separate app, reached only by cert-authenticated peers.)
         hostEdge.pinForwardedHeaders(req);
+        // Only a proxy the operator trusts may name the request; a client's id must not reach the backend's logs.
+        if (!trustsProxy) delete req.headers['x-request-id'];
         const upstream = getTarget(req.url) || bootstrapTarget(req.url);
         const agent = upstream ? agentFor(upstream) : undefined;
         if (upstream && agent === null) {
@@ -1548,7 +1567,8 @@ if (cluster.isPrimary) {
         }
         if (upstream) {
             const target = upstream.target;
-            const isSSE = (req.headers['accept'] || '').includes('text/event-stream');
+            // Only a GET streams: on anything else the header would just buy an hour on the socket.
+            const isSSE = req.method === 'GET' && (req.headers['accept'] || '').includes('text/event-stream');
             // Behind a trusted proxy the backend is told the client Express resolved, not the proxy.
             if (trustsProxy) runtimeSettings.stateForwardedHeaders(req, req.ip);
 
@@ -1671,6 +1691,20 @@ if (cluster.isPrimary) {
     const upgradeLimiter = require('./rate-limit').createUpgradeLimiter(config, {
         onShared: (peer, n) => warnUntrustedProxy.sharedAddress(peer, n),
     });
+    // An upgrade the upstream never answers would hold a socket of that role's pool for ever: http-proxy sets no
+    // timeout here and does not watch the client before the 101. A handshake gets a few seconds, and ends with
+    // its client either way.
+    const UPGRADE_HANDSHAKE_MS = 5000;
+    proxy.on('proxyReqWs', (proxyReq, _req, clientSocket) => {
+        const deadline = setTimeout(() => proxyReq.destroy(), UPGRADE_HANDSHAKE_MS);
+        if (deadline.unref) deadline.unref();
+        const settled = () => clearTimeout(deadline);
+        proxyReq.once('upgrade', settled);
+        proxyReq.once('response', settled);
+        proxyReq.once('close', settled);
+        clientSocket.once('close', () => { settled(); proxyReq.destroy(); });
+    });
+
     server.on('upgrade', (req, socket, head) => {
         // Upgrades never pass through the Express chain above, so the edge check and the forwarded-header
         // pins are applied here too: a WebSocket to an address the site does not answer is refused, and

@@ -42,9 +42,10 @@ class Analytics {
         let visitor_ip = '0.0.0.0';
         if (ip) {
             const crypto = require('crypto');
-            // Use day as salt to rotate hashes daily for privacy
+            // Rotates daily for privacy. Keyed with a secret that is not in the database: unkeyed, whoever
+            // reads this table could walk the whole IPv4 space and recover every address.
             const date = new Date().toISOString().split('T')[0];
-            visitor_ip = crypto.createHash('sha256').update(`${ip}-${date}`).digest('hex').substring(0, 16);
+            visitor_ip = crypto.createHmac('sha256', `${require('../config/app').jwt.secret}|visitor-ip`).update(`${ip}-${date}`).digest('hex').substring(0, 16);
         }
 
         await dbAsync.run(
