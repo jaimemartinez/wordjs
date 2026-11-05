@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.28] - 2026-11-05
+
 ### Security
 - **More actions ask for your password.** Restoring a backup, importing accounts, adding a privileged capability to
   a role, and accepting a plugin's changed files now take your password (and a code with two-factor authentication).
