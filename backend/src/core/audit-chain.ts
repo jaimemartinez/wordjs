@@ -188,7 +188,7 @@ function siteKey(): string {
     try { return String(require('./site-context').currentSiteIdOrNull() ?? 'none'); } catch { return 'none'; }
 }
 
-type HeadMark = { seq: number; hash: string };
+type HeadMark = { seq: number; hash: string; spent?: string[] };
 export type ChainRewind = { action: string; fromSeq: number; toSeq: number; at: string; actorId: number | null };
 
 /** The rows that say the log went back on purpose. */
@@ -202,7 +202,9 @@ function headMarkFile(): string {
 function readHeadMark(): HeadMark | null {
     try {
         const m = JSON.parse(fs.readFileSync(headMarkFile(), 'utf8'));
-        return m && Number.isInteger(m.seq) && m.seq > 0 && typeof m.hash === 'string' ? { seq: m.seq, hash: m.hash } : null;
+        return m && Number.isInteger(m.seq) && m.seq > 0 && typeof m.hash === 'string'
+            ? { seq: m.seq, hash: m.hash, spent: Array.isArray(m.spent) ? m.spent.map(String) : [] }
+            : null;
     } catch { return null; }
 }
 
@@ -244,7 +246,11 @@ async function chainRewinds(q: Q): Promise<ChainRewind[]> {
     return out;
 }
 
-const explainsLoss = (r: ChainRewind, mark: HeadMark) => r.fromSeq >= mark.seq && r.toSeq < mark.seq;
+const rewindKey = (r: ChainRewind) => `${r.at}|${r.fromSeq}|${r.toSeq}`;
+
+/** A rewind accounts for one loss: the numbers it took back are used again, so the mark keeps the ones it has moved past. */
+const explainsLoss = (r: ChainRewind, mark: HeadMark) =>
+    r.fromSeq >= mark.seq && r.toSeq < mark.seq && !(mark.spent || []).includes(rewindKey(r));
 
 /** Move the mark to the head, unless the place it names was lost with nothing to account for it. */
 async function advanceHeadMark(q: Q): Promise<void> {
@@ -252,8 +258,9 @@ async function advanceHeadMark(q: Q): Promise<void> {
     if (!head.seq) return;
     const mark = readHeadMark();
     if (mark && mark.seq === head.seq && mark.hash === head.hash) return;
-    if (mark && !(await headMarkHolds(mark, q)) && !(await chainRewinds(q)).some((r) => explainsLoss(r, mark))) return;
-    writeHeadMark({ seq: head.seq, hash: head.hash });
+    const rewinds = await chainRewinds(q);
+    if (mark && !(await headMarkHolds(mark, q)) && !rewinds.some((r) => explainsLoss(r, mark))) return;
+    writeHeadMark({ seq: head.seq, hash: head.hash, spent: rewinds.map(rewindKey) });
 }
 
 /** The place of the newest sealed row (0 for an empty log). */

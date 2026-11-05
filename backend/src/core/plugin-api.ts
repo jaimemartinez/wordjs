@@ -1188,8 +1188,9 @@ function createPluginApi(slug: string) {
                 assertIoGuard(slug, src, false);
                 // Through a descriptor that refuses a link: the path was judged a moment ago, and this runs in the host.
                 const ownDir = pluginBaseDir(slug) + path.sep, ownData = require('./sandbox-paths').ownDataDir(ROOT_DIR, slug) + path.sep;
-                if (!src.startsWith(ownDir) && !src.startsWith(ownData)) throw new Error(`🛡️ Plugin path denied: '${relPath}'.`);
-                const reader = await fs.promises.open(src, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
+                const readable = path.resolve(src);
+                if (!readable.startsWith(readable.startsWith(ownData) ? ownData : ownDir)) throw new Error(`🛡️ Plugin path denied: '${relPath}'.`);
+                const reader = await fs.promises.open(readable, fs.constants.O_RDONLY | (fs.constants.O_NOFOLLOW || 0));
                 try { return await reader.readFile(encoding); } finally { await reader.close(); }
             },
             async write(relPath: string, data: any) {
@@ -1231,8 +1232,9 @@ function createPluginApi(slug: string) {
                 }
                 await fs.promises.mkdir(path.dirname(target), { recursive: true });
                 const ownDir = pluginBaseDir(slug) + path.sep, ownData = require('./sandbox-paths').ownDataDir(ROOT_DIR, slug) + path.sep;
-                if (!target.startsWith(ownDir) && !target.startsWith(ownData)) throw new Error(`🛡️ Plugin path denied: '${relPath}'.`);
-                const writer = await fs.promises.open(target, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW || 0), 0o644);
+                const writable = path.resolve(target);
+                if (!writable.startsWith(writable.startsWith(ownData) ? ownData : ownDir)) throw new Error(`🛡️ Plugin path denied: '${relPath}'.`);
+                const writer = await fs.promises.open(writable, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW || 0), 0o644);
                 try { return await writer.writeFile(data); } finally { await writer.close(); }
             }
         },

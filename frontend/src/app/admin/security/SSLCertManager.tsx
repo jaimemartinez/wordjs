@@ -106,7 +106,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             setKeyContent("");
             setCertContent("");
         } catch (e: any) {
-            if (stepUp.absorb(e)) { setStatus("idle"); return; }
+            if (stepUp.absorb(e)) { setLogs([]); setStatus("idle"); return; }
             setError(e.message);
             addLog(t('ssl.log.error').replace('{error}', () => e.message));
             setStatus("error");
@@ -156,7 +156,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                 setStatus("step1_dns");
             }
         } catch (e: any) {
-            if (stepUp.absorb(e)) { setStatus("idle"); return; }
+            if (stepUp.absorb(e)) { setLogs([]); setStatus("idle"); return; }
             const refused = certificateNameProblemFromCode(e && e.code);
             const message = refused ? t(CERTIFICATE_NAME_MESSAGE_KEY[refused]).replace('{domain}', () => domain.trim()) : e.message;
             setNameProblem(refused);
@@ -215,8 +215,6 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                     <span className="font-medium text-sm">{t('ssl.certError').replace('{error}', () => certInfo.error || '')}</span>
                 </div>
             )}
-
-            <MfaStepUpFields stepUp={stepUp} withCode={false} />
 
             {loading && (
                 <div className="text-center py-4 text-blue-500">
@@ -388,6 +386,8 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                     </div>
                 </div>
             )}
+
+            <MfaStepUpFields stepUp={stepUp} withCode={false} />
 
             <div className="flex justify-end">
                 {status !== "step1_dns" && (

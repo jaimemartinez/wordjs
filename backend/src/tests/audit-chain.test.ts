@@ -111,6 +111,8 @@ async function engineChain(t: any, kind: 'postgres' | 'mysql') {
         cleanup = async () => { try { await driver.close(); } catch { /* */ } try { await admin.query(`DROP DATABASE IF EXISTS ${name}`); } catch { /* */ } try { await admin.end(); } catch { /* */ } };
     }
     const q = { run: (x: string, p: any[] = []) => driver.run(x, p), get: (x: string, p: any[] = []) => driver.get(x, p), all: (x: string, p: any[] = []) => driver.all(x, p) };
+    // The mark belongs to one database per site: this one is a side database, and must not read or leave one.
+    chain.forgetHeadMark();
     try {
         const { runSchemaMigrations, MIGRATIONS } = require('../core/schema-migrations');
         await runSchemaMigrations(driver, true, kind, MIGRATIONS.filter((m: any) => ['0009_create_audit_log', '0025_audit_log_hash_chain'].includes(m.id)));
@@ -144,6 +146,7 @@ async function engineChain(t: any, kind: 'postgres' | 'mysql') {
         assert.strictEqual(removed.ok, false, `${kind}: a removed row is caught`);
         assert.strictEqual(removed.firstBreak.reason, 'gap');
     } finally {
+        chain.forgetHeadMark();
         await cleanup();
     }
 }

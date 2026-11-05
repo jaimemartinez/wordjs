@@ -240,6 +240,22 @@ describe('the head mark', () => {
         assert.deepStrictEqual({ fromSeq: report.rewinds[0].fromSeq, toSeq: report.rewinds[0].toSeq }, { fromSeq, toSeq });
     });
 
+    it('a restore accounts for one loss, not for a later one at the same numbers', async () => {
+        await record(4);
+        const fromSeq = await dropNewest(4);
+        await recordAudit(ownerId, 'backup.restore', 'backup', 'z.zip', { fromSeq, toSeq: await chain.chainHeadSeq() });
+        await chain.sealPending();
+        assert.strictEqual((await verify()).ok, true);
+        await record(2);
+        const lost = await dropNewest(1);
+        assert.ok(lost <= fromSeq, 'the new rows reuse the numbers the restore took back');
+        await chain.sealPending();
+        const report = await verify();
+        assert.strictEqual(report.ok, false, JSON.stringify(report));
+        assert.strictEqual(report.firstBreak.reason, 'truncated');
+        assert.strictEqual((await post('/audit/head/accept', { currentPassword: PASSWORD })).status, 200);
+    });
+
     it('a row the retention prune removed is no loss', async () => {
         await record(2);
         const head = await chain.chainHeadSeq();
