@@ -15,7 +15,7 @@ const { getRoles, getRoleCapabilities } = require('../core/roles');
 const { isUniqueViolation } = require('../core/db-errors');
 // The one address-shape rule (core/email-address.ts) and the plugin-declared per-account grants
 // (core/account-capabilities.ts).
-const { EMAIL_FORMAT_RE, normalizeAddress } = require('../core/email-address');
+const { isValidAddress, normalizeAddress } = require('../core/email-address');
 const accountCapabilities = require('../core/account-capabilities');
 const { LEGACY_META_KEY } = require('../core/legacy-account-flags');
 const log = require('../core/module-logger').moduleLogger('models/User');
@@ -297,9 +297,9 @@ class User {
         // Validate the SHAPE here, not only in update(). create() used to accept anything non-empty, so
         // POST /api/v1/users (admin) could store 'a@gmail.com@acme.example' — an address whose domain two
         // readers can legitimately disagree about (first '@' vs last '@'). One rule, both entry points:
-        // exactly one '@' (the character class forbids a second), a non-empty local part and a dotted
+        // exactly one '@', a non-empty local part and a dotted
         // domain. Rejecting it at the model covers every caller — REST, self-registration, both importers.
-        if (!EMAIL_FORMAT_RE.test(normalizedEmail)) throw new Error('Invalid email format');
+        if (!isValidAddress(normalizedEmail)) throw new Error('Invalid email format');
 
         const loginProblem = usernameError(username);
         if (loginProblem) throw new Error(`Invalid username: ${loginProblem}`);

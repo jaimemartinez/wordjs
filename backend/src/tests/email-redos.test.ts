@@ -1,27 +1,46 @@
 /**
  * ReDoS backstop for the shared email validator (CodeQL js/polynomial-redos).
  *
- * EMAIL_FORMAT_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/ is polynomial (quadratic backtracking on a long run with
- * no '@'). It is reached with an unbounded, attacker-controlled value on public paths — POST /register and
- * guest comments (both unauthenticated), plus self-service profile updates — and express.json accepts 10MB
- * bodies, so a multi-MB email pins the single-threaded event loop for minutes = remote DoS. isValidAddress
- * now length-caps the input (RFC 5321 max, 254) BEFORE the regex runs. This proves the cap holds and that
- * ordinary validation is unchanged.
+ * /^[^\s@]+@[^\s@]+\.[^\s@]+$/ is polynomial, and addresses arrive unbounded on public paths: POST /register
+ * and guest comments (both unauthenticated), plus self-service profile updates. isAddressShape answers the
+ * same question in one pass, and isValidAddress caps the length (RFC 5321 max, 254) as well. This proves
+ * both, and that the shape accepts and refuses exactly what the pattern does.
  */
 import { test } from 'node:test';
 import assert from 'node:assert';
 
-const { isValidAddress, domainOfAddress } = require('../core/email-address');
+const { isValidAddress, domainOfAddress, isAddressShape } = require('../core/email-address');
 
-test('isValidAddress rejects a huge no-"@" value in O(n) time — the regex never runs (ReDoS backstop)', () => {
-    // 200K chars with no '@': without the length cap this is ~18s of quadratic backtracking (measured
-    // 12s at 160K). With the cap the pattern is skipped, so this returns almost instantly.
+const PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+test('the shape accepts and refuses exactly what the pattern does', () => {
+    const cases = ['a@b.co', 'a@b.c', 'a.b@c.d.e', 'a@.b.c', 'a@b..c', 'a@..c', 'a@b.', 'a@.b', 'a@.', 'a@..', '@b.co', 'a@', '@', '', '.', 'a', 'a.b',
+        'a@b', 'a@b@c.d', '@@.', 'a b@c.d', 'a@b c.d', 'a@b.c ', ' a@b.c', 'a\n@b.c', 'a@b.c\n', 'a\t@b.c', 'a@b\u00a0.c', 'a\u2003@b.c', '\ufeffa@b.c',
+        'ñandú@bücher.example', '😀@😀.😀', '!@!.', '!@!.!', '!@!.!.', "o'neil+tag@sub.example.co"];
+    for (const s of cases) assert.strictEqual(isAddressShape(s), PATTERN.test(s), JSON.stringify(s));
+    const parts = ['a', '@', '.', ' ', '\n'];
+    for (let n = 0; n < 5 ** 6; n++) {
+        let s = '';
+        for (let m = n, i = 0; i < 6; i++, m = Math.floor(m / 5)) s += parts[m % 5];
+        assert.strictEqual(isAddressShape(s), PATTERN.test(s), JSON.stringify(s));
+    }
+});
+
+test('the shape costs one pass on the input that makes the pattern slow', () => {
+    for (const attack of ['!@!.' + '!.'.repeat(1_000_000), 'a'.repeat(2_000_000), 'a@' + '.'.repeat(2_000_000)]) {
+        const t0 = Date.now();
+        isAddressShape(attack);
+        assert.ok(Date.now() - t0 < 500, `took ${Date.now() - t0}ms`);
+    }
+});
+
+test('isValidAddress rejects a huge no-"@" value at once', () => {
     const attack = 'a'.repeat(200_000);
     const t0 = Date.now();
     const ok = isValidAddress(attack);
     const ms = Date.now() - t0;
     assert.strictEqual(ok, false, 'an oversized value is never a valid address');
-    assert.ok(ms < 1000, `must short-circuit on length before the quadratic regex (took ${ms}ms; unfixed is >10000ms)`);
+    assert.ok(ms < 1000, `took ${ms}ms`);
 });
 
 test('domainOfAddress is likewise capped and returns "" for oversized input', () => {

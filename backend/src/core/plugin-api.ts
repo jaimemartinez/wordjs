@@ -1199,6 +1199,9 @@ function createPluginApi(slug: string) {
                 // (where an .html/.svg could be served to other users). No trusted bypass.
                 const target = resolvePluginPath(slug, relPath, false, false);
                 if (path.basename(target).toLowerCase() === 'manifest.json') throw new Error('🛡️ manifest.json is immutable.');
+                const ownDir = pluginBaseDir(slug) + path.sep, ownData = require('./sandbox-paths').ownDataDir(ROOT_DIR, slug) + path.sep;
+                const writable = path.resolve(target);
+                if (!writable.startsWith(writable.startsWith(ownData) ? ownData : ownDir)) throw new Error(`🛡️ Plugin path denied: '${relPath}'.`);
                 // (#3) THE BRIDGE MUST NOT HAVE ITS OWN NOTION OF CONTAINMENT. resolvePluginPath only
                 // proves "inside the plugin dir" — it knows nothing about the PUBLISHED surface, about
                 // executable extensions, or about secret-named files. This call used to end in
@@ -1226,14 +1229,11 @@ function createPluginApi(slug: string) {
                         }
                         return total;
                     };
-                    let existing = 0; try { existing = (await fs.promises.stat(target)).size; } catch { /* new file */ }
+                    let existing = 0; try { existing = (await fs.promises.stat(writable)).size; } catch { /* new file */ }
                     const used = await du(baseDir, PLUGIN_DISK_QUOTA + writeBytes);
                     if (used - existing + writeBytes > PLUGIN_DISK_QUOTA) throw new Error(`🛡️ plugin disk quota exceeded (${PLUGIN_DISK_QUOTA} bytes).`);
                 }
-                await fs.promises.mkdir(path.dirname(target), { recursive: true });
-                const ownDir = pluginBaseDir(slug) + path.sep, ownData = require('./sandbox-paths').ownDataDir(ROOT_DIR, slug) + path.sep;
-                const writable = path.resolve(target);
-                if (!writable.startsWith(writable.startsWith(ownData) ? ownData : ownDir)) throw new Error(`🛡️ Plugin path denied: '${relPath}'.`);
+                await fs.promises.mkdir(path.dirname(writable), { recursive: true });
                 const writer = await fs.promises.open(writable, fs.constants.O_WRONLY | fs.constants.O_CREAT | fs.constants.O_TRUNC | (fs.constants.O_NOFOLLOW || 0), 0o644);
                 try { return await writer.writeFile(data); } finally { await writer.close(); }
             }

@@ -19,6 +19,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 - **The audit copy is stricter about where it connects.** A private receiver can never be a link-local address, only
   the main site of a network can allow one, and delivery errors no longer describe the network.
 - **Accepting changed plugin files is for network administrators**, as plugin code is shared by the whole network.
+- **An email address is checked in one pass**, whatever its length, and account creation applies the same 254 character
+  limit as every other check.
 
 - **Plugin routes answer with a short list of headers.** Caching and content metadata and the plugin's own `x-`
   headers; everything else is dropped, and cookie options are copied by name.

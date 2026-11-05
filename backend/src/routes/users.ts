@@ -625,7 +625,7 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
 
     // The PRIMARY email must be a real address. User.create enforces the same rule (it is the model-level
     // backstop for the importers and self-registration), but reaching it here would surface as a raw 500;
-    // answer the API's own 400 shape instead. One rule, expressed once — EMAIL_FORMAT_RE from core/email-address.
+    // answer the API's own 400 shape instead. One rule, expressed once — isValidAddress from core/email-address.
     if (email && !isValidAddress(email)) {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'Invalid email format.', data: { status: 400 } });
     }
