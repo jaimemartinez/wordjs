@@ -3370,7 +3370,9 @@ async function uninstallPluginData(slug: string, { dropTables = false, keepGrant
     if (dropTables) {
         try {
             const { dbAsync } = require('../config/database');
-            const mine = await listPluginTables(slug);
+            // By owner, not only by prefix: 'acme' must never take the wjp_acme_shop_* tables of 'acme-shop' with it.
+            const { isTableOwnedBy } = require('./plugin-api');
+            const mine = (await listPluginTables(slug)).filter((t: string) => isTableOwnedBy(t, slug));
             const dropped = await dropTablesInDependencyOrder(mine, (name) => dbAsync.run(`DROP TABLE IF EXISTS "${String(name).replace(/"/g, '')}"`));
             result.tablesDropped.push(...dropped.dropped);
             if (dropped.kept.length) {

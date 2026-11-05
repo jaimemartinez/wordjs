@@ -3163,6 +3163,13 @@ router.put('/mfa/policy', authenticate, sessionOnly, isAdmin, unboundSessionOnly
     if (enforceForApiTokens != null && typeof enforceForApiTokens !== 'boolean') {
         return res.status(400).json({ code: 'rest_invalid_param', message: 'enforceForApiTokens must be a boolean.', data: { status: 400 } });
     }
+    // Loosening the rule is what the second factor protects, so it takes the second factor. Tightening does not.
+    const before = await mfa.getPolicy();
+    const nextRoles = Array.isArray(requiredRoles) ? requiredRoles.map(String) : [];
+    const loosens = before.requiredRoles.some((r: string) => !nextRoles.includes(r))
+        || (before.enforceForApiTokens && enforceForApiTokens !== true)
+        || Number(graceDays || 0) > before.graceDays;
+    if (loosens && await require('./users').requireAccountStepUp(req, res)) return;
     // setPolicy validates role slugs against the live role map + manages enforcedAt.
     const policy = await mfa.setPolicy({ requiredRoles, graceDays, enforceForApiTokens });
     // Who changed which roles need a second factor, and whether API tokens were brought under it, is a

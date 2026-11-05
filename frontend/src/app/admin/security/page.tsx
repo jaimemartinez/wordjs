@@ -1,5 +1,6 @@
 "use client";
 
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 import { useI18n } from "@/contexts/I18nContext";
 import { Button, Checkbox, Input, PageHeader, UnstyledButton } from "@/components/ui";
 import Link from "next/link";
@@ -161,6 +162,7 @@ function GatewayConfigForm() {
     // The configuration as the gateway reported it: the warning above the form describes the gateway,
     // never the switch the administrator is still editing.
     const [reported, setReported] = useState<any>(null);
+    const gatewayStepUp = useMfaStepUp();
 
     // Reading the gateway's configuration is ALL this screen does on load. It used to POST
     // /system/certs/check whenever no certificate was reported, which generated a self-signed certificate
@@ -215,8 +217,10 @@ function GatewayConfigForm() {
         try {
             const saved = await apiPost<unknown>('/system/certs/config', {
                 port: config.gatewayPort,
-                sslEnabled: config.sslEnabled
+                sslEnabled: config.sslEnabled,
+                ...gatewayStepUp.payload(),
             });
+            gatewayStepUp.reset();
             const transportChanged = savedSsl !== null && !!config.sslEnabled !== savedSsl;
             setSavedSsl(!!config.sslEnabled);
             // What the gateway serves now, for the warning and the "serving now" line. Not after a protocol
@@ -227,6 +231,7 @@ function GatewayConfigForm() {
             // site-address screen, which opens the change dialog prefilled (SPEC §6, REDTEAM R1).
             await afterGatewayConfigSave(saved, { alert, navigate: (href) => router.push(href), t, edge });
         } catch (e: any) {
+            if (gatewayStepUp.absorb(e)) return;
             await alert(t('security.gateway.saveFailed').replace('{error}', () => e.message));
         } finally {
             setSaving(false);
@@ -247,6 +252,7 @@ function GatewayConfigForm() {
                 <div>
                     <h3 className="font-bold text-lg mb-1">{t('security.gateway.loadError')}</h3>
                     <p className="text-sm opacity-90">{config.error}</p>
+                <MfaStepUpFields stepUp={gatewayStepUp} withCode={false} />
                     <Button variant="link" className="mt-3" onClick={() => window.location.reload()}>{t('security.gateway.retry')}</Button>
                 </div>
             </div>
@@ -464,6 +470,7 @@ function MfaPolicyForm() {
     const [exposure, setExposure] = useState<MfaTokenExposure | null>(null);
     const [loading, setLoading] = useState(true);
     const [saving, setSaving] = useState(false);
+    const stepUp = useMfaStepUp();
 
     useEffect(() => {
         (async () => {
@@ -496,7 +503,9 @@ function MfaPolicyForm() {
                 requiredRoles: required,
                 graceDays: Number(graceDays) || 0,
                 enforceForApiTokens,
+                ...stepUp.payload(),
             });
+            stepUp.reset();
             setRequired(policy.requiredRoles);
             setEnforceForApiTokens(policy.enforceForApiTokens === true);
             setSavedRoles(policy.requiredRoles);
@@ -504,6 +513,7 @@ function MfaPolicyForm() {
             setExposure(tokenExposure ?? null);
             addToast(policy.requiredRoles.length ? t('security.mfa.updated') : t('security.mfa.disabled'), "success");
         } catch (e: any) {
+            if (stepUp.absorb(e)) return;
             addToast(e?.message || t('security.mfa.saveFailed'), "error");
         } finally {
             setSaving(false);
@@ -593,6 +603,7 @@ function MfaPolicyForm() {
                     containerClassName="w-40"
                     className="font-bold"
                 />
+                <MfaStepUpFields stepUp={stepUp} />
                 <Button size="md" onClick={save} pending={saving} pendingLabel={t('common.saving')}>
                     {t('security.mfa.save')}
                 </Button>

@@ -369,7 +369,7 @@ function buildMcpServer(ctx: AgentCallContext): any {
             annotations: { destructiveHint: false, idempotentHint: false },
         }, guarded('create_draft', ['content:draft'], true, async (a) => {
             const r = await rest('POST', '/posts', { body: { ...pickEntry(a), type: a.type || 'post', status: 'draft' } });
-            return audited(a.type || 'post', undefined, r, () => ok({ created: projectEntry(r.body, false) }));
+            return audited(a.type || 'post', undefined, r, () => ok({ created: projectEntry(r.body, false) }, true));
         }));
 
         server.registerTool('update_draft', {
@@ -381,7 +381,7 @@ function buildMcpServer(ctx: AgentCallContext): any {
             const fields = pickEntry(a);
             if (!Object.keys(fields).length) return fail('Nothing to update: pass at least one field.');
             const r = await rest('PUT', `/posts/${a.id}`, { body: fields });
-            return audited('post', a.id, r, () => ok({ updated: projectEntry(r.body, false) }));
+            return audited('post', a.id, r, () => ok({ updated: projectEntry(r.body, false) }, true));
         }));
 
         server.registerTool('submit_for_review', {
@@ -391,7 +391,7 @@ function buildMcpServer(ctx: AgentCallContext): any {
             annotations: { destructiveHint: false, idempotentHint: true },
         }, guarded('submit_for_review', ['content:draft'], true, async (a) => {
             const r = await rest('PUT', `/posts/${a.id}`, { body: { status: 'pending' } });
-            return audited('post', a.id, r, () => ok({ updated: projectEntry(r.body, false) }));
+            return audited('post', a.id, r, () => ok({ updated: projectEntry(r.body, false) }, true));
         }));
     }
 

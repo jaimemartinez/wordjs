@@ -341,6 +341,8 @@ async function importSite(data: any, options: Record<string, any> = {}) {
                         email: user.email,
                         displayName: user.displayName
                     });
+                    // A reset link sent to the previous address must not outlive it.
+                    if (user.email !== existing.email) await require('../routes/users').invalidatePendingPasswordReset(existing.id);
                     // Set role if capability (User.update validates the role allow-list)
                     if (user.role) {
                         await User.update(existing.id, { role: user.role });

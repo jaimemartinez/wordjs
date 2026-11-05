@@ -26,7 +26,7 @@
 
 exports.metadata = {
     name: 'Restaurant Menu',
-    version: '2.0.5',
+    version: '2.0.6',
     description: 'Menú con modificadores, horarios, pedidos en mesa por QR, reservas, pago en línea (Stripe), cocina en vivo e informes.',
     author: 'WordJS',
 };
@@ -1072,11 +1072,12 @@ exports.init = async function (wordjs) {
             }
             const metaToken = session && session.metadata && session.metadata.rm_token;
             if (metaToken === token && session.payment_status === 'paid' && o.status !== 'cancelled') {
-                await db.run(
-                    `UPDATE ${T.orderMeta} SET payment_status = 'paid', paid_at = ? WHERE order_id = ?`,
+                // Only from pending: reloading the return link must not bring a refunded order back to paid.
+                const marked = await db.run(
+                    `UPDATE ${T.orderMeta} SET payment_status = 'paid', paid_at = ? WHERE order_id = ? AND (payment_status IS NULL OR payment_status = 'pending')`,
                     [nowUtcSql(), o.id]
                 );
-                await ssePing('restaurant_order', 'Pago en línea confirmado');
+                if (marked && marked.changes === 1) await ssePing('restaurant_order', 'Pago en línea confirmado');
                 return res.json({ paid: true });
             }
             return res.json({ paid: false });

@@ -277,6 +277,28 @@ async function saveSettings(input: { provider?: unknown; model?: unknown; baseUr
     };
 }
 
+/**
+ * Would saving `input` send the STORED key to a different server? The key is write-only on every screen, so
+ * pointing it elsewhere is the one way to read it back. An input saveSettings would refuse moves nothing.
+ */
+async function storedKeyWouldMove(input: { provider?: unknown; model?: unknown; baseUrl?: unknown; apiKey?: unknown; clearKey?: unknown }): Promise<boolean> {
+    const provider = typeof input.provider === 'string' ? input.provider : '';
+    if (!(PROVIDERS as readonly string[]).includes(provider) || input.clearKey === true) return false;
+    if (typeof input.apiKey === 'string' && input.apiKey.trim()) return false;
+    if (!(await readKey())) return false;
+    let baseUrl = '';
+    if (provider === 'openai-compatible') {
+        try {
+            baseUrl = validateBaseUrl(input.baseUrl);
+            await assertBaseUrlAllowed(baseUrl);
+        } catch { return false; }
+    } else if (typeof input.model === 'string' && input.model.trim() && !(ANTHROPIC_MODELS as readonly string[]).includes(input.model.trim())) {
+        return false;
+    }
+    const before = await readSettings();
+    return before.provider !== provider || before.baseUrl !== baseUrl;
+}
+
 /** Is a provider configured well enough to be called? (Anthropic needs a key; a local server may not.) */
 async function isConfigured(): Promise<boolean> {
     const s = await readSettings();
@@ -519,6 +541,7 @@ module.exports = {
     DEFAULT_ANTHROPIC_MODEL,
     getPublicSettings,
     saveSettings,
+    storedKeyWouldMove,
     isConfigured,
     complete,
     completeForPlugin,

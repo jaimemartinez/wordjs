@@ -180,7 +180,7 @@ class Menu {
      */
     static async findByLocation(location: any) {
         const locations = await getOption('nav_menu_locations', {});
-        const menuId = locations[location];
+        const menuId = Object.prototype.hasOwnProperty.call(locations, location) ? locations[location] : null;
 
         if (!menuId) return null;
         return await Menu.findById(menuId);

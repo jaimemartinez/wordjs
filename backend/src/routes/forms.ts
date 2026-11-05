@@ -149,6 +149,8 @@ router.post('/submit', asyncHandler(async (req: Request, res: Response) => {
         fields[cleanKey] = stripTags(rawFields[key]);
     }
     if (Object.keys(fields).length === 0) return badRequest(res, 'At least one field is required.');
+    // Measured again on what is stored: stripping escapes `&`, so a value can grow several times over.
+    if (Buffer.byteLength(JSON.stringify(fields), 'utf8') > MAX_TOTAL_BYTES) return badRequest(res, 'The submission is too large.');
 
     await FormSubmission.create({
         formName,
@@ -258,6 +260,7 @@ router.delete('/submissions/:id', authenticate, can('manage_options'), asyncHand
     }
 
     await FormSubmission.delete(id);
+    await require('../core/audit').recordAudit(req.user && req.user.id, 'form.submission.delete', 'form_submission', String(id), {});
     res.json({ deleted: true, previous: submission });
 }));
 

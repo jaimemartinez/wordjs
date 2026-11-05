@@ -8,6 +8,7 @@ import { useI18n } from "@/contexts/I18nContext";
 import { formatServerTimestamp } from "@/lib/serverTimestamp";
 import { PageHeader, Button, Card, EmptyState, IconButton, Input, StatusBadge, UnstyledButton } from "@/components/ui";
 import SecretRevealModal from "@/components/SecretRevealModal";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 
 const FALLBACK_EVENTS = ["post.created", "post.published", "post.updated", "post.deleted", "comment.created", "comment.deleted"];
 
@@ -57,6 +58,7 @@ export default function WebhooksPage() {
     const [url, setUrl] = useState("");
     const [selected, setSelected] = useState<Set<string>>(new Set());
     const [creating, setCreating] = useState(false);
+    const stepUp = useMfaStepUp();
 
     // deliveries panel
     const [expandedId, setExpandedId] = useState<number | null>(null);
@@ -140,11 +142,14 @@ export default function WebhooksPage() {
                 name: name.trim() || undefined,
                 url: url.trim(),
                 events: selected.size ? Array.from(selected) : undefined, // none selected → all events
+                ...stepUp.payload(),
             });
+            stepUp.reset();
             setRevealed(res.secret);
             setName(""); setUrl(""); setSelected(new Set());
             await load();
         } catch (e: any) {
+            if (stepUp.absorb(e)) return;
             addToast(e?.message || t("webhooks.createFailed"), "error");
         } finally {
             setCreating(false);
@@ -282,6 +287,7 @@ export default function WebhooksPage() {
                             })}
                         </div>
                     </div>
+                    <MfaStepUpFields stepUp={stepUp} withCode={false} />
                     <Button type="submit" icon="fa-plus" loading={creating}>{t("webhooks.createWebhook")}</Button>
                 </form>
             </Card>

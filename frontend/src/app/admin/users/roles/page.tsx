@@ -7,6 +7,7 @@ import { useRouter } from "next/navigation";
 import { useModal } from "@/contexts/ModalContext";
 import { useI18n } from "@/contexts/I18nContext";
 import { PageHeader, Button } from "@/components/ui";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 import { plural } from "@/lib/i18n";
 // A role a plugin declared is shown as that plugin's, read-only (backend core/plugin-roles.ts).
 import { PluginRoleBadges, PluginRolePanel, canDeleteRole, isPluginRole } from "./PluginRole";
@@ -28,6 +29,7 @@ export default function RolesPage() {
     const [editName, setEditName] = useState("");
     const [editCaps, setEditCaps] = useState<string[]>([]);
     const [isSaving, setIsSaving] = useState(false);
+    const stepUp = useMfaStepUp();
 
     useEffect(() => {
         if (!authLoading && (!user || !user.capabilities.includes("*"))) {
@@ -92,13 +94,14 @@ export default function RolesPage() {
         const slug = editingSlug === "" ? editName.toLowerCase().replace(/[^a-z0-9]/g, '_') : editingSlug!;
 
         try {
-            await rolesApi.save(slug, { name: editName, capabilities: editCaps });
+            await rolesApi.save(slug, { name: editName, capabilities: editCaps, ...stepUp.payload() });
+            stepUp.reset();
             const updatedRoles = await rolesApi.list();
             setRoles(updatedRoles);
             setSuccess(t('roles.savedSuccess').replace('{name}', editName));
             setEditingSlug(null);
         } catch (err: any) {
-            setError(err.message);
+            if (!stepUp.absorb(err)) setError(err.message);
         } finally {
             setIsSaving(false);
         }
@@ -195,6 +198,7 @@ export default function RolesPage() {
                     ) : editingSlug !== null ? (
                         <div className="bg-white rounded-3xl md:rounded-[40px] border-2 border-gray-50 shadow-xl shadow-gray-100/50 p-5 sm:p-8 sticky top-8">
                             <form onSubmit={handleSave}>
+                                <div className="px-6 pt-4 empty:hidden"><MfaStepUpFields stepUp={stepUp} /></div>
                                 <div className="flex flex-wrap justify-between items-center gap-3 mb-8">
                                     <h2 className="text-xl font-bold text-gray-900">
                                         {editingSlug === "" ? t('roles.createNewRole') : t('roles.editing').replace('{name}', roles[editingSlug]?.name ?? '')}

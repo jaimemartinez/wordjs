@@ -4,7 +4,7 @@ const log = require('../core/module-logger').moduleLogger('routes/health');
 const router = express.Router();
 const SystemHealth = require('../core/system-health');
 const database = require('../config/database');
-const { authenticate } = require('../middleware/auth');
+const { authenticate, sessionOnly } = require('../middleware/auth');
 const { isAdmin } = require('../middleware/permissions');
 // See middleware/errorHandler: an unrecognised failure's own text never crosses the wire.
 const { publicErrorText } = require('../middleware/errorHandler');
@@ -425,15 +425,18 @@ router.get('/site', authenticate, isAdmin, async (req: Request, res: Response) =
  *       200:
  *         description: "{ ok: true }"
  *       403:
- *         description: Not an administrator
+ *         description: Not an administrator; or rest_sudo_required / rest_mfa_step_up_required (the caller's password and, with two-factor authentication, a code)
  *       404:
  *         description: No plugin with changed files has that name
  */
-router.post('/sandbox/plugin-files/accept', authenticate, isAdmin, async (req: Request, res: Response) => {
+router.post('/sandbox/plugin-files/accept', authenticate, sessionOnly, isAdmin, async (req: Request, res: Response) => {
     const slug = String((req.body && req.body.slug) || '');
     const integrity = require('../core/plugin-integrity');
     if (!integrity.listIntegrityMismatches().includes(slug)) return res.status(404).json({ error: 'No plugin with changed files has that name.' });
+    // Accepting lets files nobody vetted run on the next launch: the administrator proves it is really them.
+    if (await require('./users').requireAccountStepUp(req, res)) return;
     integrity.acceptPluginIntegrity(require('path').resolve(__dirname, '..', '..'), slug);
+    await require('../core/audit').recordAudit(req.user.id, 'plugin.files.accept', 'plugin', slug, {});
     res.json({ ok: true });
 });
 

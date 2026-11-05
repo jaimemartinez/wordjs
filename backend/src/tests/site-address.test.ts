@@ -954,7 +954,7 @@ describe('R1 — after a TLS/port change on the certificates page', () => {
         certManager.ensureGatewayCert = realEnsure;
     });
     const toggle = () => request(app).post(`${API}/system/certs/config`).set('Host', 'example.com')
-        .set('Authorization', `Bearer ${sessionOf('siteadmin')}`).send({ sslEnabled: true, port: 443 });
+        .set('Authorization', `Bearer ${sessionOf('siteadmin')}`).send({ sslEnabled: true, port: 443, currentPassword: PASSWORD });
 
     test('the same host moving http → https is applied at once, audited as a repair', async () => {
         await stage({ siteUrl: 'http://example.com', frontendUrl: 'http://example.com', gatewayUrl: 'http://example.com' });
@@ -988,7 +988,7 @@ describe('R1 — after a TLS/port change on the certificates page', () => {
 
     test('HTTPS switched OFF here: the main address follows the gateway own listener (same host and port)', async () => {
         const toggleOff = () => request(app).post(`${API}/system/certs/config`).set('Host', 'example.com')
-            .set('Authorization', `Bearer ${sessionOf('siteadmin')}`).send({ sslEnabled: false, port: 3443 });
+            .set('Authorization', `Bearer ${sessionOf('siteadmin')}`).send({ sslEnabled: false, port: 3443, currentPassword: PASSWORD });
         await stage({ siteUrl: 'https://example.com:3443', frontendUrl: 'https://example.com:3443', gatewayUrl: 'https://example.com:3443' });
         gatewayAnswer = 'http://example.com:3443';
         const res = await toggleOff();

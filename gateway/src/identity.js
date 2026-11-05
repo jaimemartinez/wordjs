@@ -18,12 +18,18 @@
 /**
  * @param {string[]} allowedCns roles permitted to call the handler (e.g. ['backend'], ['frontend'])
  * @param {{warn: Function, info: Function}} logger
+ * @param {(fingerprint: string) => boolean} [isRevoked] certificates of removed nodes
  */
-function requireIdentity(allowedCns, logger) {
+function requireIdentity(allowedCns, logger, isRevoked) {
     return (req, res, next) => {
         const cert = req.socket.getPeerCertificate();
         if (!cert || !cert.subject || !allowedCns.includes(cert.subject.CN)) {
             logger.warn(`[Gateway] [Internal] ACCESS DENIED: Identity '${(cert && cert.subject && cert.subject.CN) || 'Unknown'}'`);
+            return res.status(403).json({ error: 'Access Forbidden' });
+        }
+        // A certificate issued to a node an administrator removed: valid for years, and no longer welcome.
+        if (typeof isRevoked === 'function' && isRevoked(cert.fingerprint256)) {
+            logger.warn(`[Gateway] [Internal] ACCESS DENIED: revoked certificate of '${cert.subject.CN}'`);
             return res.status(403).json({ error: 'Access Forbidden' });
         }
         logger.info(`[Gateway] [Internal] mTLS Verified: Identity '${cert.subject.CN}'`);

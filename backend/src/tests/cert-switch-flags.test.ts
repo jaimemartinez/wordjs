@@ -15,6 +15,8 @@ const assert = require('node:assert');
 const certManager = require('../core/cert-manager');
 const configManager = require('../core/configManager');
 const certsRouter = require('../routes/certs');
+// The password step has its own suite (sudo-gate-classes); these drive the handler behind it.
+require('../routes/users').requireSudoConfirmation = async () => false;
 
 function routeHandler(router: any, method: string, routePath: string): any {
     for (const layer of router.stack || []) {

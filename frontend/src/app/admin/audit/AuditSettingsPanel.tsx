@@ -30,6 +30,9 @@ registerTranslations({
         "auditx.reason.gap": "falta la entrada anterior",
         "auditx.reason.link": "no enlaza con la anterior",
         "auditx.reason.start": "las entradas más antiguas no coinciden con lo que borró la purga",
+        "auditx.reason.truncated": "faltan las entradas más recientes",
+        "auditx.rewound": "El registro volvió atrás el {at}: se perdieron las entradas {from} a {to}.",
+        "auditx.acceptLoss": "Aceptar la pérdida y seguir",
         "auditx.pending": "{count} entrada(s) esperan a sellarse.",
         "auditx.recheck": "Comprobar de nuevo",
         "auditx.verifyFailed": "No se pudo comprobar la cadena",
@@ -76,6 +79,9 @@ registerTranslations({
         "auditx.reason.gap": "the entry before it is missing",
         "auditx.reason.link": "it does not link to the one before",
         "auditx.reason.start": "the oldest entries do not match what the prune removed",
+        "auditx.reason.truncated": "the newest entries are gone",
+        "auditx.rewound": "The log went back on {at}: entries {from} to {to} were lost.",
+        "auditx.acceptLoss": "Accept the loss and go on",
         "auditx.pending": "{count} entr(ies) waiting to be sealed.",
         "auditx.recheck": "Check again",
         "auditx.verifyFailed": "Could not check the chain",
@@ -122,6 +128,9 @@ registerTranslations({
         "auditx.reason.gap": "falta a entrada anterior",
         "auditx.reason.link": "não liga com a anterior",
         "auditx.reason.start": "as entradas mais antigas não conferem com o que a limpeza apagou",
+        "auditx.reason.truncated": "faltam as entradas mais recentes",
+        "auditx.rewound": "O registro voltou atrás em {at}: as entradas {from} a {to} foram perdidas.",
+        "auditx.acceptLoss": "Aceitar a perda e continuar",
         "auditx.pending": "{count} entrada(s) aguardam ser seladas.",
         "auditx.recheck": "Verificar de novo",
         "auditx.verifyFailed": "Não foi possível verificar a cadeia",
@@ -205,6 +214,20 @@ export default function AuditSettingsPanel() {
     const failed = (e: any, fallback: string) => {
         if (e?.code === "rest_bad_current_password") setPassword("");
         if (!stepUp.absorb(e)) addToast(e?.message || t(fallback), "error");
+    };
+
+    const acceptLoss = async () => {
+        setSaving("loss");
+        try {
+            await auditApi.acceptHeadLoss({ currentPassword: password, ...stepUp.payload() });
+            setPassword("");
+            stepUp.reset();
+            await verify();
+        } catch (e: any) {
+            failed(e, "auditx.saveFailed");
+        } finally {
+            setSaving(null);
+        }
     };
 
     const saveRetention = async (value: string, withPassword: boolean) => {
@@ -302,7 +325,16 @@ export default function AuditSettingsPanel() {
                             <span>{fill(t(chainReport.complete ? "auditx.intact" : "auditx.partial"), { count: chainReport.checked })}</span></p>
                     )}
                     {chainReport && chainReport.pending > 0 && <p className="text-xs text-gray-500 mt-1">{fill(t("auditx.pending"), { count: chainReport.pending })}</p>}
+                    {chainReport?.rewinds?.slice(0, 3).map((r) => (
+                        <p key={`${r.at}-${r.fromSeq}`} className="text-xs text-amber-800 mt-1" data-testid="audit-chain-rewind">{fill(t("auditx.rewound"), { at: r.at, from: r.toSeq + 1, to: r.fromSeq })}</p>
+                    ))}
                 </div>
+                {chainReport?.firstBreak?.reason === "truncated" && (
+                    <div className="mt-4 space-y-3" data-testid="audit-accept-loss">
+                        {passwordFields}
+                        <Button size="sm" variant="secondary" onClick={() => (password ? acceptLoss() : addToast(t("auditx.passwordNeeded"), "error"))} pending={saving === "loss"}>{t("auditx.acceptLoss")}</Button>
+                    </div>
+                )}
 
                 {settings && (
                     <div className="mt-6 max-w-xs">

@@ -344,15 +344,30 @@ const chargerFor = (store: any, max: number) => async (req: Request, hits: numbe
     return total <= max;
 };
 
+// A read this site's own frontend makes while rendering a page (frontend lib/server-api ssrReadProof). They all
+// come from one address, whoever the visitor is, so they get their own, much larger budget.
+const SSR_READ_BUDGET_FACTOR = 50;
+function isVerifiedSsrRead(req: Request): boolean {
+    if (req.method !== 'GET' && req.method !== 'HEAD') return false;
+    const presented = req.get('x-wordjs-ssr');
+    if (!presented) return false;
+    const secret = require('./core/configManager').getConfig()?.revalidateSecret;
+    if (!secret) return false;
+    const crypto = require('crypto');
+    const expected = crypto.createHmac('sha256', String(secret)).update('wordjs-ssr-read-v1').digest();
+    const given = Buffer.from(String(presented), 'hex');
+    return given.length === expected.length && crypto.timingSafeEqual(given, expected);
+}
+
 const apiLimiter = rateLimit({
     // Same numbers as before (1000 / 15 min); they now live in config so an operator — or the
     // performance bench, which cannot measure a route the limiter is answering for — can raise them
     // without editing this file. config/app clamps both, so a typo cannot switch the limiter off.
     windowMs: config.api.rateLimit.windowMs,
-    max: config.api.rateLimit.max,
+    max: (req: Request) => (isVerifiedSsrRead(req) ? config.api.rateLimit.max * SSR_READ_BUDGET_FACTOR : config.api.rateLimit.max),
     standardHeaders: true,
     legacyHeaders: false,
-    keyGenerator: ipKey,
+    keyGenerator: (req: Request) => (isVerifiedSsrRead(req) ? `ssr:${ipKey(req)}` : ipKey(req)),
     store: apiLimiterStore,
     passOnStoreError: true, // if the Redis store errors (outage), ALLOW the request rather than 500 the whole API
     // (#19) COLLABORATION DOES NOT SHARE THIS BUDGET. Inline editing is DEFAULT ON and commits one
@@ -1310,6 +1325,7 @@ async function initializeMainSite() {
     // (#21) Analytics retention: register the prune handler for the daily cron event armed below.
     // Registered unconditionally alongside the two above (it only reacts to a cron event).
     require('./core/analytics-retention').initAnalyticsRetention();
+    require('./core/record-retention').initRecordRetention();
 
     // Check Installation Status
     const { isInstalled } = require('./core/configManager');

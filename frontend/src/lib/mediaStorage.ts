@@ -157,7 +157,7 @@ export function progressPercent(p: MediaStorageProgress | null): number {
 
 export const mediaStorageApi = {
     get: () => apiGet<MediaStorageView>("/media-storage"),
-    save: (form: MediaStorageForm) => apiPut<MediaStorageView>("/media-storage", writeBody(form)),
+    save: (form: MediaStorageForm, stepUp: { currentPassword?: string } = {}) => apiPut<MediaStorageView>("/media-storage", { ...writeBody(form), ...stepUp }),
     test: (form: MediaStorageForm, stepUp: { currentPassword?: string } = {}) => runConnectionTest(form, stepUp),
     migrate: (direction: "offload" | "restore", opts: { deleteLocal?: boolean; restart?: boolean } = {}) =>
         apiPost<MediaStorageView>("/media-storage/migrate", { direction, ...opts }),

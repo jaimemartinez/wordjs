@@ -13,12 +13,17 @@
  *  - anything starting with `@` is the host's own registry namespace (`@host`, `@themes`, `@<table>`
  *    keys in the prefix registry).
  *
+ *  - names that normalize onto the start of the core's own settings (`upload` → `upload_max_size_mb`):
+ *    a plugin's options are the ones named after its slug.
+ *
  * The comparison is made on the SAME normalization the table-prefix code uses
  * (slug.replace(/[^A-Za-z0-9]+/g, '_').toLowerCase()), so a spelling that maps onto a reserved
  * namespace is reserved too. Every path that brings a plugin into existence or loads one — the zip
  * upload, the marketplace install (same installer), and the boot-time scan of plugins/ — asks this
  * module, so there is one rule and one place to change it.
  */
+
+const CORE_SETTING_NAMESPACES = new Set(['require', 'comment', 'comments', 'upload', 'uploads', 'graphql', 'media', 'mail', 'users', 'user', 'default', 'site', 'blog', 'admin', 'audit', 'email', 'account']);
 
 /** The normalization the per-plugin table prefix, role and cookie names are derived from. */
 function normalizePluginSlug(slug: string): string {
@@ -35,6 +40,7 @@ function reservedPluginSlugReason(slug: unknown): string | null {
     if (raw.startsWith('@')) return `'${raw}' starts with '@', which is reserved for the host's own registry keys`;
     const norm = normalizePluginSlug(raw);
     if (norm === 'core') return `'${raw}' is reserved for the WordJS core`;
+    if (CORE_SETTING_NAMESPACES.has(norm)) return `'${raw}' is reserved: the core's own settings start with that name`;
     // `theme`, `theme-x`, `theme_x`, `theme.x`, `Theme--X` … all land in the theme namespace.
     if (norm === 'theme' || norm.startsWith('theme_')) {
         return `'${raw}' is reserved: plugin slugs starting with 'theme-' share the identity of a theme (theme:<name>)`;

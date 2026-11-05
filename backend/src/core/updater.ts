@@ -253,15 +253,24 @@ async function startUpdate(input: { tag: unknown; actorUserId: number | null; re
     const env = environment();
     if (!env.canUpdate) throw Object.assign(new Error(env.how), { code: `update_${env.reason}`, status: 409 });
     if (running || readState().state === 'running') throw Object.assign(new Error('An update is already running.'), { code: 'update_busy', status: 409 });
-    const tag = typeof input.tag === 'string' ? input.tag : '';
-    if (!TAG_RE.test(tag)) throw Object.assign(new Error('Not a release tag.'), { code: 'update_invalid_tag', status: 400 });
-    const current = currentVersion();
-    const release = (await releases()).find((r) => r.tag === tag);
-    if (!release || !release.hasBundle) throw Object.assign(new Error('That release is not one the WordJS project published with a bundle.'), { code: 'update_unknown_release', status: 400 });
-    if (compareVersions(release.version, current) <= 0) throw Object.assign(new Error(`WordJS is already on ${current}; the panel does not install older versions.`), { code: 'update_not_newer', status: 409 });
-    if (!release.hasChecksum) throw Object.assign(new Error(`Release ${tag} publishes no checksum for its bundle, so its download cannot be verified; the panel does not install it.`), { code: 'update_unverified_release', status: 409 });
-
+    // Taken BEFORE the first await: two requests must not both pass the check above while releases() runs.
     running = true;
+    let tag: string;
+    let current: string;
+    let release: any;
+    try {
+        tag = typeof input.tag === 'string' ? input.tag : '';
+        if (!TAG_RE.test(tag)) throw Object.assign(new Error('Not a release tag.'), { code: 'update_invalid_tag', status: 400 });
+        current = currentVersion();
+        release = (await releases()).find((r) => r.tag === tag);
+        if (!release || !release.hasBundle) throw Object.assign(new Error('That release is not one the WordJS project published with a bundle.'), { code: 'update_unknown_release', status: 400 });
+        if (compareVersions(release.version, current) <= 0) throw Object.assign(new Error(`WordJS is already on ${current}; the panel does not install older versions.`), { code: 'update_not_newer', status: 409 });
+        if (!release.hasChecksum) throw Object.assign(new Error(`Release ${tag} publishes no checksum for its bundle, so its download cannot be verified; the panel does not install it.`), { code: 'update_unverified_release', status: 409 });
+    } catch (e) {
+        running = false;
+        throw e;
+    }
+
     output.length = 0;
     const base: UpdateState = { state: 'running', step: 'backup', from: current, fromTag: `v${current}`, to: release.version, toTag: tag, at: new Date().toISOString(), actor: input.actorUserId };
     writeState(base);

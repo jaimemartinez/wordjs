@@ -33,9 +33,19 @@ jobs:
     name: Rebuild and publish the marketplace catalog
     runs-on: ubuntu-24.04
     timeout-minutes: 20
+    environment: marketplace-release
+    env:
+      PUBLISH_REF: ${{ inputs.ref }}
     permissions:
       contents: write # replaces assets on the latest release
     steps:
+      - name: Only main or a release tag is published
+        run: |
+          case "$PUBLISH_REF" in
+            main|v[0-9]*) ;;
+            *) echo "::error::marketplace-publish only builds main or a release tag"; exit 1 ;;
+          esac
+
       - name: Checkout
         uses: actions/checkout@v7
         with:
@@ -111,7 +121,7 @@ jobs:
           {
             echo "### Marketplace published to $tag"
             echo
-            echo "Built from \`${{ inputs.ref }}\` ($(git rev-parse --short HEAD))."
+            echo "Built from \`$PUBLISH_REF\` ($(git rev-parse --short HEAD))."
             echo
             for z in "${zips[@]}"; do echo "- $z"; done
           } >> "$GITHUB_STEP_SUMMARY"

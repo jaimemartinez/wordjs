@@ -375,6 +375,23 @@ function relayProof(): string | null {
 }
 
 /**
+ * What tells the backend and the gateway that a read is this server rendering a page, not a visitor: every
+ * visitor's SSR reads arrive from this one address, so counted as one client they would share one budget.
+ * Keyed with the secret the frontend already shares with them.
+ */
+async function ssrReadProof(): Promise<string | null> {
+    try {
+        const { resolveRevalidateSecret } = await import('./revalidateSecret');
+        const secret = resolveRevalidateSecret();
+        if (!secret) return null;
+        const { createHmac } = await import('crypto');
+        return createHmac('sha256', secret).update('wordjs-ssr-read-v1').digest('hex');
+    } catch {
+        return null;
+    }
+}
+
+/**
  * Fetch JSON from the backend during SSR. Returns null on any non-2xx or network error so callers can
  * render a not-found / fallback state instead of throwing a 500 for the whole page.
  */
@@ -399,6 +416,8 @@ export async function serverResponse(endpoint: string, options: ServerFetchOptio
     const url = backendUrl(resolveServerBase(), endpoint);
     if (!url) return null; // endpoint escaped the API root — same degrade path as an unreachable backend
     const headers: Record<string, string> = { 'Content-Type': 'application/json' };
+    const proof = await ssrReadProof();
+    if (proof) headers['x-wordjs-ssr'] = proof;
 
     // Forward the real public host/proto to the backend. SSR fetches hit the loopback origin
     // (127.0.0.1:4000), so without this the backend's host-based logic — the Site-URL/migration
@@ -461,7 +480,8 @@ export async function serverResponse(endpoint: string, options: ServerFetchOptio
 
     try {
         const res = await fetch(url, { headers, ...cacheInit });
-        if (res.status === 502 || res.status === 504) noteBackendUnavailable(); // the gateway's "no upstream"
+        // 429 too: a page built from a refused read is not the page, and ISR would keep it.
+        if (res.status === 429 || res.status === 502 || res.status === 504) noteBackendUnavailable(); // the gateway's "no upstream"
         return fromRequestedSite(res, requestSiteHost());
     } catch {
         // Backend unreachable during SSR — caller decides how to degrade.

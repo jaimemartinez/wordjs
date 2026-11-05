@@ -4,6 +4,7 @@ import { useState, useEffect } from "react";
 import { api } from "@/lib/api";
 import { useI18n } from "@/contexts/I18nContext";
 import { Button, FileButton, Input } from "@/components/ui";
+import { useMfaStepUp, MfaStepUpFields } from "@/components/MfaStepUp";
 import { singleCertificateNameProblem, certificateNameProblemFromCode, CERTIFICATE_NAME_MESSAGE_KEY, type CertificateNameProblem } from "@/lib/certificateName";
 
 interface CertInfo {
@@ -41,6 +42,8 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
 
     // State machine
     const [status, setStatus] = useState<"idle" | "loading" | "step1_dns" | "success" | "error">("idle");
+    // Installing a certificate takes the administrator's password: the next press of the button carries it.
+    const stepUp = useMfaStepUp();
     const [logs, setLogs] = useState<string[]>([]);
     const [dnsData, setDnsData] = useState<any>(null);
     const [error, setError] = useState("");
@@ -93,8 +96,9 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
         try {
             await api<any>("/system/certs/upload-custom", {
                 method: "POST",
-                body: { key: keyContent, cert: certContent }
+                body: { key: keyContent, cert: certContent, ...stepUp.payload() }
             });
+            stepUp.reset();
 
             addLog(t('ssl.log.customInstalled'));
             setStatus("success");
@@ -102,6 +106,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             setKeyContent("");
             setCertContent("");
         } catch (e: any) {
+            if (stepUp.absorb(e)) { setStatus("idle"); return; }
             setError(e.message);
             addLog(t('ssl.log.error').replace('{error}', () => e.message));
             setStatus("error");
@@ -132,8 +137,9 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
             if (method === "http") {
                 const data = await api<any>("/system/certs/auto-provision", {
                     method: "POST",
-                    body: { domain, email, staging: false }
+                    body: { domain, email, staging: false, ...stepUp.payload() }
                 });
+                stepUp.reset();
 
                 addLog(t('ssl.log.provisioned'));
                 addLog(t('ssl.log.savedTo').replace('{path}', () => data.path));
@@ -150,6 +156,7 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                 setStatus("step1_dns");
             }
         } catch (e: any) {
+            if (stepUp.absorb(e)) { setStatus("idle"); return; }
             const refused = certificateNameProblemFromCode(e && e.code);
             const message = refused ? t(CERTIFICATE_NAME_MESSAGE_KEY[refused]).replace('{domain}', () => domain.trim()) : e.message;
             setNameProblem(refused);
@@ -184,13 +191,15 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
         try {
             await api<any>("/system/certs/dns-finish", {
                 method: "POST",
-                body: { step1Data: dnsData, email, staging: false }
+                body: { step1Data: dnsData, email, staging: false, ...stepUp.payload() }
             });
+            stepUp.reset();
 
             addLog(t('ssl.log.installed'));
             setStatus("success");
             setDnsData(null);
         } catch (e: any) {
+            if (stepUp.absorb(e)) { setStatus("step1_dns"); return; }
             setError(e.message);
             addLog(t('ssl.log.error').replace('{error}', () => e.message));
             setStatus("step1_dns");
@@ -206,6 +215,8 @@ export default function SSLCertManager({ domain: initialDomain, adminEmail: init
                     <span className="font-medium text-sm">{t('ssl.certError').replace('{error}', () => certInfo.error || '')}</span>
                 </div>
             )}
+
+            <MfaStepUpFields stepUp={stepUp} withCode={false} />
 
             {loading && (
                 <div className="text-center py-4 text-blue-500">

@@ -598,6 +598,11 @@ router.post('/', isAdmin, asyncHandler(async (req: Request, res: Response) => {
         });
     }
 
+    // A role is a name. Anything else is refused here, before isPrivilegedRole reads it.
+    if (typeof role !== 'string') {
+        return res.status(400).json({ code: 'rest_invalid_role', message: 'Invalid role.', data: { status: 400, params: ['role'] } });
+    }
+
     if (rejectWeakPassword(res, password)) return;
     const shownName = displayNameOrRefuse(res, displayName);
     if (!shownName) return;
@@ -2173,6 +2178,8 @@ module.exports = router;
 module.exports.requireSudoPassword = requireSudoPassword;
 module.exports.sudoPasswordVerified = sudoPasswordVerified;
 module.exports.requireAccountStepUp = requireAccountStepUp;
+module.exports.PRIVILEGED_CAPS = PRIVILEGED_CAPS;
+module.exports.invalidatePendingPasswordReset = invalidatePendingPasswordReset;
 module.exports.displayNameOrRefuse = displayNameOrRefuse;
 module.exports.requireSudoConfirmation = requireSudoConfirmation;
 // The sudo delay POLICY, exported so a test can assert the property that matters — that for EVERY

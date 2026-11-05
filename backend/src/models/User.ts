@@ -33,7 +33,8 @@ const BCRYPT_HASH_RE = /^\$2[aby]\$\d{2}\$[./A-Za-z0-9]{53}$/;
 function assertValidRole(role: string): void {
     if (role === undefined || role === null) return;
     const roles = getRoles() || {};
-    if (!Object.prototype.hasOwnProperty.call(roles, role)) {
+    // The type first: a one-item list stringifies to a role name, and the drivers would bind it as one.
+    if (typeof role !== 'string' || !Object.prototype.hasOwnProperty.call(roles, role)) {
         throw new Error(`Invalid role: ${role}`);
     }
 }

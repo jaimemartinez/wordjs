@@ -674,6 +674,7 @@ router.post('/install', async (req: Request, res: Response) => {
         return res.status(400).json({ error: 'Already installed' });
     }
     if (!requireInstallToken(req, res)) return;
+    require('../core/audit-chain').forgetHeadMark();
 
     const {
         siteName,

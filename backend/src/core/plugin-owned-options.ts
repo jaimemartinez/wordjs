@@ -61,12 +61,30 @@ function optionNamespace(slug: string): string {
  */
 const PROVIDER_PUBLISHED_OPTIONS = new Set(['mail_domain', 'mail_delivery_ready']);
 
+/** Core settings a plugin's slug could otherwise reach by spelling (a plugin called `upload`, `comment`…). */
+const CORE_OPTION_NAMES = new Set([
+    'require_email_verification', 'comment_registration', 'comment_moderation', 'comments_notify', 'moderation_notify',
+    'upload_max_size_mb', 'graphql_introspection', 'mail_domain', 'mail_delivery_ready', 'users_can_register', 'default_role',
+]);
+const CORE_OPTION_PREFIXES = ['media_storage_', 'audit_', 'account_mail_', 'email_'];
+
+/** Is `name` inside the namespace of another installed plugin whose slug extends this one (`conference` / `conference-manager`)? */
+function inLongerNamespace(ns: string, name: string): boolean {
+    try {
+        return require('./plugins').listInstalledPluginIds().some((id: string) => {
+            const other = optionNamespace(id);
+            return other.length > ns.length && other.startsWith(ns) && name.startsWith(other);
+        });
+    } catch { return false; }
+}
+
 function isPluginWritableOption(slug: string, key: unknown): boolean {
     const { canonicalOptionName } = require('./option-names');
     const name = canonicalOptionName(key);
     if (name === null || !slug) return false;
     const ns = optionNamespace(slug);
-    if (ns.length > 1 && name.startsWith(ns) && name.length > ns.length) return true;
+    if (ns.length > 1 && name.startsWith(ns) && name.length > ns.length
+        && !CORE_OPTION_NAMES.has(name) && !CORE_OPTION_PREFIXES.some((p) => name.startsWith(p)) && !inLongerNamespace(ns, name)) return true;
     if (PROVIDER_PUBLISHED_OPTIONS.has(name)) {
         try { return require('./plugin-permissions').isGranted(slug, 'email', 'provider') === true; } catch { return false; }
     }

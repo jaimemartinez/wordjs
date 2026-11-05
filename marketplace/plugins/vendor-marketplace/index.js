@@ -23,7 +23,7 @@
 
 exports.metadata = {
     name: 'Marketplace',
-    version: '1.0.6',
+    version: '1.0.7',
     description: 'Multi-vendor directory: vendor applications, code-protected vendor portal, product listings and buyer inquiries (lead generation).',
     author: 'WordJS',
 };
@@ -306,14 +306,14 @@ exports.init = async function (wordjs) {
     // something that carries the code. Single child process → in-memory maps are the whole picture;
     // every map is bounded.
     const LOGIN_LIMITS = {
-        perClient: 6, clientWindowMs: 10 * 60 * 1000,
+        perClient: 6, perClientAll: 30, clientWindowMs: 10 * 60 * 1000,
         perVendor: 20, perSite: 100, sharedWindowMs: 60 * 60 * 1000,
         // Past a shared budget every attempt waits before its code is checked: delayBaseMs, doubling
         // every delayDoubleEvery further wrong codes, up to delayMaxMs.
         delayBaseMs: 250, delayDoubleEvery: 10, delayMaxMs: 8000,
     };
     const LOGIN_MAP_CAP = 5000;
-    const loginBuckets = { client: new Map(), vendor: new Map(), site: new Map() };
+    const loginBuckets = { client: new Map(), clientAll: new Map(), vendor: new Map(), site: new Map() };
     const loginBucket = (map, key, windowMs, now) => {
         let b = map.get(key);
         if (!b || now - b.first >= windowMs) {
@@ -341,8 +341,11 @@ exports.init = async function (wordjs) {
         const now = Date.now(), L = LOGIN_LIMITS;
         const clientKey = `${String((req && req.clientKey) || 'anon').slice(0, 64)}|${vendorId}`;
         const own = loginBucket(loginBuckets.client, clientKey, L.clientWindowMs, now);
-        if (own.count >= L.perClient) return null;
+        // And across every target: ids are public, so a per-target budget alone multiplies by how many exist.
+        const everywhere = loginBucket(loginBuckets.clientAll, String((req && req.clientKey) || 'anon').slice(0, 64), L.clientWindowMs, now);
+        if (own.count >= L.perClient || everywhere.count >= L.perClientAll) return null;
         own.count++;
+        everywhere.count++;
         const excess = Math.max(
             loginCount(loginBuckets.vendor, String(vendorId), L.sharedWindowMs, now) - L.perVendor,
             loginCount(loginBuckets.site, '*', L.sharedWindowMs, now) - L.perSite

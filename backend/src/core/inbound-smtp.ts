@@ -315,7 +315,9 @@ async function start(slug: string, opts: ListenOptions, claimedPorts: number[], 
     if (!allowed.has(port) && !(Number.isInteger(port) && port >= 1024 && port < 65536)) {
         return { ok: false, error: `port ${port} is not declared in the plugin's manifest claimPorts (undeclared ports must be 1024 or higher)`, ...status };
     }
-    const fallback = Number(opts && opts.fallbackPort) || DEFAULT_FALLBACK;
+    // The same rule as the port itself.
+    const askedFallback = Number(opts && opts.fallbackPort) || DEFAULT_FALLBACK;
+    const fallback = allowed.has(askedFallback) || (Number.isInteger(askedFallback) && askedFallback >= 1024 && askedFallback < 65536) ? askedFallback : DEFAULT_FALLBACK;
     const proxyIps = validIps(opts && opts.proxyIps);
     const maxSize = Math.min(Math.max(Number(opts && opts.maxSize) || 25 * 1024 * 1024, 1024 * 1024), HARD_MAX_SIZE);
     const maxClients = Math.min(Math.max(Number(opts && opts.maxClients) || 50, 1), 200);

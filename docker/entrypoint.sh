@@ -109,7 +109,11 @@ if [ "${WORDJS_PRESEED_CONFIG:-0}" = "1" ] && [ ! -e "$PERSISTED_CONFIG" ] && [ 
     DB_PORT="${WORDJS_DB_PORT:-5432}"
     DB_USER="${WORDJS_DB_USER:-postgres}"
     DB_NAME="${WORDJS_DB_NAME:-wordjs}"
-    DB_PASSWORD="${WORDJS_DB_PASSWORD:-wordjs}"
+    if [ -z "${WORDJS_DB_PASSWORD:-}" ]; then
+        echo "FATAL: WORDJS_DB_PASSWORD is required with an external database." >&2
+        exit 1
+    fi
+    DB_PASSWORD="$WORDJS_DB_PASSWORD"
     # TLS to the database. With WORDJS_DB_SSL=true the server certificate is VERIFIED; point
     # WORDJS_DB_SSL_CA at the CA file (e.g. a mounted secret) for a private CA, or — only if an
     # unauthenticated connection is acceptable — set WORDJS_DB_SSL_REJECT_UNAUTHORIZED=false.

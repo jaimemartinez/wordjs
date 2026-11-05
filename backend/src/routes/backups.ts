@@ -182,9 +182,15 @@ router.get('/:filename/download', authenticate, isAdmin, credentialExportSession
 // again, with the password and the second factor they had then, and the plugins/ and themes/ code of the
 // snapshot is written back. Revoking the token that asked for it would undo none of that.
 router.post('/:filename/restore', authenticate, isAdmin, accountAuthorityOnly, asyncHandler(async (req: Request, res: Response) => {
+    if (await require('./users').requireAccountStepUp(req, res)) return;
+    // How far the audit log went back, in the row itself: core/audit-chain reads it to tell this rewind
+    // from entries removed behind WordJS's back, and GET /audit/verify lists it.
+    const chain = require('../core/audit-chain');
+    await chain.sealPending();
+    const fromSeq = await chain.chainHeadSeq();
     const results = await restoreBackup(req.params.filename);
     // AFTER the swap — see the note next to the recordAudit import.
-    await recordAudit(req.user && req.user.id, 'backup.restore', 'backup', req.params.filename, {});
+    await recordAudit(req.user && req.user.id, 'backup.restore', 'backup', req.params.filename, { fromSeq, toSeq: await chain.chainHeadSeq() });
     // Zero config: the restored plugins, themes and settings load at boot, so the backend restarts itself
     // (core/restart) instead of telling the administrator to restart the service. Only for the main site
     // (or a single site): one site of a network restores its own data, and its administrators must not

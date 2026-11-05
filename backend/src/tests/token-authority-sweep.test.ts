@@ -767,7 +767,7 @@ describe('POST /backups/:filename/restore', () => {
         console.log = console.warn = console.error = () => {};
         let res: any;
         try {
-            res = await request(app).post(`${B}/backups/${FILE}/restore`).set('Authorization', session('owner'));
+            res = await request(app).post(`${B}/backups/${FILE}/restore`).set('Authorization', session('owner')).send({ currentPassword: PASSWORD });
         } finally {
             Object.assign(console, saved);
         }

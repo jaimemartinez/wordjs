@@ -5,6 +5,7 @@
 
 const express = require('express');
 const router = express.Router();
+const { auditOnSuccess } = require('../core/audit');
 const {
     getWidgets, getSidebars, getSidebarWidgets,
     addWidgetToSidebar, removeWidgetFromSidebar,
@@ -124,7 +125,7 @@ router.get('/sidebars/:id/render', asyncHandler(async (req: Request, res: Respon
  *       200:
  *         description: Widget added
  */
-router.post('/sidebars/:id', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/sidebars/:id', authenticate, isAdmin, auditOnSuccess('widget.update', 'widget', (req: Request) => String(req.params.id || req.params.sidebarId || req.params.widgetId || '')), asyncHandler(async (req: Request, res: Response) => {
     const { widgetId, settings = {} } = req.body;
 
     if (!widgetId) {
@@ -170,7 +171,7 @@ router.post('/sidebars/:id', authenticate, isAdmin, asyncHandler(async (req: Req
  *       200:
  *         description: Widgets reordered
  */
-router.post('/sidebars/:id/reorder', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.post('/sidebars/:id/reorder', authenticate, isAdmin, auditOnSuccess('widget.update', 'widget', (req: Request) => String(req.params.id || req.params.sidebarId || req.params.widgetId || '')), asyncHandler(async (req: Request, res: Response) => {
     const { widgets } = req.body; // Array of instance keys
     const { setSidebarWidgets } = require('../core/widgets');
 
@@ -205,7 +206,7 @@ router.post('/sidebars/:id/reorder', authenticate, isAdmin, asyncHandler(async (
  *       200:
  *         description: Widget removed
  */
-router.delete('/sidebars/:sidebarId/:instanceKey', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.delete('/sidebars/:sidebarId/:instanceKey', authenticate, isAdmin, auditOnSuccess('widget.update', 'widget', (req: Request) => String(req.params.id || req.params.sidebarId || req.params.widgetId || '')), asyncHandler(async (req: Request, res: Response) => {
     const result = await removeWidgetFromSidebar(req.params.sidebarId, req.params.instanceKey);
     res.json({ success: result });
 }));
@@ -268,7 +269,7 @@ router.get('/:widgetId/instances/:instanceId', authenticate, isAdmin, asyncHandl
     res.json({ settings: await getWidgetSettings(widget.id, String(req.params.instanceId)), fields: widget.fields });
 }));
 
-router.put('/:widgetId/instances/:instanceId', authenticate, isAdmin, asyncHandler(async (req: Request, res: Response) => {
+router.put('/:widgetId/instances/:instanceId', authenticate, isAdmin, auditOnSuccess('widget.update', 'widget', (req: Request) => String(req.params.id || req.params.sidebarId || req.params.widgetId || '')), asyncHandler(async (req: Request, res: Response) => {
     const widget = getWidget(String(req.params.widgetId));
     if (!widget) return res.status(404).json({ error: 'Unknown widget' });
     const clean = sanitizeWidgetSettings(widget, (req.body && req.body.settings) ?? {});
