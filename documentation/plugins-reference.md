@@ -729,17 +729,30 @@ the same plugin there) and activate it from **Plugins**.
 ---
 
 ## 8. YouTube Videos 🎥
-**ID:** `youtube-videos` | **Version:** 1.0.5
+**ID:** `youtube-videos` | **Version:** 1.1.0
 
-Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a carousel block
-with title filtering and a video-count limit. Works **keyless** out of the box via the channel RSS
-feed (latest 15 videos); add a YouTube Data API v3 key for the full upload history.
+Lists **every** video of a YouTube channel (links, thumbnails, titles, dates) and ships a Verso block
+— carousel, grid, horizontal gallery or list — with include/exclude title filters, ordering and
+"Load more" or numbered pages. Sources, first that answers wins:
+
+1. **Data API v3**, when the admin saves a key (always preferred: it is YouTube's official interface;
+   1 quota unit per 50 videos).
+2. **Without a key**, the channel's Videos tab through YouTube's web client API (`youtubei/v1/browse`
+   plus continuation tokens), then the uploads playlist the same way. It is not a documented public
+   interface, so the admin can switch it off in the panel ("Full list without a key").
+3. The channel **RSS feed** (latest 15), only when everything above failed.
+
+Refreshes are incremental (they stop at the first cached video, usually one request) with a full
+re-read once a day; a first read of a big channel runs in the background and checkpoints, so it never
+holds a request past the host's limit. Every outbound request counts against a per-plugin budget
+(600 an hour, 200 pages per refresh); a refresh that runs out keeps what it has and continues next
+time. Network errors keep the last good list and show the reason on the admin page.
 
 *   **Distribution:** first-party **marketplace** plugin (installed via the Marketplace catalog in §9) — not bundled with core.
-*   **Routes:** `GET /`, `GET /status`, `POST /refresh`, `POST /settings` (namespaced under `/api/v1/plugin/youtube-videos/*`)
-*   **Verso block:** `client/verso/YoutubeVideosVerso.tsx` (registry key `YoutubeVideos`) — carousel with title filter + count limit
-*   **Admin page:** `/admin/plugin/youtube`
-*   **Requested capabilities:** `settings` (read/write — configured channel + cached video list), `database` (read/write — the Data API key lives in the plugin's own `wjp_youtube_videos_*` table, **not** in options, because options are readable by other plugins), `network` (fetch youtube.com RSS / googleapis.com Data API — public egress only, like every `network` grant), `express` (register_route), `admin_menu` (register).
+*   **Routes:** `GET /` (public; `q`, `exclude`, `order=newest|oldest|title`, `limit` 1–200, `offset`; answers `total`, `nextOffset`, `hasMore`), `GET /status`, `POST /refresh` (`{ full: true }` re-reads everything), `POST /settings` (namespaced under `/api/v1/plugin/youtube-videos/*`)
+*   **Verso block:** `client/verso/YoutubeVideosVerso.tsx` (registry key `YoutubeVideos`) — layout, include/exclude filters, order, videos per page, pagination (none / load more / pages), grid columns, titles, dates, autoplay
+*   **Admin page:** `/admin/plugin/youtube` — Library (search, exclude, order, load more), Settings (channel, sources, cache), Use on a page
+*   **Requested capabilities:** `settings` (read/write — channel, cache interval, keyless switch), `database` (read/write — the Data API key and the cached list live in the plugin's own `wjp_youtube_videos_*` table, **not** in options, because options are readable by other plugins), `network` (HTTPS to `www.youtube.com` and, with a key, `www.googleapis.com` — the two hosts to put in its egress allowlist; thumbnails load from `i.ytimg.com` in the visitor's browser), `express` (register_route), `admin_menu` (register).
 *   **Sandbox:** isolated (like every plugin). Default-deny: activation grants its declared capabilities, refinable in `/admin/plugins`.
 
 ---
@@ -816,7 +829,7 @@ core):
 | `testimonials` | Database-backed testimonials with moderation and optional public submission form; carousel/grid Verso block | `database` r/w, `settings` r/w, routes, admin menu |
 | `vendor-marketplace` | Multi-vendor directory: vendor applications, admin approval, self-service listings, per-product inquiries | `database` r/w, routes, admin menu, `email:admin` |
 | `video-gallery` | YouTube video carousels via the `VideoGalleryVerso` block + `[vgallery]` shortcode | `settings` r/w, `database` write, routes, admin menu |
-| `youtube-videos` | Pulls a YouTube channel's videos (keyless RSS or Data API v3) into a filterable, count-limited Verso carousel block | `settings` r/w, `database` r/w, `network`, routes, admin menu |
+| `youtube-videos` | Lists every video of a YouTube channel (keyless or Data API v3) in a filterable, paginated Verso block (carousel, grid, gallery, list) | `settings` r/w, `database` r/w, `network`, routes, admin menu |
 
 *Every catalog plugin also requests **`browser:script`** — each ships an admin page, a Verso block or
 both, i.e. compiled code that runs in the browser with the viewer's session; it is not repeated per row.

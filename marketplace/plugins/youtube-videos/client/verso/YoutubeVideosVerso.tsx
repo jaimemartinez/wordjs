@@ -13,6 +13,24 @@
 
 import React, { useEffect, useMemo, useRef, useState } from "react";
 
+// Visitor-facing strings follow the page language (<html lang>); Spanish is the default.
+const STRINGS = {
+    es: { loading: "Cargando videos…", more: "Cargar más", prev: "Anterior", next: "Siguiente", page: "Página", pages: "Páginas de videos" },
+    en: { loading: "Loading videos…", more: "Load more", prev: "Previous", next: "Next", page: "Page", pages: "Video pages" },
+    pt: { loading: "Carregando vídeos…", more: "Carregar mais", prev: "Anterior", next: "Próxima", page: "Página", pages: "Páginas de vídeos" },
+};
+function pageLang() {
+    const l = (typeof document !== "undefined" && String(document.documentElement.lang || "").slice(0, 2).toLowerCase()) || "es";
+    return STRINGS[l] ? l : "es";
+}
+function dateLabel(v, lang) {
+    if (v.publishedAt) {
+        const d = new Date(v.publishedAt);
+        if (!Number.isNaN(d.getTime())) return d.toLocaleDateString(lang, { year: "numeric", month: "short", day: "numeric" });
+    }
+    return v.publishedText || "";
+}
+
 
 
 const STYLES = `
@@ -49,15 +67,39 @@ const STYLES = `
 .ytv-gallery-item { flex: 0 0 260px; scroll-snap-align: start; }
 @media (min-width: 768px) { .ytv-gallery-item { flex: 0 0 320px; } }
 .ytv-gallery-wrapper .ytv-nav { top: 40%; }
+
+/* 1.1: columns, dates, list layout, load more and pages */
+.ytv-grid.ytv-cols-2 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+.ytv-grid.ytv-cols-3 { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.ytv-grid.ytv-cols-4 { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+@media (max-width: 767.98px) { .ytv-grid.ytv-cols-3, .ytv-grid.ytv-cols-4 { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+@media (max-width: 479.98px) { .ytv-grid[class*="ytv-cols-"] { grid-template-columns: 1fr; } }
+.ytv-date { display: block; margin-top: .2rem; font-weight: 400; font-size: .78rem; opacity: .85; }
+.ytv-list { display: flex; flex-direction: column; gap: .9rem; }
+.ytv-row { display: grid; grid-template-columns: minmax(120px, 220px) 1fr; gap: 1rem; align-items: center; text-decoration: none; color: inherit; }
+.ytv-row-thumb { position: relative; display: block; aspect-ratio: 16 / 9; border-radius: var(--wjs-radius, 0.5rem); overflow: hidden; background: #000; }
+.ytv-row-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
+.ytv-row-thumb .ytv-play { width: 40px; height: 32px; }
+.ytv-row-title { font-weight: 600; line-height: 1.35; color: var(--wjs-color-text, inherit); }
+.ytv-row:hover .ytv-row-title { text-decoration: underline; }
+.ytv-row-date { display: block; margin-top: .25rem; font-size: .82rem; color: var(--wjs-color-text-muted, #6b7280); }
+@media (max-width: 479.98px) { .ytv-row { grid-template-columns: 120px 1fr; gap: .75rem; } }
+.ytv-pager { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: .4rem; margin-top: 1.25rem; }
+.ytv-pager button { min-width: 40px; height: 40px; padding: 0 .9rem; border-radius: var(--wjs-radius, 0.5rem); border: 1px solid var(--wjs-border-subtle, #e5e7eb); background: var(--wjs-bg-surface, #fff); color: var(--wjs-color-text, #111827); font-weight: 600; font-size: .9rem; cursor: pointer; }
+.ytv-pager button:hover:not(:disabled) { border-color: var(--wjs-color-primary, #EF4444); }
+.ytv-pager button:disabled { opacity: .5; cursor: default; }
+.ytv-pager button[aria-current="page"] { background: var(--wjs-color-primary, #EF4444); border-color: var(--wjs-color-primary, #EF4444); color: #fff; }
+.ytv-pager .ytv-gap { padding: 0 .25rem; color: var(--wjs-color-text-muted, #6b7280); }
 `;
 
 // Module-level (never define a component inside a component – remounting steals input focus).
-function YtCarousel({ videos, autoplay, interval, showTitles }) {
+function YtCarousel({ videos, autoplay, interval, showTitles, showDates, lang, resetKey }) {
     const [current, setCurrent] = useState(0);
     const hoverRef = useRef(false);
     const total = videos.length;
 
-    useEffect(() => { setCurrent(0); }, [total]);
+    useEffect(() => { setCurrent(0); }, [resetKey]);
+    useEffect(() => { setCurrent((c) => (c < total ? c : 0)); }, [total]);
 
     useEffect(() => {
         if (!autoplay || total < 2) return;
@@ -100,7 +142,7 @@ function YtCarousel({ videos, autoplay, interval, showTitles }) {
                             }}
                         />
                         <span className="ytv-play" aria-hidden="true"></span>
-                        {showTitles && <span className="ytv-title">{v.title}</span>}
+                        {showTitles && <span className="ytv-title">{v.title}{showDates && dateLabel(v, lang) ? <span className="ytv-date">{dateLabel(v, lang)}</span> : null}</span>}
                     </a>
                 ))}
             </div>
@@ -119,7 +161,7 @@ function YtCarousel({ videos, autoplay, interval, showTitles }) {
     );
 }
 
-function YtGallery({ videos, showTitles }) {
+function YtGallery({ videos, showTitles, showDates, lang }) {
     const containerRef = useRef(null);
 
     const scroll = (direction) => {
@@ -150,7 +192,7 @@ function YtGallery({ videos, showTitles }) {
                                 }}
                             />
                             <span className="ytv-play" aria-hidden="true"></span>
-                            {showTitles && <span className="ytv-title">{v.title}</span>}
+                            {showTitles && <span className="ytv-title">{v.title}{showDates && dateLabel(v, lang) ? <span className="ytv-date">{dateLabel(v, lang)}</span> : null}</span>}
                         </a>
                     </div>
                 ))}
@@ -165,113 +207,225 @@ function YtGallery({ videos, showTitles }) {
     );
 }
 
+function Thumb({ v }) {
+    return (
+        <img
+            src={v.thumb}
+            alt={v.title}
+            decoding="async"
+            onError={(e) => {
+                const img = e.currentTarget;
+                if (img.src.includes("maxresdefault.jpg")) img.src = img.src.replace("maxresdefault.jpg", "sddefault.jpg");
+                else if (img.src.includes("sddefault.jpg")) img.src = img.src.replace("sddefault.jpg", "hqdefault.jpg");
+                else img.onerror = null;
+            }}
+        />
+    );
+}
+
+/** Page numbers to show: first, last, and one either side of the current one, with gaps. */
+function pageList(current, count) {
+    const out = [];
+    for (let i = 1; i <= count; i++) {
+        if (i === 1 || i === count || Math.abs(i - current) <= 1) out.push(i);
+        else if (out[out.length - 1] !== "…") out.push("…");
+    }
+    return out;
+}
+
+const YES_NO = [
+    { label: "Sí", value: true },
+    { label: "No", value: false },
+];
+
 export const versoComponentDef = {
     category: "YouTube",
     fields: {
         layout: {
             type: "select",
-            label: "Diseño del Carrusel",
+            label: "Diseño",
             options: [
-                { label: "Clásico (Pantalla completa)", value: "classic" },
-                { label: "Cuadrícula de videos", value: "grid" },
-                { label: "Carrusel Horizontal (Multi-tarjeta)", value: "gallery" },
+                { label: "Carrusel (un video a la vez)", value: "classic" },
+                { label: "Cuadrícula", value: "grid" },
+                { label: "Galería horizontal (varias tarjetas)", value: "gallery" },
+                { label: "Lista (miniatura + título)", value: "list" },
             ],
         },
-        titleFilter: { type: "text", label: "Filtro: el título contiene…" },
-        maxVideos: { type: "number", label: "Cantidad de videos" },
-        autoplay: {
-            type: "radio",
-            label: "Autoplay",
+        titleFilter: { type: "text", label: "Mostrar solo títulos con… (palabras separadas por comas)" },
+        excludeFilter: { type: "text", label: "Ocultar títulos con… (palabras separadas por comas)" },
+        order: {
+            type: "select",
+            label: "Orden",
             options: [
-                { label: "Sí", value: true },
-                { label: "No", value: false },
+                { label: "Más recientes primero", value: "newest" },
+                { label: "Más antiguos primero", value: "oldest" },
+                { label: "Por título (A–Z)", value: "title" },
             ],
         },
-        interval: { type: "number", label: "Intervalo (ms)" },
-        showTitles: {
-            type: "radio",
-            label: "Mostrar títulos",
+        maxVideos: { type: "number", label: "Videos por página (1–200)" },
+        pagination: {
+            type: "select",
+            label: "Paginación",
             options: [
-                { label: "Sí", value: true },
-                { label: "No", value: false },
+                { label: "Ninguna (solo los primeros)", value: "none" },
+                { label: "Botón «Cargar más»", value: "loadMore" },
+                { label: "Páginas numeradas", value: "pages" },
             ],
         },
+        columns: {
+            type: "select",
+            label: "Columnas (cuadrícula)",
+            options: [
+                { label: "Automático", value: "auto" },
+                { label: "2", value: "2" },
+                { label: "3", value: "3" },
+                { label: "4", value: "4" },
+            ],
+        },
+        showTitles: { type: "radio", label: "Mostrar títulos", options: YES_NO },
+        showDates: { type: "radio", label: "Mostrar fechas", options: YES_NO },
+        autoplay: { type: "radio", label: "Autoplay (carrusel)", options: YES_NO },
+        interval: { type: "number", label: "Intervalo del autoplay (ms)" },
         elementId: { type: "text", label: "ID / Ancla (opcional)" },
     },
     defaultProps: {
         layout: "classic",
         titleFilter: "",
+        excludeFilter: "",
+        order: "newest",
         maxVideos: 8,
+        pagination: "none",
+        columns: "auto",
         autoplay: true,
         interval: 5000,
         showTitles: true,
+        showDates: false,
         elementId: "",
     },
 };
 
-export default function YoutubeVideosVerso({ layout, titleFilter, maxVideos, autoplay, interval, showTitles, elementId, isEditing, puck }) {
+export default function YoutubeVideosVerso({ layout, titleFilter, excludeFilter, order, maxVideos, pagination, columns, autoplay, interval, showTitles, showDates, elementId, isEditing, puck }) {
     // Setup hints are for the editor; visitors never see admin instructions (an unconfigured or empty block renders nothing).
     const editing = !!(isEditing || (puck && puck.isEditing));
+    const lang = useMemo(pageLang, []);
+    const s = STRINGS[lang];
+    const perPage = Math.min(200, Math.max(1, Math.floor(Number(maxVideos) || 8)));
+    const mode = pagination === "loadMore" || pagination === "pages" ? pagination : "none";
     const [videos, setVideos] = useState(null); // null = loading, [] = loaded-empty
+    const [total, setTotal] = useState(0);
+    const [page, setPage] = useState(1);
+    const [loadingMore, setLoadingMore] = useState(false);
+    const topRef = useRef(null);
 
-    const query = useMemo(() => {
+    const base = useMemo(() => {
         const p = new URLSearchParams();
         if (titleFilter) p.set("q", titleFilter);
-        p.set("limit", String(Math.max(1, Number(maxVideos) || 8)));
+        if (excludeFilter) p.set("exclude", excludeFilter);
+        if (order && order !== "newest") p.set("order", order);
+        p.set("limit", String(perPage));
         return p.toString();
-    }, [titleFilter, maxVideos]);
+    }, [titleFilter, excludeFilter, order, perPage]);
 
+    const fetchPage = (offset) => fetch(`/api/v1/plugin/youtube-videos/?${base}&offset=${offset}`)
+        .then((res) => (res.ok ? res.json() : null))
+        .catch(() => null);
+
+    // Back to the first page whenever the options change.
+    useEffect(() => { setPage(1); }, [base, mode]);
     useEffect(() => {
         let alive = true;
-        fetch(`/api/v1/plugin/youtube-videos/?${query}`)
-            .then((res) => (res.ok ? res.json() : null))
-            .then((data) => { if (alive) setVideos((data && data.videos) || []); })
-            .catch(() => { if (alive) setVideos([]); });
+        if (mode !== "pages") setVideos(null);
+        fetchPage(mode === "pages" ? (page - 1) * perPage : 0).then((data) => {
+            if (!alive) return;
+            setVideos((data && data.videos) || []);
+            setTotal((data && data.total) || 0);
+        });
         return () => { alive = false; };
-    }, [query]);
+    }, [base, mode, page]);
+
+    const loadMore = async () => {
+        setLoadingMore(true);
+        const data = await fetchPage((videos || []).length);
+        setLoadingMore(false);
+        if (data && data.videos) {
+            setVideos((prev) => {
+                const seen = new Set((prev || []).map((v) => v.id));
+                return [...(prev || []), ...data.videos.filter((v) => !seen.has(v.id))];
+            });
+            setTotal(data.total || 0);
+        }
+    };
+    const goPage = (n) => {
+        setPage(n);
+        if (topRef.current && topRef.current.scrollIntoView) topRef.current.scrollIntoView({ behavior: "smooth", block: "start" });
+    };
 
     if (!editing && Array.isArray(videos) && videos.length === 0) return null;
 
+    const pageCount = Math.max(1, Math.ceil(total / perPage));
+    const shown = videos || [];
+    const colsClass = columns && columns !== "auto" ? ` ytv-cols-${columns}` : "";
+    const caption = (v) => (showTitles ? <span className="ytv-title">{v.title}{showDates && dateLabel(v, lang) ? <span className="ytv-date">{dateLabel(v, lang)}</span> : null}</span> : null);
+
+    let body;
+    if (videos === null) {
+        body = <div className="ytv-empty">{s.loading}</div>;
+    } else if (videos.length === 0) {
+        body = (
+            <div className="ytv-empty">
+                No hay videos para mostrar — configura el canal en Admin → YouTube Videos
+                {titleFilter || excludeFilter ? " (o ajusta los filtros)" : ""}.
+            </div>
+        );
+    } else if (layout === "grid") {
+        body = (
+            <div className={`ytv-grid${colsClass}`}>
+                {shown.map((v) => (
+                    <a key={v.id} href={v.url} target="_blank" rel="noopener noreferrer" className="ytv-grid-card group" title={v.title}>
+                        <Thumb v={v} />
+                        <span className="ytv-play" aria-hidden="true"></span>
+                        {caption(v)}
+                    </a>
+                ))}
+            </div>
+        );
+    } else if (layout === "list") {
+        body = (
+            <div className="ytv-list">
+                {shown.map((v) => (
+                    <a key={v.id} href={v.url} target="_blank" rel="noopener noreferrer" className="ytv-row">
+                        <span className="ytv-row-thumb"><Thumb v={v} /><span className="ytv-play" aria-hidden="true"></span></span>
+                        <span>
+                            <span className="ytv-row-title">{v.title}</span>
+                            {showDates && dateLabel(v, lang) ? <span className="ytv-row-date">{dateLabel(v, lang)}</span> : null}
+                        </span>
+                    </a>
+                ))}
+            </div>
+        );
+    } else if (layout === "gallery") {
+        body = <YtGallery videos={shown} showTitles={showTitles} showDates={showDates} lang={lang} />;
+    } else {
+        body = <YtCarousel videos={shown} autoplay={autoplay} interval={interval} showTitles={showTitles} showDates={showDates} lang={lang} resetKey={`${base}|${page}`} />;
+    }
+
     return (
-        <div id={elementId || undefined}>
+        <div id={elementId || undefined} ref={topRef}>
             <style dangerouslySetInnerHTML={{ __html: STYLES }} />
-            {videos === null ? (
-                <div className="ytv-empty">Cargando videos…</div>
-            ) : videos.length === 0 ? (
-                <div className="ytv-empty">
-                    No hay videos para mostrar — configura el canal en Admin → YouTube Videos
-                    {titleFilter ? ` (o ajusta el filtro "${titleFilter}")` : ""}.
+            {body}
+            {mode === "loadMore" && videos && videos.length > 0 && videos.length < total && (
+                <div className="ytv-pager">
+                    <button type="button" onClick={loadMore} disabled={loadingMore}>{loadingMore ? s.loading : s.more}</button>
                 </div>
-            ) : (
-                layout === "grid" ? (
-                    <div className="ytv-grid">
-                        {videos.map((v) => (
-                            <a key={v.id} href={v.url} target="_blank" rel="noopener noreferrer" className="ytv-grid-card group" title={v.title}>
-                                <img 
-                                    src={v.thumb} 
-                                    alt={v.title} 
-                                    decoding="async" 
-                                    onError={(e) => {
-                                        const img = e.currentTarget;
-                                        if (img.src.includes('maxresdefault.jpg')) {
-                                            img.src = img.src.replace('maxresdefault.jpg', 'sddefault.jpg');
-                                        } else if (img.src.includes('sddefault.jpg')) {
-                                            img.src = img.src.replace('sddefault.jpg', 'hqdefault.jpg');
-                                        } else {
-                                            img.onerror = null;
-                                        }
-                                    }}
-                                />
-                                <span className="ytv-play" aria-hidden="true"></span>
-                                {showTitles && <span className="ytv-title">{v.title}</span>}
-                            </a>
-                        ))}
-                    </div>
-                ) : layout === "gallery" ? (
-                    <YtGallery videos={videos} showTitles={showTitles} />
-                ) : (
-                    <YtCarousel videos={videos} autoplay={autoplay} interval={interval} showTitles={showTitles} />
-                )
+            )}
+            {mode === "pages" && videos && videos.length > 0 && pageCount > 1 && (
+                <nav className="ytv-pager" aria-label={s.pages}>
+                    <button type="button" onClick={() => goPage(page - 1)} disabled={page <= 1} aria-label={s.prev}>‹</button>
+                    {pageList(page, pageCount).map((n, i) => (n === "…"
+                        ? <span key={`gap${i}`} className="ytv-gap">…</span>
+                        : <button key={n} type="button" onClick={() => goPage(n)} aria-current={n === page ? "page" : undefined} aria-label={`${s.page} ${n}`}>{n}</button>))}
+                    <button type="button" onClick={() => goPage(page + 1)} disabled={page >= pageCount} aria-label={s.next}>›</button>
+                </nav>
             )}
         </div>
     );

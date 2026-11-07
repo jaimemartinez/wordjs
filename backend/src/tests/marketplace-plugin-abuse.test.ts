@@ -2195,13 +2195,14 @@ async function withYoutube<T>(pages: Record<string, any>, fn: (fetched: string[]
     try { return await fn(fetched); } finally { (globalThis as any).fetch = real; }
 }
 
-/** Save `body` the way the admin page does; returns the cache the refresh wrote and the public list. */
+/** Save `body` the way the admin page does; returns the status the refresh left and the public list. */
 async function configureYoutube(p: BootedPlugin, body: any) {
-    await p.call('post', '/settings', { body });
-    const cache = p.options.get('youtube_videos_cache') || {};
+    const cache = (await p.call('post', '/settings', { body })).body;
     const list = await p.call('get', '/', { query: { limit: '50' } });
-    return { cache, ids: (list.body.videos || []).map((v: any) => v.id), mode: list.body.mode };
+    return { cache, ids: (list.body.videos || []).map((v: any) => v.id), mode: list.body.mode, videos: list.body.videos || [] };
 }
+/** The URLs fetched, without YouTube's web client API (POSTs this fake answers 404, so they fall through). */
+const pagesFetched = (fetched: string[]) => [...new Set(fetched.filter((u) => !u.includes('/youtubei/')))];
 
 const firstChannelId = (html: string) => (html.match(/"channelId":"(UC[0-9A-Za-z_-]{20,})"/) || [])[1];
 
@@ -2224,7 +2225,7 @@ test('youtube-videos: a handle resolves to its page\'s own channel, never to the
         await withPlugin('youtube-videos', async (p) => {
             await withYoutube({ [YT_HOME_URL]: html, ...YT_FEEDS }, async (fetched) => {
                 const { cache, ids, mode } = await configureYoutube(p, { channel: YT_HANDLE });
-                assert.strictEqual(cache.error, null, `${label}: ${cache.error}`);
+                assert.doesNotMatch(String(cache.error), /Could not|No channel/, `${label}: ${cache.error}`);
                 assert.strictEqual(cache.channelId, YT_OWN, `${label}: resolved to another channel`);
                 assert.strictEqual(mode, 'rss', label);
                 assert.deepStrictEqual(ids, ['ownVideo001', 'ownVideo002'], `${label}: showed another channel's videos`);
@@ -2247,16 +2248,18 @@ test('youtube-videos: a channel page that does not say which channel it is is re
                 assert.match(String(cache.error), /Could not find the channel id of @synthetic/, label);
                 assert.ok(!cache.channelId, `${label}: resolved to ${cache.channelId}`);
                 assert.deepStrictEqual(ids, [], `${label}: showed videos of a channel it guessed`);
-                assert.deepStrictEqual([...new Set(fetched)], [YT_HOME_URL], `${label}: fetched past the refused page`);
+                assert.deepStrictEqual(pagesFetched(fetched), [YT_HOME_URL], `${label}: fetched past the refused page`);
             });
         });
     }
 });
 
-test('youtube-videos: without an API key the list is the channel\'s RSS feed, never its Videos tab', async () => {
+test('youtube-videos: the Videos tab HTML page is never scraped; without the web client API the list is the RSS feed', async () => {
     // The Videos tab is served — the channel's own, holding videos in the legacy shape and in the
     // lockup shape youtube.com uses now — and must not be read: its markup is not an interface (the
     // scraper that read it found nothing once the lockup shape replaced the old one), and it has no dates.
+    // The full list comes from the web client API's JSON (youtube-videos-listing.test.ts); when that
+    // answers nothing (here: 404), the RSS feed is the last fallback.
     const lockup = (contentId: string) => ({ lockupViewModel: { contentId, contentType: 'LOCKUP_CONTENT_TYPE_VIDEO',
         metadata: { lockupMetadataViewModel: { title: { content: `Video ${contentId}` } } } } });
     const videosTab = ytChannelPage({ tab: 'videos', canonical: YT_OWN, externalId: YT_OWN, tabBrowseId: YT_OWN,
@@ -2274,12 +2277,12 @@ test('youtube-videos: without an API key the list is the channel\'s RSS feed, ne
     for (const [channel, expectFetched] of cases) {
         await withPlugin('youtube-videos', async (p) => {
             await withYoutube(pages, async (fetched) => {
-                const { cache, ids, mode } = await configureYoutube(p, { channel });
-                assert.strictEqual(cache.error, null, `${channel}: ${cache.error}`);
+                const { cache, ids, mode, videos } = await configureYoutube(p, { channel });
+                assert.match(String(cache.error), /videos-tab: HTTP 404/, `${channel}: ${cache.error}`);
                 assert.strictEqual(mode, 'rss', channel);
                 assert.deepStrictEqual(ids, ['ownVideo001', 'ownVideo002'], channel);
-                assert.ok(cache.videos.every((v: any) => !Number.isNaN(Date.parse(v.publishedAt))), `${channel}: a video without a date`);
-                assert.deepStrictEqual([...new Set(fetched)], expectFetched, `${channel}: read a page the list does not come from`);
+                assert.ok(videos.every((v: any) => !Number.isNaN(Date.parse(v.publishedAt))), `${channel}: a video without a date`);
+                assert.deepStrictEqual(pagesFetched(fetched), expectFetched, `${channel}: read a page the list does not come from`);
             });
         });
     }
