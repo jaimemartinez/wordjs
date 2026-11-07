@@ -28,7 +28,7 @@ const tabIds = (from: number, to: number) => Array.from({ length: to - from + 1 
 const ALL_TAB = tabIds(1, 12);
 
 const rssFeed = (ids: string[]) => `<?xml version="1.0" encoding="UTF-8"?><feed xmlns:yt="http://www.youtube.com/xml/schemas/2015">${
-    ids.map((id, i) => `<entry><yt:videoId>${id}</yt:videoId><title>Feed ${id}</title><published>2026-0${1 + (i % 9)}-01T00:00:00+00:00</published></entry>`).join('')}</feed>`;
+    ids.map((id, i) => `<entry><yt:videoId>${id}</yt:videoId><title>Recorded video ${parseInt(id.slice(6), 10)}</title><published>2026-0${1 + (i % 9)}-01T00:00:00+00:00</published></entry>`).join('')}</feed>`;
 
 type Answer = { status?: number; body?: any; throws?: string } | undefined;
 type Handler = (url: string, body: any) => Answer;
@@ -316,6 +316,62 @@ test('youtube-videos: every outbound request draws from one hourly budget', asyn
             assert.ok(calls.length <= 600, `made ${calls.length} requests in one hour`);
             assert.strictEqual(calls.length, before, 'kept calling YouTube after the budget ran out');
             assert.match(String(s.error), /request budget/i);
+        });
+    });
+});
+
+// ---- original titles -----------------------------------------------------------------------------
+// YouTube lists a video under its title in the REQUESTED interface language when the creator added a
+// translation (or YouTube auto-translates it). 1.1.0 always asked in English, so a Spanish channel
+// with English translations showed English titles. The feed carries the originals; the plugin asks in
+// the language whose titles match them, and keeps that language with the list.
+
+/** The recorded channel, where every language but `original` gets translated titles. */
+const translatedUnless = (original: string): Handler => (url, body) => {
+    if (url !== BROWSE || !body) return undefined;
+    const hl = body.context && body.context.client && body.context.client.hl;
+    const a = recorded(url, body);
+    if (!a || hl === original) return a;
+    return { body: JSON.parse(JSON.stringify(a.body).replace(/Recorded video (\d+)/g, `Translated to ${hl} $1`)) };
+};
+
+test('youtube-videos: titles are the originals — the list is asked in the language that gives them', async () => {
+    await withYt(async (p) => {
+        await withFetch([translatedUnless('es'), recorded], async (calls) => {
+            const s = await save(p, { channel: CHANNEL });
+            assert.strictEqual(s.error, null, String(s.error));
+            assert.strictEqual(s.titleLanguage, 'es');
+            const l = await list(p, { limit: '50' });
+            assert.deepStrictEqual(l.videos.map((v: any) => v.title), ALL_TAB.map((_, i) => `Recorded video ${i + 1}`),
+                'a translated title reached the list');
+            // en was tried and refused (its titles do not match the feed); every page after it is asked in es.
+            const tab = browseCalls(calls);
+            assert.deepStrictEqual(tab.map((c) => c.body.context.client.hl), ['en', 'es', 'es', 'es']);
+        });
+        // The language is remembered: an incremental refresh asks in es straight away, one request.
+        await withFetch([translatedUnless('es'), recorded], async (calls) => {
+            await p.call('post', '/refresh', { body: {}, user: admin });
+            assert.deepStrictEqual(browseCalls(calls).map((c) => c.body.context.client.hl), ['es']);
+        });
+    });
+});
+
+test('youtube-videos: the site language is tried first, and the newest titles come from the feed whatever happens', async () => {
+    await withYt(async (p) => {
+        p.options.set('WPLANG', 'pt_BR');
+        await withFetch([translatedUnless('pt'), recorded], async (calls) => {
+            const s = await save(p, { channel: CHANNEL });
+            assert.strictEqual(s.titleLanguage, 'pt');
+            assert.strictEqual(browseCalls(calls).length, 3, 'a language probe beyond the site language');
+        });
+    });
+    // No language gives the originals (titles changed after upload, say): the feed's titles still win
+    // for the videos it lists.
+    await withYt(async (p) => {
+        await withFetch([translatedUnless('none'), recorded], async () => {
+            await save(p, { channel: CHANNEL });
+            const l = await list(p, { limit: '3' });
+            assert.deepStrictEqual(l.videos.map((v: any) => v.title).slice(0, 2), ['Recorded video 1', 'Recorded video 2']);
         });
     });
 });

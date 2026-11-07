@@ -7,6 +7,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ## [Unreleased]
 
 ### Marketplace
+- **youtube-videos 1.1.1 shows each video's original title.** 1.1.0 asked YouTube for the list in English, so a
+  video whose creator added an English translation showed it instead of its title. The list is now asked in the
+  language whose titles match the channel's feed (the site's language is tried first), that language is kept with
+  the list, and the newest videos always take their title from the feed. A list kept by 1.1.0 is read again once.
 - **youtube-videos 1.1.0 lists every video of a channel, not the latest 15.** Without a key it pages the channel's
   Videos tab (then its uploads playlist) and keeps the RSS feed only as a last resort; a Data API key, when saved, is
   still used first, and the keyless source can be switched off in the panel. Refreshes only ask for new videos, a big
