@@ -426,3 +426,48 @@
 @media (prefers-reduced-motion: reduce) {
     .plugin-admin-youtube * { animation: none !important; }
 }
+
+/* ---- 1.1: status strip, library toolbar, settings sections ---------------------------------- */
+.plugin-admin-youtube .ytv-strip { display: grid; grid-template-columns: 1fr; gap: 1rem; align-items: center; }
+@media (min-width: 760px) { .plugin-admin-youtube .ytv-strip { grid-template-columns: 1fr auto; } }
+.plugin-admin-youtube .ytv-strip-stats { display: flex; flex-wrap: wrap; gap: 1.75rem; margin: 0; }
+.plugin-admin-youtube .ytv-strip-stats dt { font-size: 0.72rem; font-weight: 600; letter-spacing: 0.04em; text-transform: uppercase; color: var(--cf-faint); margin-bottom: 0.3rem; }
+.plugin-admin-youtube .ytv-strip-stats dd { margin: 0; font-size: 0.9rem; font-weight: 600; color: var(--cf-ink); }
+.plugin-admin-youtube .ytv-strip-big { font-size: 1.6rem !important; font-weight: 700 !important; letter-spacing: -0.02em; line-height: 1; }
+.plugin-admin-youtube .ytv-strip-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; justify-content: flex-end; }
+.plugin-admin-youtube .ytv-strip-note { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.6rem; font-size: 0.84rem; color: var(--cf-soft); }
+.plugin-admin-youtube .ytv-progress { position: relative; width: 90px; height: 6px; border-radius: 3px; background: var(--cf-accent-soft); overflow: hidden; flex: 0 0 auto; }
+.plugin-admin-youtube .ytv-progress span { position: absolute; inset: 0 60% 0 0; border-radius: 3px; background: var(--cf-accent-grad); animation: ytv-slide 1.2s ease-in-out infinite; }
+@keyframes ytv-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
+@media (prefers-reduced-motion: reduce) { .plugin-admin-youtube .ytv-progress span { animation: none; inset: 0 30% 0 0; } }
+
+.plugin-admin-youtube .ytv-toolbar { display: grid; grid-template-columns: 1fr; gap: 0.6rem; margin-bottom: 0.9rem; }
+@media (min-width: 760px) { .plugin-admin-youtube .ytv-toolbar { grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) auto auto; } }
+.plugin-admin-youtube .ytv-search { position: relative; display: block; }
+.plugin-admin-youtube .ytv-search svg { position: absolute; left: 0.8rem; top: 50%; width: 1rem; height: 1rem; transform: translateY(-50%); color: var(--cf-faint); pointer-events: none; }
+.plugin-admin-youtube .ytv-search .cf-input { padding-left: 2.3rem; }
+.plugin-admin-youtube .ytv-count { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; min-height: 1.6rem; margin-bottom: 1rem; font-size: 0.82rem; color: var(--cf-soft); }
+.plugin-admin-youtube .ytv-linkbtn { background: none; border: none; padding: 0; color: var(--cf-accent); font-weight: 600; font-size: 0.82rem; cursor: pointer; }
+.plugin-admin-youtube .ytv-linkbtn:hover { text-decoration: underline; }
+.plugin-admin-youtube .ytv-card .cf-video-title { text-decoration: none; }
+.plugin-admin-youtube .ytv-card .cf-video-thumb { display: block; }
+.plugin-admin-youtube .ytv-card-meta { display: flex; align-items: center; justify-content: space-between; gap: 0.5rem; margin-top: 0.25rem; font-size: 0.74rem; color: var(--cf-faint); }
+.plugin-admin-youtube .ytv-iconbtn { display: inline-flex; align-items: center; justify-content: center; width: 28px; height: 28px; border-radius: 0.45rem; border: 1px solid var(--cf-line); background: var(--cf-card); color: var(--cf-soft); cursor: pointer; flex: 0 0 auto; }
+.plugin-admin-youtube .ytv-iconbtn:hover { color: var(--cf-accent); border-color: var(--cf-accent-ring); }
+.plugin-admin-youtube .ytv-iconbtn svg { width: 0.85rem; height: 0.85rem; }
+.plugin-admin-youtube .ytv-more { display: flex; justify-content: center; margin-top: 1.5rem; }
+.plugin-admin-youtube .cf-empty .cf-btn-ghost { margin-top: 0.75rem; }
+
+.plugin-admin-youtube .ytv-section + .ytv-section { margin-top: 1.6rem; padding-top: 1.6rem; border-top: 1px solid var(--cf-line); }
+.plugin-admin-youtube .ytv-narrow { max-width: 10rem; }
+.plugin-admin-youtube .ytv-form-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.9rem; margin-top: 1.6rem; }
+.plugin-admin-youtube .ytv-form-actions .cf-flash { margin: 0; flex: 1 1 16rem; display: flex; align-items: center; gap: 0.6rem; }
+.plugin-admin-youtube .ytv-switch { display: inline-flex; align-items: center; gap: 0.7rem; cursor: pointer; }
+.plugin-admin-youtube .ytv-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
+.plugin-admin-youtube .ytv-switch-track { position: relative; width: 40px; height: 22px; border-radius: 11px; background: var(--cf-line-strong); transition: background 160ms ease; flex: 0 0 auto; }
+.plugin-admin-youtube .ytv-switch-track span { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: var(--cf-shadow-sm); transition: transform 160ms ease; }
+.plugin-admin-youtube .ytv-switch input:checked + .ytv-switch-track { background: var(--cf-accent); }
+.plugin-admin-youtube .ytv-switch input:checked + .ytv-switch-track span { transform: translateX(18px); }
+.plugin-admin-youtube .ytv-switch input:focus-visible + .ytv-switch-track { outline: 2px solid var(--cf-accent); outline-offset: 2px; }
+.plugin-admin-youtube .ytv-switch-label { font-size: 0.88rem; font-weight: 600; color: var(--cf-ink); }
+.plugin-admin-youtube .ytv-steps, .plugin-admin-youtube .ytv-optlist { margin: 0.5rem 0 0; padding-left: 1.25rem; color: var(--cf-soft); font-size: 0.88rem; line-height: 1.7; }

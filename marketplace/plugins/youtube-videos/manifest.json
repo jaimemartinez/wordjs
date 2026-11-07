@@ -1,8 +1,8 @@
 {
     "id": "youtube-videos",
     "name": "YouTube Videos",
-    "version": "1.0.5",
-    "description": "Pulls the videos of a YouTube channel (links, thumbnails, titles) and ships a Verso carousel block with title filtering and a video-count limit. Works keyless out of the box via the channel RSS feed (latest 15); add a YouTube Data API v3 key for the full upload history.",
+    "version": "1.1.0",
+    "description": "Lists every video of a YouTube channel (links, thumbnails, titles) and ships a Verso block — carousel, grid, gallery or list — with include/exclude title filters, ordering and \"Load more\" or numbered pages. Keyless by default (the channel's full Videos tab, paged; RSS as the last fallback); a YouTube Data API v3 key, when set, is always preferred.",
     "author": "WordJS",
     "isolated": true,
     "theme": {
@@ -37,26 +37,26 @@
         {
             "scope": "settings",
             "access": "read",
-            "reason": "Read the configured channel and the cached video list."
+            "reason": "Read the configured channel, the cache interval and the keyless-source switch."
         },
         {
             "scope": "settings",
             "access": "write",
-            "reason": "Store the configured channel and cache the fetched video list."
+            "reason": "Store the configured channel, the cache interval and the keyless-source switch."
         },
         {
             "scope": "database",
             "access": "read",
-            "reason": "Read the YouTube Data API key from the plugin's own settings table (options are readable by other plugins, so the key lives in a wjp_ table instead)."
+            "reason": "Read the YouTube Data API key and the cached video list from the plugin's own settings table (options are readable by other plugins, so the key lives in a wjp_ table instead)."
         },
         {
             "scope": "database",
             "access": "write",
-            "reason": "Create/update the plugin's own settings table holding the API key."
+            "reason": "Create/update the plugin's own settings table holding the API key and the cached video list."
         },
         {
             "scope": "network",
-            "reason": "Fetch the channel's video list from youtube.com (RSS) or googleapis.com (Data API v3)."
+            "reason": "Fetch the channel's video list over HTTPS from www.youtube.com (its web client API and RSS feed) or www.googleapis.com (Data API v3, only when a key is set). Thumbnails load in the visitor's browser from i.ytimg.com, not through this permission. Hosts to allow: www.youtube.com, www.googleapis.com."
         },
         {
             "scope": "express",

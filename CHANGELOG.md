@@ -6,6 +6,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Marketplace
+- **youtube-videos 1.1.0 lists every video of a channel, not the latest 15.** Without a key it pages the channel's
+  Videos tab (then its uploads playlist) and keeps the RSS feed only as a last resort; a Data API key, when saved, is
+  still used first, and the keyless source can be switched off in the panel. Refreshes only ask for new videos, a big
+  channel is read in the background, and every request counts against an hourly budget. The block gains a list layout,
+  an exclude filter, ordering, "Load more" or numbered pages, grid columns and dates; the admin page now has a
+  searchable library with "Load more", grouped settings and a live sync status.
+
 ## [2.11.28] - 2026-11-05
 
 ### Security
