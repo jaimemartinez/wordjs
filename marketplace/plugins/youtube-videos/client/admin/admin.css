@@ -436,15 +436,17 @@
 .plugin-admin-youtube .ytv-strip-big { font-size: 1.6rem !important; font-weight: 700 !important; letter-spacing: -0.02em; line-height: 1; }
 .plugin-admin-youtube .ytv-strip-actions { display: flex; flex-wrap: wrap; gap: 0.6rem; justify-content: flex-end; }
 .plugin-admin-youtube .ytv-strip-note { grid-column: 1 / -1; display: flex; align-items: center; gap: 0.6rem; font-size: 0.84rem; color: var(--cf-soft); }
-.plugin-admin-youtube .ytv-progress { position: relative; width: 90px; height: 6px; border-radius: 3px; background: var(--cf-accent-soft); overflow: hidden; flex: 0 0 auto; }
-.plugin-admin-youtube .ytv-progress span { position: absolute; inset: 0 60% 0 0; border-radius: 3px; background: var(--cf-accent-grad); animation: ytv-slide 1.2s ease-in-out infinite; }
+.plugin-admin-youtube .ytv-progress { display: block; width: 90px; height: 6px; border-radius: 3px; background: var(--cf-accent-soft); overflow: hidden; flex: 0 0 auto; }
+.plugin-admin-youtube .ytv-progress span { display: block; width: 40%; height: 100%; border-radius: 3px; background: var(--cf-accent-grad); animation: ytv-slide 1.2s ease-in-out infinite; }
 @keyframes ytv-slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(250%); } }
-@media (prefers-reduced-motion: reduce) { .plugin-admin-youtube .ytv-progress span { animation: none; inset: 0 30% 0 0; } }
+@media (prefers-reduced-motion: reduce) { .plugin-admin-youtube .ytv-progress span { animation: none; width: 70%; } }
 
 .plugin-admin-youtube .ytv-toolbar { display: grid; grid-template-columns: 1fr; gap: 0.6rem; margin-bottom: 0.9rem; }
 @media (min-width: 760px) { .plugin-admin-youtube .ytv-toolbar { grid-template-columns: minmax(0, 2fr) minmax(0, 1.4fr) auto auto; } }
-.plugin-admin-youtube .ytv-search { position: relative; display: block; }
-.plugin-admin-youtube .ytv-search svg { position: absolute; left: 0.8rem; top: 50%; width: 1rem; height: 1rem; transform: translateY(-50%); color: var(--cf-faint); pointer-events: none; }
+/* Icon over the input without positioning: both share one grid cell (no position rules, see safeStyle.ts). */
+.plugin-admin-youtube .ytv-search { display: grid; align-items: center; }
+.plugin-admin-youtube .ytv-search > * { grid-area: 1 / 1; }
+.plugin-admin-youtube .ytv-search svg { z-index: 1; margin-left: 0.8rem; width: 1rem; height: 1rem; color: var(--cf-faint); pointer-events: none; }
 .plugin-admin-youtube .ytv-search .cf-input { padding-left: 2.3rem; }
 .plugin-admin-youtube .ytv-count { display: flex; flex-wrap: wrap; align-items: center; gap: 0.6rem; min-height: 1.6rem; margin-bottom: 1rem; font-size: 0.82rem; color: var(--cf-soft); }
 .plugin-admin-youtube .ytv-linkbtn { background: none; border: none; padding: 0; color: var(--cf-accent); font-weight: 600; font-size: 0.82rem; cursor: pointer; }
@@ -463,9 +465,9 @@
 .plugin-admin-youtube .ytv-form-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.9rem; margin-top: 1.6rem; }
 .plugin-admin-youtube .ytv-form-actions .cf-flash { margin: 0; flex: 1 1 16rem; display: flex; align-items: center; gap: 0.6rem; }
 .plugin-admin-youtube .ytv-switch { display: inline-flex; align-items: center; gap: 0.7rem; cursor: pointer; }
-.plugin-admin-youtube .ytv-switch input { position: absolute; opacity: 0; width: 1px; height: 1px; }
-.plugin-admin-youtube .ytv-switch-track { position: relative; width: 40px; height: 22px; border-radius: 11px; background: var(--cf-line-strong); transition: background 160ms ease; flex: 0 0 auto; }
-.plugin-admin-youtube .ytv-switch-track span { position: absolute; top: 3px; left: 3px; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: var(--cf-shadow-sm); transition: transform 160ms ease; }
+.plugin-admin-youtube .ytv-switch input { opacity: 0; width: 1px; height: 1px; margin: 0 -0.7rem 0 0; overflow: hidden; clip-path: inset(50%); }
+.plugin-admin-youtube .ytv-switch-track { display: flex; align-items: center; padding: 0 3px; box-sizing: border-box; width: 40px; height: 22px; border-radius: 11px; background: var(--cf-line-strong); transition: background 160ms ease; flex: 0 0 auto; }
+.plugin-admin-youtube .ytv-switch-track span { display: block; width: 16px; height: 16px; border-radius: 50%; background: #fff; box-shadow: var(--cf-shadow-sm); transition: transform 160ms ease; }
 .plugin-admin-youtube .ytv-switch input:checked + .ytv-switch-track { background: var(--cf-accent); }
 .plugin-admin-youtube .ytv-switch input:checked + .ytv-switch-track span { transform: translateX(18px); }
 .plugin-admin-youtube .ytv-switch input:focus-visible + .ytv-switch-track { outline: 2px solid var(--cf-accent); outline-offset: 2px; }
