@@ -1,7 +1,7 @@
 {
     "id": "youtube-videos",
     "name": "YouTube Videos",
-    "version": "1.1.0",
+    "version": "1.1.1",
     "description": "Lists every video of a YouTube channel (links, thumbnails, titles) and ships a Verso block — carousel, grid, gallery or list — with include/exclude title filters, ordering and \"Load more\" or numbered pages. Keyless by default (the channel's full Videos tab, paged; RSS as the last fallback); a YouTube Data API v3 key, when set, is always preferred.",
     "author": "WordJS",
     "isolated": true,

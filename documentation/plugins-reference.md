@@ -729,7 +729,7 @@ the same plugin there) and activate it from **Plugins**.
 ---
 
 ## 8. YouTube Videos 🎥
-**ID:** `youtube-videos` | **Version:** 1.1.0
+**ID:** `youtube-videos` | **Version:** 1.1.1
 
 Lists **every** video of a YouTube channel (links, thumbnails, titles, dates) and ships a Verso block
 — carousel, grid, horizontal gallery or list — with include/exclude title filters, ordering and
@@ -739,7 +739,9 @@ Lists **every** video of a YouTube channel (links, thumbnails, titles, dates) an
    1 quota unit per 50 videos).
 2. **Without a key**, the channel's Videos tab through YouTube's web client API (`youtubei/v1/browse`
    plus continuation tokens), then the uploads playlist the same way. It is not a documented public
-   interface, so the admin can switch it off in the panel ("Full list without a key").
+   interface, so the admin can switch it off in the panel ("Full list without a key"). YouTube lists a
+   video under its title in the requested language when a translation exists, so the list is asked in
+   the language whose titles match the RSS feed's (the originals), the site's language first.
 3. The channel **RSS feed** (latest 15), only when everything above failed.
 
 Refreshes are incremental (they stop at the first cached video, usually one request) with a full

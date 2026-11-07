@@ -30,7 +30,7 @@
 
 exports.metadata = {
     name: 'YouTube Videos',
-    version: '1.1.0',
+    version: '1.1.1',
     description: 'Full channel video list (links, thumbnails, titles) + Verso carousel block',
     author: 'WordJS',
 };
@@ -132,14 +132,17 @@ const textOf = (t) => {
 const thumbFor = (id) => `https://i.ytimg.com/vi/${id}/maxresdefault.jpg`;
 const watchUrl = (id) => `${YT}/watch?v=${id}`;
 
-/** The "… ago" part of a lockup's metadata rows (InnerTube gives no absolute date), or ''. */
+/**
+ * The relative age of a lockup ("3 days ago", "hace 3 días"…; InnerTube gives no absolute date), or ''.
+ * It is the last part of the last metadata row that has several parts ("views • age"): the text is in
+ * the language the list was asked in, so it is found by position, not by an English word.
+ */
 function lockupAge(lockup) {
     const rows = (((lockup.metadata || {}).lockupMetadataViewModel || {}).metadata || {}).contentMetadataViewModel;
-    for (const row of (rows && rows.metadataRows) || []) {
-        for (const part of (row && row.metadataParts) || []) {
-            const s = textOf(part && part.text);
-            if (/\bago$/i.test(s.trim())) return s.trim();
-        }
+    const list = ((rows && rows.metadataRows) || []).slice().reverse();
+    for (const row of list) {
+        const parts = (row && row.metadataParts) || [];
+        if (parts.length >= 2) return textOf(parts[parts.length - 1] && parts[parts.length - 1].text).trim();
     }
     return '';
 }
@@ -306,7 +309,7 @@ exports.init = async function (wordjs) {
 
     let clientVersion = WEB_CLIENT.clientVersion;
     let versionProbed = false;
-    const innertube = async (endpoint, payload) => {
+    const innertube = async (endpoint, payload, hl = WEB_CLIENT.hl) => {
         const call = () => request(`${YT}/youtubei/v1/${endpoint}?prettyPrint=false`, {
             method: 'POST',
             headers: {
@@ -315,7 +318,7 @@ exports.init = async function (wordjs) {
                 'x-youtube-client-version': clientVersion,
                 'user-agent': 'Mozilla/5.0 (WordJS youtube-videos plugin)',
             },
-            body: JSON.stringify({ context: { client: { ...WEB_CLIENT, clientVersion } }, ...payload }),
+            body: JSON.stringify({ context: { client: { ...WEB_CLIENT, clientVersion, hl } }, ...payload }),
         }).then((r) => r.json());
         try {
             return await call();
@@ -372,10 +375,42 @@ exports.init = async function (wordjs) {
     };
 
     // ---- sources: each one is a pager { first(), next(token) } → { videos, next } ------------------
-    const innertubePager = (browseId, params) => ({
-        first: async () => collectVideos(listRoot(await innertube('browse', params ? { browseId, params } : { browseId }))),
-        next: async (token) => collectVideos(listRoot(await innertube('browse', { continuation: token }))),
-    });
+    // `hl` is the interface language YouTube answers in. It matters for TITLES: a video whose creator
+    // added translations (or that YouTube auto-translates) is listed under the title in `hl`, not under
+    // its original one — so the list is asked in the channel's own language (see originalLanguage).
+    const innertubeFirst = (browseId, params) => async (hl) => collectVideos(listRoot(await innertube('browse', params ? { browseId, params } : { browseId }, hl)));
+    const innertubePager = (first, hl, prefetched = null) => {
+        let pending = prefetched;
+        return {
+            hl,
+            first: async () => { if (pending) { const p = pending; pending = null; return p; } return first(hl); },
+            next: async (token) => collectVideos(listRoot(await innertube('browse', { continuation: token }, hl))),
+        };
+    };
+
+    const sameTitle = (a, b) => String(a || '').replace(/\s+/g, ' ').trim() === String(b || '').replace(/\s+/g, ' ').trim();
+    const LANGUAGE_CANDIDATES = ['en', 'es', 'pt', 'fr', 'de', 'it'];
+    const MAX_LANGUAGE_TRIES = 4;
+    /**
+     * The interface language in which YouTube lists this channel under its ORIGINAL titles, and the
+     * first page fetched in it. The RSS feed always carries the original titles, so the first page is
+     * asked in candidate languages (the site's first) until its titles match the feed's for the videos
+     * both show. Nothing to compare against (no feed): the first candidate. Nothing matches fully: the
+     * best match. Costs one request per language tried; the answer is kept with the list.
+     */
+    const originalLanguage = async (fetchFirst, originals) => {
+        const site = String((await options.get('WPLANG', '')) || '').slice(0, 2).toLowerCase();
+        const candidates = [...new Set([site, ...LANGUAGE_CANDIDATES].filter((l) => /^[a-z]{2}$/.test(l)))].slice(0, MAX_LANGUAGE_TRIES);
+        let best = null;
+        for (const hl of candidates) {
+            const page = await fetchFirst(hl);
+            const shared = page.videos.filter((v) => originals.has(v.id));
+            const score = shared.filter((v) => sameTitle(v.title, originals.get(v.id))).length;
+            if (!shared.length || score === shared.length) return { hl, page };
+            if (!best || score > best.score) best = { hl, page, score };
+        }
+        return best;
+    };
 
     const apiPager = (uploads, apiKey) => {
         const page = async (token) => {
@@ -471,7 +506,7 @@ exports.init = async function (wordjs) {
                     progress.videos = videos.length;
                     if (pages === 1 || pages % 10 === 0) {
                         await writeCache({ ...prev, videos: merge(videos, sameList ? prev.videos : []), channelId, source, mode: source === 'api' ? 'api' : 'full',
-                            fetchedAt: prev.fetchedAt || Date.now(), fullAt: prev.fullAt || 0, resume: next || '', partial: !!next, error: null });
+                            fetchedAt: prev.fetchedAt || Date.now(), fullAt: prev.fullAt || 0, resume: next || '', partial: !!next, error: null, hl: pager.hl || '' });
                     }
                 },
             });
@@ -528,6 +563,7 @@ exports.init = async function (wordjs) {
                     videos: r.videos, channelId, source, mode, fetchedAt: Date.now(),
                     fullAt: r.fullAt || 0, resume: r.resume || '', partial: !!r.partial,
                     error: r.note || (errors.length ? errors.join(' · ') : null),
+                    hl: r.hl || '',
                 };
                 await writeCache(cache);
                 return cache;
@@ -549,22 +585,35 @@ exports.init = async function (wordjs) {
                         if (e instanceof BudgetExhausted) throw e;
                     }
                 }
+                let feed = null; // the RSS feed, fetched once per refresh
                 if (keyless) {
+                    // The feed carries the newest videos' ORIGINAL titles and exact dates: the
+                    // reference for the listing language, and what those videos finally show.
+                    try { feed = await fetchRss(channelId); } catch (e) { if (e instanceof BudgetExhausted) throw e; /* optional here */ }
+                    const originals = new Map((feed || []).map((v) => [v.id, v.title]));
                     const sources = [
-                        ['videos-tab', () => innertubePager(channelId, VIDEOS_TAB_PARAMS)],
-                        ['uploads-playlist', () => innertubePager('VLUU' + channelId.slice(2))],
+                        ['videos-tab', innertubeFirst(channelId, VIDEOS_TAB_PARAMS)],
+                        ['uploads-playlist', innertubeFirst('VLUU' + channelId.slice(2))],
                     ];
-                    for (const [source, make] of sources) {
+                    for (const [source, fetchFirst] of sources) {
                         try {
-                            const r = await refreshFrom(source, make(), channelId, base);
+                            // A list kept from before its language was known (≤ 1.1.0 asked in
+                            // English) holds translated titles: it is read again from scratch.
+                            const known = base.hl && base.source === source ? base.hl : '';
+                            const lang = known ? { hl: known, page: null } : await originalLanguage(fetchFirst, originals);
+                            const from = known ? base : { ...base, videos: [], fullAt: 0, resume: '' };
+                            const r = await refreshFrom(source, innertubePager(fetchFirst, lang.hl, lang.page), channelId, from);
                             if (!r) continue;
+                            r.hl = lang.hl;
                             // InnerTube carries no absolute dates: keep the ones already known, and
-                            // take the newest videos' exact dates from the feed when budget allows.
+                            // take the newest videos' exact dates (and original titles) from the feed.
                             const dated = new Map(((base.videos) || []).filter((v) => v.publishedAt).map((v) => [v.id, v.publishedAt]));
-                            if (budgetLeft() > 0) {
-                                try { for (const v of await fetchRss(channelId)) dated.set(v.id, v.publishedAt); } catch { /* dates are optional */ }
-                            }
-                            r.videos = r.videos.map((v) => (v.publishedAt || !dated.has(v.id) ? v : { ...v, publishedAt: dated.get(v.id) }));
+                            for (const v of feed || []) dated.set(v.id, v.publishedAt);
+                            r.videos = r.videos.map((v) => {
+                                const title = originals.has(v.id) ? originals.get(v.id) : v.title;
+                                const publishedAt = v.publishedAt || dated.get(v.id) || '';
+                                return title === v.title && publishedAt === v.publishedAt ? v : { ...v, title, publishedAt };
+                            });
                             return await done(source, 'full', channelId, r);
                         } catch (e) {
                             errors.push(`${source}: ${e.message || e}`);
@@ -572,7 +621,7 @@ exports.init = async function (wordjs) {
                         }
                     }
                 }
-                const videos = await fetchRss(channelId);
+                const videos = feed || await fetchRss(channelId);
                 // An RSS answer after a failed full source replaces nothing it does not know: the
                 // previous full list stays, topped up with the newest videos.
                 const keep = base.mode && base.mode !== 'rss' && errors.length ? base.videos || [] : [];
@@ -612,6 +661,7 @@ exports.init = async function (wordjs) {
             source: cache.source || null,
             videoCount: (cache.videos || []).length,
             partial: !!cache.partial,
+            titleLanguage: cache.hl || null, // the language the keyless list was asked in (its original titles)
             refreshing: !!refreshing,
             progress: refreshing ? progress.videos : null,
             fetchedAt: cache.fetchedAt || null,
