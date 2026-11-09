@@ -406,7 +406,7 @@ jobs:
         # nothing else — the v2 line stays available at v2.6.2 for runners without a Node 24 Actions
         # runtime. No input changed: `generate_release_notes` and `files` behave as they did on v2, which
         # matters because the GitHub Release those two produce IS this project's distribution channel.
-        uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3 — pinned to an immutable commit SHA
+        uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.3 — pinned to an immutable commit SHA
         with:
           generate_release_notes: true
           files: |
