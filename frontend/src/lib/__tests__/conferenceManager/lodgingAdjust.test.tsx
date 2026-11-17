@@ -377,8 +377,8 @@ describe('the explorer and the inscriptions\' room modal: the adjustment notice 
     });
 });
 
-describe('Localidades: the stamp on the card and in the review, «Ajustar en Asignación», and the review\'s decisions', () => {
-    const locations = PAGE.slice(PAGE.indexOf('function LocationsPage('));
+describe('Asignaciones (2.36.27, was Localidades): the stamp on the card and in the review, «Ajustar en Asignación», and the review\'s decisions', () => {
+    const locations = PAGE.slice(PAGE.indexOf('function LodgingReviewBoard('), PAGE.indexOf('function AssignmentPage('));
     it('the card shows the stamp BELOW its icon / text / button row, at the card\'s full width; the row wraps', () => {
         const rowAt = locations.indexOf('data-lodging-row=""');
         const stampAt = locations.indexOf('<AdjustStamp location={loc} tx={tx}');
@@ -398,10 +398,16 @@ describe('Localidades: the stamp on the card and in the review, «Ajustar en Asi
         expect(locations).toContain('<AdjustStamp location={review.location} tx={tx} detail />');
     });
     it('«Ajustar en Asignación» is offered to Hospedaje › gestionar on a submitted / validated arrangement, and opens the explorer filtered by it', () => {
-        expect(locations).toContain("const canAdjust = locPerms.can('lodging', 'manage') && !!onOpenExplorer;");
+        expect(locations).toContain("const canManage = perms.can('lodging', 'manage');");
+        expect(locations).toContain("const canAdjust = canManage && !!onAdjust;");
         expect(locations).toMatch(/\{canAdjust && isLodgingFrozen\(status\) && \([\s\S]*data-adjust-open=""[\s\S]*onOpenExplorer!\(\{ locationId: id \}\)/);
-        // The shell hands the explorer a location focus, only when «Asignación» is open to the role.
-        expect(PAGE).toContain("onOpenExplorer={viewAllowed('assignment', perms) ? openLodgingExplorer : undefined}");
+        // The board sits in «Asignación» itself: «Ajustar» focuses the explorer right below on that location.
+        expect(PAGE).toContain('<LodgingReviewBoard conferenceId={conferenceId} onAdjust={(f) => { setReviewFocus(f);');
+        expect(PAGE).toContain('focus={focus || reviewFocus}');
+        // Localidades no longer reviews lodging.
+        const places = PAGE.slice(PAGE.indexOf('function LocationsPage('));
+        expect(places).not.toContain('openReview(');
+        expect(places).not.toContain('data-lodging-row=""');
         expect(PAGE).toMatch(/focus\.hotelId == null && focus\.locationId != null\s*\?\s*\{ locationId: Number\(focus\.locationId\) \}/);
         expect(EXPLORER).toMatch(/else if \(focus\.locationId != null\)[\s\S]{0,300}location: String\(focus\.locationId\)/);
         // «Reabrir» stays.
@@ -454,7 +460,7 @@ describe('the coordinator\'s portal: «Ajustado por la administración el …»,
 });
 
 describe('round 3: the card stamp and counts read cleanly; the explorer\'s heading, breadcrumb and run summary', () => {
-    const locations = PAGE.slice(PAGE.indexOf('function LocationsPage('));
+    const locations = PAGE.slice(PAGE.indexOf('function LodgingReviewBoard('), PAGE.indexOf('function AssignmentPage('));
     const assignment = PAGE.slice(PAGE.indexOf('function AssignmentPage('), PAGE.indexOf('export default function ConferenceManagerAdmin('));
     // Tags out until none is left (a tag split by another one would otherwise survive one pass).
     const textOf = (html: string) => { let out = html, prev; do { prev = out; out = out.replace(/<[^>]*>/g, ''); } while (out !== prev); return out; };

@@ -6,6 +6,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+- **conference-manager 2.36.27: «Revisar hospedaje» of each locality moved from «Localidades» to «Asignación», under
+  the lodging permissions.** Reviewing what a coordinator arranged is part of the lodging assignment: the board with
+  each locality's status and its review (validate, return, reopen) now sits above the explorer in «Asignación».
+  `GET /locations/:id/lodging` asks for Hospedaje › ver and its three transitions for Hospedaje › gestionar (they
+  asked for Localidades before). A role that reviewed lodging with Localidades alone needs Hospedaje now.
+
 ### Marketplace
 - **youtube-videos 1.1.1 shows each video's original title.** 1.1.0 asked YouTube for the list in English, so a
   video whose creator added an English translation showed it instead of its title. The list is now asked in the
