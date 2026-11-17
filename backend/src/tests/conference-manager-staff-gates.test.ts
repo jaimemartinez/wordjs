@@ -161,15 +161,17 @@ test('GET /meals/people: the kitchen gets no ID document and finds a person only
 test('the ID document reaches inscriptions:view only: roster, its search, the CSV export, the lodging review, the meals card', async () => {
     const PAY = member(70, 'pay');        // transport:view opens the roster to NAME people (payments:view no longer does, 2.18.0)
     const REP = member(71, 'rep');        // reports:view opens the export
-    const LOC = member(72, 'loc');        // locations:view opens the lodging review
+    const LOC = member(72, 'loc');        // lodging:view opens the lodging review (2.36.27; locations:view did before)
     const COOK = member(73, 'cook2');     // the kitchen: the confirmation card
     const DESK = member(74, 'desk2');     // inscriptions:view: everything, as before
-    const p = await bootPlugin({ users: [PAY, REP, LOC, COOK, DESK] });
+    const PLACES = member(75, 'places');  // Localidades › gestionar alone: no lodging review any more (2.36.27)
+    const p = await bootPlugin({ users: [PAY, REP, LOC, COOK, DESK, PLACES] });
     await addMember(p, PAY, { transport: 'view' });
     await addMember(p, REP, { reports: 'view' });
-    await addMember(p, LOC, { locations: 'view' });
+    await addMember(p, LOC, { lodging: 'view' });
+    await addMember(p, PLACES, { locations: 'manage' });
     await addMember(p, COOK, { meals_delivery: 'manage' });
-    await addMember(p, DESK, { inscriptions: 'view', reports: 'view', locations: 'view', meals_delivery: 'manage' });
+    await addMember(p, DESK, { inscriptions: 'view', reports: 'view', lodging: 'view', meals_delivery: 'manage' });
     const cid = (await p.call('post', '/create', { body: { name: 'C' } })).body.id;
     for (const t of ['first_name', 'last_name']) assert.strictEqual((await p.call('post', '/fields', { body: { conference_id: cid, template: t } })).status, 200);
     assert.strictEqual((await p.call('post', '/fields', { body: { conference_id: cid, name: 'document_number', label: 'DNI', type: 'text', is_unique: true } })).status, 200);
@@ -200,6 +202,15 @@ test('the ID document reaches inscriptions:view only: roster, its search, the CS
     assert.strictEqual(lg.status, 200, JSON.stringify(lg.body));
     assert.ok(JSON.stringify(lg.body).includes('Ana'), 'the review still lists the attendee');
     assert.ok(!JSON.stringify(lg.body).includes(DOC), 'the lodging review carries the document');
+    // The review belongs to «Asignaciones»: Localidades alone neither reads it nor decides on it; Hospedaje › ver
+    // reads it but cannot validate.
+    assert.strictEqual((await lodging(PLACES)).status, 403, 'locations:manage opens the lodging review');
+    for (const act of ['validate', 'return', 'reopen']) {
+        for (const u of [PLACES, LOC]) {
+            const r = await p.call('post', `/locations/${loc.body.id}/lodging/${act}`, { user: u, body: { note: 'x' } });
+            assert.strictEqual(r.status, 403, `${u.userLogin} ${act}: ${JSON.stringify(r.body)}`);
+        }
+    }
     const c = await card(COOK);
     assert.strictEqual(c.status, 200, JSON.stringify(c.body));
     assert.ok(!JSON.stringify(c.body).includes(DOC), `the meals card carries the document: ${JSON.stringify(c.body)}`);

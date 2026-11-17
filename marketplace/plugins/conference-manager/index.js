@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.26',
+    version: '2.36.27',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -2021,8 +2021,9 @@ exports.init = async function (wordjs) {
     //   GET    /locations                              staff (context: names, capacity, the conference row);
     //                                                  the access `code` only with locations:manage (else null)
     //   POST   /locations, PUT/DELETE /locations/:id   locations:manage (codes = who can log in to the portal)
-    //   GET    /locations/:id/lodging                  locations:view (the ID document only with inscriptions:view)
-    //   POST   /locations/:id/lodging/validate|return|reopen   locations:manage (validate / return: `seen`
+    //   GET    /locations/:id/lodging                  lodging:view (the ID document only with inscriptions:view;
+    //                                                  2.36.27: the review moved to «Asignaciones», was locations:view)
+    //   POST   /locations/:id/lodging/validate|return|reopen   lodging:manage (validate / return: `seen`
     //                                                  = the review's submitted_at + admin_changes, else 409
     //                                                  `lodging_changed`; 2.17.0)
     //   GET    /hotels                                 lodging:view | inscriptions:view | dashboard:view | reports:view
@@ -3729,7 +3730,7 @@ exports.init = async function (wordjs) {
     // The arrangement of a location: its allotted rooms with L's occupants, L's attendees without a
     // room, those the admin placed elsewhere, the rules in force and the audit of the current state.
     http.route('get', '/locations/:id/lodging', { auth: true }, async (req, res) => {
-        const perms = await allow(req, res, 'locations', 'view');
+        const perms = await allow(req, res, 'lodging', 'view');
         if (!perms) return;
         try {
             const id = positiveInt(req.params.id);
@@ -3768,7 +3769,7 @@ exports.init = async function (wordjs) {
         return adminAdjustmentOf(now, false).lodging_admin_changes === (Number(seen.admin_changes) || 0);
     }
     http.route('post', '/locations/:id/lodging/validate', { auth: true }, async (req, res) => {
-        if (!await allow(req, res, 'locations', 'manage')) return;
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const loc = id ? await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [id]) : null;
@@ -3785,7 +3786,7 @@ exports.init = async function (wordjs) {
         } catch (e) { sendError(res, e); }
     });
     http.route('post', '/locations/:id/lodging/return', { auth: true }, async (req, res) => {
-        if (!await allow(req, res, 'locations', 'manage')) return;
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const loc = id ? await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [id]) : null;
@@ -3806,7 +3807,7 @@ exports.init = async function (wordjs) {
     });
     // Reopen a validated arrangement (keeps it and the review stamps; the coordinator may edit again).
     http.route('post', '/locations/:id/lodging/reopen', { auth: true }, async (req, res) => {
-        if (!await allow(req, res, 'locations', 'manage')) return;
+        if (!await allow(req, res, 'lodging', 'manage')) return;
         try {
             const id = positiveInt(req.params.id);
             const loc = id ? await db.get(`SELECT id FROM ${T.locations} WHERE id = ?`, [id]) : null;

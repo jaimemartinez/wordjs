@@ -6,6 +6,13 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Changed
+- **conference-manager 2.36.27: «Revisar hospedaje» of each locality moved from «Localidades» to «Asignación», under
+  the lodging permissions.** Reviewing what a coordinator arranged is part of the lodging assignment: the board with
+  each locality's status and its review (validate, return, reopen) now sits above the explorer in «Asignación».
+  `GET /locations/:id/lodging` asks for Hospedaje › ver and its three transitions for Hospedaje › gestionar (they
+  asked for Localidades before). A role that reviewed lodging with Localidades alone needs Hospedaje now.
+
 ### Fixed
 - **conference-manager 2.36.26: before a locality's lodging opens, its coordinator sees nothing of the lodging.**
   The portal's «Hospedajes» tab only refused changes before the opening date; it still showed the rooms and the
