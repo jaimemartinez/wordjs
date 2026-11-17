@@ -24,6 +24,9 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   asked for Localidades before). A role that reviewed lodging with Localidades alone needs Hospedaje now.
 
 ### Fixed
+- **conference-manager 2.36.29: «Sugerir reparto» respects the room's sex too.** The plan places people by its own
+  arithmetic and only checked the rules and shared rooms: it put a man-and-woman family in a room fixed «Solo
+  hombres». It now uses the same room-sex check as the automatic assignment, for fixed and mixed rooms.
 - **conference-manager 2.36.26: before a locality's lodging opens, its coordinator sees nothing of the lodging.**
   The portal's «Hospedajes» tab only refused changes before the opening date; it still showed the rooms and the
   placements the administrators were preparing. Until the opening it now shows only the status and the date it

@@ -550,3 +550,56 @@ test('a MIXED room (2.36.28): the run puts there the mixed groups the rules keep
     ok(await p.call('put', `/rooms/${fam}`, { body: { gender: 'Sin fijar' } }), 'back to not set');
     assert.strictEqual(p.one(`SELECT gender FROM ${T('rooms')} WHERE id = ?`, fam).gender, 'Mixed');
 });
+
+// Production, 2026-11-17: a locality's WHOLE room fixed «Solo hombres», a man-and-woman family of that locality kept
+// together by a soft «Mantener juntos por grupo familiar» (50) over a hard «Separar por género» (20) — the run put
+// the family in the men's room.
+test('a locality\'s whole room fixed for men never takes the woman of a family the rules keep together', async () => {
+    const p = await bootPlugin();
+    const cid = ok(await p.call('post', '/create', { body: { name: 'Congreso', slug: `sexloc-${++seq}` } })).id as number;
+    for (const template of ['first_name', 'gender', 'family_group']) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }));
+    ok(await p.call('post', '/publish', { body: { conference_id: cid, published: true } }));
+    ok(await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Familias juntas', type: 'keep_together', config: 'family_group', hard: 0, priority: 50 } }), 'keep');
+    ok(await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Separar por género', type: 'separate_by', config: 'gender', hard: 1, priority: 20 } }), 'separate');
+    const loc = ok(await p.call('post', '/locations', { body: { conference_id: cid, name: 'Bogotá', capacity: 50 } })).id as number;
+    const hotel = ok(await p.call('post', '/hotels', { body: { conference_id: cid, name: 'Casa' } })).id as number;
+    const men = ok(await p.call('post', '/rooms', { body: { hotel_id: hotel, room_number: 'hab', capacity: 2, gender: 'M' } })).id as number;
+    ok(await p.call('post', `/hotels/${hotel}/allot`, { body: { location_id: loc, room_ids: [men] } }), 'allot');
+    const person = async (first_name: string, gender: string) =>
+        ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name, gender, family_group: 'Camargo', location_id: loc } }), first_name).id as number;
+    const sandra = await person('Sandra', 'F'), juan = await person('Juan', 'M');
+    const roomOf = (id: number) => (p.one(`SELECT room_id FROM ${T('inscriptions')} WHERE id = ?`, id) || {}).room_id ?? null;
+
+    ok(await p.call('post', '/assignment/run', { body: { conference_id: cid } }), 'run');
+    assert.notStrictEqual(roomOf(sandra), men, 'the woman was placed in the men\'s room');
+    assert.strictEqual(roomOf(juan), men, 'the man takes the men\'s room');
+});
+
+// The same production case through «Sugerir reparto»: the plan allots the pool rooms to the localities and places
+// their people — it put the family in the room fixed for men.
+test('«Sugerir reparto» never gives a room fixed for men to the woman of a family the rules keep together', async () => {
+    const p = await bootPlugin();
+    const cid = ok(await p.call('post', '/create', { body: { name: 'Congreso', slug: `sexplan-${++seq}` } })).id as number;
+    for (const template of ['first_name', 'gender', 'family_group']) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }));
+    ok(await p.call('post', '/publish', { body: { conference_id: cid, published: true } }));
+    ok(await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Familias juntas', type: 'keep_together', config: 'family_group', hard: 0, priority: 50 } }), 'keep');
+    ok(await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Separar por género', type: 'separate_by', config: 'gender', hard: 1, priority: 20 } }), 'separate');
+    const loc = ok(await p.call('post', '/locations', { body: { conference_id: cid, name: 'Bogotá', capacity: 50 } })).id as number;
+    const hotel = ok(await p.call('post', '/hotels', { body: { conference_id: cid, name: 'Casa' } })).id as number;
+    const men = ok(await p.call('post', '/rooms', { body: { hotel_id: hotel, room_number: 'hab', capacity: 2, gender: 'M' } })).id as number;
+    const person = async (first_name: string, gender: string) =>
+        ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name, gender, family_group: 'Camargo', location_id: loc } }), first_name).id as number;
+    const sandra = await person('Sandra', 'F'), juan = await person('Juan', 'M');
+    const roomOf = (id: number) => (p.one(`SELECT room_id FROM ${T('inscriptions')} WHERE id = ?`, id) || {}).room_id ?? null;
+
+    const plan = ok(await p.call('post', '/assignment/plan', { body: { conference_id: cid } }), 'plan').plan;
+    ok(await p.call('post', '/assignment/plan/apply', { body: { conference_id: cid, token: plan.token } }), 'apply');
+    assert.notStrictEqual(roomOf(sandra), men, 'the plan placed the woman in the men\'s room');
+    for (const fresh of [{ fresh: true }, { fresh: true, divide_families: true }]) {
+        ok(await p.call('post', '/assignment/reset', { body: { conference_id: cid } }), 'reset');
+        const again = ok(await p.call('post', '/assignment/plan', { body: { conference_id: cid, ...fresh } }), 'plan').plan;
+        ok(await p.call('post', '/assignment/plan/apply', { body: { conference_id: cid, token: again.token, ...fresh } }), 'apply');
+        assert.notStrictEqual(roomOf(sandra), men, `${JSON.stringify(fresh)}: the woman is in the men's room`);
+    }
+    void juan;
+});
