@@ -850,8 +850,9 @@ exports.init = async function (wordjs) {
             if (values[f.name] === undefined || values[f.name] === '') throw httpError(400, `El campo «${f.label || f.name}» es obligatorio.`);
         }
     }
-    // Unique check. `scope` = { conference_id, location_id? } (the portal scopes to the coordinator's
-    // OWN location so the 409 is not a cross-location probe oracle), excludeId for PUT.
+    // Unique check. `scope` = { conference_id, location_id? }, excludeId for PUT. Every caller checks the
+    // whole conference: a value flagged "no duplicates" (the ID document) names ONE person, wherever they
+    // registered. The 409 never names the other registration or its location.
     async function assertUnique(confFields, values, scope, excludeId) {
         for (const f of confFields) {
             if (!f.is_unique || !isFieldColumn(f.name)) continue;
@@ -9326,10 +9327,11 @@ exports.init = async function (wordjs) {
             // '' (an empty number input) counts as missing.
             assertRequired(confFields, values, false);
 
-            // Duplicate guard: a field flagged "no duplicates" must be unique — scoped to the coordinator's
-            // OWN location. A conference-wide check turned the 409 into a cross-location probe oracle (a
-            // coordinator could enumerate registrations in locations they don't manage) (audit LOW).
-            await assertUnique(confFields, values, { conference_id, location_id: location.id });
+            // Duplicate guard: a field flagged "no duplicates" must be unique across the WHOLE conference.
+            // 2.36.25: it used to be scoped to the coordinator's own location (to keep the 409 from telling
+            // a coordinator that a value exists elsewhere), and the same person was registered by two
+            // locations. The answer still says nothing about where: only that the value is taken.
+            await assertUnique(confFields, values, { conference_id });
             await assertNoEmailDuplicate(conference_id, values, { location_id: location.id });
 
             // first_name / last_name are NOT NULL — default to '' (no 'Sin Nombre' placeholder).

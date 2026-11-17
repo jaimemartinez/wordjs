@@ -11,6 +11,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   The portal's «Hospedajes» tab only refused changes before the opening date; it still showed the rooms and the
   placements the administrators were preparing. Until the opening it now shows only the status and the date it
   opens, and `GET /portal/lodging` returns no rooms, people or rules.
+- **conference-manager 2.36.25: a «no duplicates» field is checked across the whole conference from the
+  coordinators' portal too.** The portal only looked for the same value (the ID document, for example) in the
+  coordinator's own locality, so one person could be registered twice from two localities. The refusal still says
+  nothing about where the other registration is.
 
 ### Marketplace
 - **youtube-videos 1.1.1 shows each video's original title.** 1.1.0 asked YouTube for the list in English, so a
