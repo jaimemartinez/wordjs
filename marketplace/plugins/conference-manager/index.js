@@ -850,8 +850,9 @@ exports.init = async function (wordjs) {
             if (values[f.name] === undefined || values[f.name] === '') throw httpError(400, `El campo «${f.label || f.name}» es obligatorio.`);
         }
     }
-    // Unique check. `scope` = { conference_id, location_id? } (the portal scopes to the coordinator's
-    // OWN location so the 409 is not a cross-location probe oracle), excludeId for PUT.
+    // Unique check. `scope` = { conference_id, location_id? }, excludeId for PUT. Every caller checks the
+    // whole conference: a value flagged "no duplicates" (the ID document) names ONE person, wherever they
+    // registered. The 409 never names the other registration or its location.
     async function assertUnique(confFields, values, scope, excludeId) {
         for (const f of confFields) {
             if (!f.is_unique || !isFieldColumn(f.name)) continue;
@@ -9327,10 +9328,11 @@ exports.init = async function (wordjs) {
             // '' (an empty number input) counts as missing.
             assertRequired(confFields, values, false);
 
-            // Duplicate guard: a field flagged "no duplicates" must be unique — scoped to the coordinator's
-            // OWN location. A conference-wide check turned the 409 into a cross-location probe oracle (a
-            // coordinator could enumerate registrations in locations they don't manage) (audit LOW).
-            await assertUnique(confFields, values, { conference_id, location_id: location.id });
+            // Duplicate guard: a field flagged "no duplicates" must be unique across the WHOLE conference.
+            // 2.36.25: it used to be scoped to the coordinator's own location (to keep the 409 from telling
+            // a coordinator that a value exists elsewhere), and the same person was registered by two
+            // locations. The answer still says nothing about where: only that the value is taken.
+            await assertUnique(confFields, values, { conference_id });
             await assertNoEmailDuplicate(conference_id, values, { location_id: location.id });
 
             // first_name / last_name are NOT NULL — default to '' (no 'Sin Nombre' placeholder).
@@ -9488,9 +9490,22 @@ exports.init = async function (wordjs) {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
+            const win = await lodgingWindowOf(location);
+            // 2.36.26: before the location's opening the coordinator sees NOTHING of the lodging — not the rooms,
+            // not the arrangement the admin may be preparing (its suggested placements), not the rules. Only the
+            // status and the dates, so the portal can say when it opens. Writes were already refused (403).
+            if (win.not_yet) {
+                const loc = await db.get(`SELECT lodging_status FROM ${T.locations} WHERE id = ?`, [location.id]);
+                return res.json({
+                    status: lodgingStatusOf(loc || {}),
+                    opens: win.opens, not_yet_open: true, deadline: win.closes, deadline_passed: false, window_open: false,
+                    note: null, submitted_at: null, reviewed_at: null, admin_changed_at: null, admin_changes: 0,
+                    can_edit: false, rooms: [], unassigned: [], no_lodging: [], placed_elsewhere: [],
+                    rules: { conference: [], location: [] }, fields: [], violations: [], counts: {},
+                });
+            }
             const view = await loadLodging(location, { forAdmin: false });
             const status = view.location.lodging_status;
-            const win = await lodgingWindowOf(location);
             res.json({
                 status,
                 // The dates THIS location arranges between (its own where the admin set them, the general ones

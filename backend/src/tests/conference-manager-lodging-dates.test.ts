@@ -7,7 +7,8 @@
  * configure uno específico para una localidad». Pinned here against the REAL plugin
  * (fixtures/conference-manager-harness.ts):
  *   - before the general opening every portal lodging write answers 403 «Los hospedajes se habilitan el …», and
- *     GET /portal/lodging says so (opens, not_yet_open, can_edit false); the admin arranges whenever it likes;
+ *     GET /portal/lodging says so (opens, not_yet_open, can_edit false) and shows nothing else (2.36.26: no rooms,
+ *     no placements, no rules); the admin arranges whenever it likes;
  *   - after the closing, 403 as before; a location's own closing (a later date, an earlier one, or none) and its
  *     own opening (a date, or no wait) replace the general ones; «Usar las generales» (null, null) goes back;
  *   - a window that could never open is refused (400), for the general dates and for a location's own;
@@ -89,10 +90,21 @@ test('before the general opening the coordinators cannot arrange (403, read-only
     // The administration is never held by the dates.
     ok(await w.p.call('post', `/inscriptions/${w.ana}/assign`, { body: { room_id: w.r101 } }), 'admin assign');
 
+    // 2.36.26: and the coordinator sees nothing of it before the opening — not the rooms, not the placement the
+    // admin is preparing, not the people, not the rules. Only the status and the dates.
+    const hidden = await w.lodging(w.norte);
+    assert.deepStrictEqual([hidden.rooms, hidden.unassigned, hidden.no_lodging, hidden.placed_elsewhere, hidden.violations, hidden.fields],
+        [[], [], [], [], [], []]);
+    assert.deepStrictEqual(hidden.rules, { conference: [], location: [] });
+    assert.deepStrictEqual([hidden.status, hidden.not_yet_open, hidden.can_edit, hidden.opens], ['draft', true, false, utc(2)]);
+    for (const leak of ['Ana', '101', 'Hotel Sol']) assert.ok(!JSON.stringify(hidden).includes(leak), `«${leak}» before the opening`);
+
     // The opening is today: open from its first instant (UTC here — no zone saved).
     ok(await w.dates({ lodging_opens: utc(0) }), 'opens today');
     const now = await w.lodging(w.norte);
     assert.deepStrictEqual([now.not_yet_open, now.window_open, now.can_edit], [false, true, true]);
+    assert.deepStrictEqual(now.rooms.map((r: any) => [r.room_number, r.occupants.map((o: any) => o.first_name)]), [['101', ['Ana']]],
+        'from the opening the coordinator sees the arrangement, the admin\'s placement included');
     ok(await w.portal(w.norte, 'post', '/portal/lodging/assign', { inscription_id: w.ana, room_id: null }), 'coordinator writes');
 
     const list = await w.locations();
