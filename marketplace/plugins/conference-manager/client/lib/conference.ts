@@ -63,6 +63,8 @@ export interface Hotel {
     geo?: string | null;
     /** Write only: the link or coordinates pasted in the hotel form ('' = no position). */
     location?: string;
+    /** 2.36.30: 1 fills first, then 2…; null = no priority (the hotels without one fill last). */
+    priority?: number | string | null;
 }
 
 export interface Room {

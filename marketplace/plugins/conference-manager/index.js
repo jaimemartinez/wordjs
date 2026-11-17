@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.29',
+    version: '2.36.30',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -1159,6 +1159,8 @@ exports.init = async function (wordjs) {
         // A hotel's position (2.23.0): 'lat,lng' (6 decimals) from the link or coordinates the admin pasted —
         // TEXT, never REAL (a Postgres REAL is float4 and would move the pin by metres).
         await addColumnIfMissing(T.hotels, 'geo', 'TEXT');
+        // «Prioridad» (2.36.30): optional; 1 fills first. NULL = no priority (as before).
+        await addColumnIfMissing(T.hotels, 'priority', 'INT');
         // A fix holds only in its room (see «HELD BY THE ADMINISTRATION»): none left over from a bed since freed.
         try { await db.run(`UPDATE ${T.inscriptions} SET room_locked = NULL WHERE room_locked IS NOT NULL AND (room_id IS NULL OR room_locked <> room_id)`); } catch (e) { console.warn('[conference-manager] stale room_locked cleanup skipped:', e.message); }
         // The 2.8.0 permission becomes the location's own closing, once: the location could arrange until the
@@ -1621,6 +1623,37 @@ exports.init = async function (wordjs) {
         return g === 'M' || g === 'F' ? g : null;
     };
     const sexAllows = (room, person) => { const sx = roomSexOf(room); return !sx || sexOfText(person && person.gender) === sx; };
+    // HOTEL PRIORITY (2.36.30): optional, set by the admin on each hotel (hotels.priority: 1 fills first, then 2…;
+    // NULL = none). With none set anywhere everything is exactly as before. With some set, the automatic
+    // assignment and «Sugerir reparto» fill the rooms of the prioritized hotels first, in order, and the hotels
+    // without a priority last — within the hard rules always; the priority weighs more than using few rooms.
+    // `hotelTierOf(rows)` → a function giving each room row (with `hotel_priority`) its tier: 0 for the first
+    // priority, 1 for the next…, and the number of distinct priorities for a hotel without one.
+    const hotelPriorityInput = (v) => {
+        if (v === undefined) return undefined;
+        if (v === null || String(v).trim() === '') return null;
+        const n = Number(String(v).trim());
+        if (!Number.isInteger(n) || n < 1 || n > 99) throw httpError(400, 'La prioridad del hotel debe ser un número de 1 a 99, o vacía.');
+        return n;
+    };
+    const hotelTierOf = (rows) => {
+        const ps = [...new Set((rows || []).map(r => Number(r && r.hotel_priority)).filter(n => Number.isInteger(n) && n > 0))].sort((a, b) => a - b);
+        return (r) => { const i = ps.indexOf(Number(r && r.hotel_priority)); return i >= 0 ? i : ps.length; };
+    };
+    // `bins` ({ room | x.room, … }) in tiers: packNew over the first tier, what is left over the next — so the
+    // fewest-rooms arithmetic works inside a tier and never pulls people out of a prioritized hotel.
+    const packNewTiered = (items, bins, fits, prefer, roomOf = (b) => b.room) => {
+        const tiers = [...new Set(bins.map(b => roomOf(b).tier || 0))].sort((a, b) => a - b);
+        if (tiers.length <= 1) return pack.packNew(items, bins, fits, prefer);
+        let left = items, placed = [];
+        for (const t of tiers) {
+            if (!left.length) break;
+            const res = pack.packNew(left, bins.filter(b => (roomOf(b).tier || 0) === t), fits, prefer);
+            placed = placed.concat(res.placed);
+            left = res.left;
+        }
+        return { placed, left };
+    };
     const isMixedRoom = (room) => String((room && room.gender) == null ? '' : room.gender).trim().toUpperCase() === 'MX';
     // Does `room` take `joining` beside `everyone` (its occupants + who joins), under `keepRules`? The ONE room-sex
     // check of every placement that is not made by hand — the engine's runs (compatible) and «Sugerir reparto»
@@ -3877,7 +3910,7 @@ exports.init = async function (wordjs) {
     }
     http.route('post', '/hotels', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
-        const { conference_id, name, address, description, capacity, location } = req.body;
+        const { conference_id, name, address, description, capacity, location, priority } = req.body;
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         if (!String(name || '').trim()) return res.status(400).json({ error: 'El nombre del hotel es obligatorio.' });
         const geo = geoOfBody(location);
@@ -3885,18 +3918,20 @@ exports.init = async function (wordjs) {
         try {
             const conf = await db.get(`SELECT id FROM ${T.conferences} WHERE id = ?`, [conference_id]);
             if (!conf) return res.status(404).json({ error: 'Conferencia no encontrada.' });
-            const r = await db.run(`INSERT INTO ${T.hotels} (conference_id, name, address, description, capacity, geo) VALUES (?, ?, ?, ?, ?, ?)`,
-                [conference_id, String(name).trim(), address || null, description || null, Number(capacity) || 0, geo.value || null]);
+            const r = await db.run(`INSERT INTO ${T.hotels} (conference_id, name, address, description, capacity, geo, priority) VALUES (?, ?, ?, ?, ?, ?, ?)`,
+                [conference_id, String(name).trim(), address || null, description || null, Number(capacity) || 0, geo.value || null, hotelPriorityInput(priority) ?? null]);
             res.json({ success: true, id: r.lastID });
         } catch (e) { sendError(res, e); }
     });
     http.route('put', '/hotels/:id', { auth: true }, async (req, res) => {
         if (!await allow(req, res, 'lodging', 'manage')) return;
-        const { name, address, description, capacity, location } = req.body;
+        const { name, address, description, capacity, location, priority } = req.body;
         const geo = geoOfBody(location);
         if (geo.error) return res.status(400).json({ error: geo.error, code: 'geo' });
         try {
             const sets = [], params = [];
+            const prio = hotelPriorityInput(priority);
+            if (prio !== undefined) { sets.push('priority = ?'); params.push(prio); }
             if (location !== undefined) { sets.push('geo = ?'); params.push(geo.value || null); }
             if (name !== undefined) {
                 if (!String(name).trim()) return res.status(400).json({ error: 'El nombre del hotel es obligatorio.' });
@@ -7012,7 +7047,7 @@ exports.init = async function (wordjs) {
             // The pool scope's: no location, or a location with no bed of its own that is not frozen.
             poolParticipants: () => db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? AND room_id IS NULL AND ${occupiedSql()} AND ${lodgingSql()} AND (location_id IS NULL OR location_id NOT IN (SELECT DISTINCT location_id FROM ${T.rooms} WHERE location_id IS NOT NULL )) AND (location_id IS NULL OR location_id NOT IN (${SHARE_LOCATIONS_SQL()} )) AND (location_id IS NULL OR location_id NOT IN (SELECT id FROM ${T.locations} WHERE ${frozenSql} )) ORDER BY id`, [conferenceId]),
             // A scope's rooms: every pool room (null), or a location's whole and shared rooms.
-            scopeRooms: (lid) => { const s = inRooms(lid); return db.all(`SELECT r.*, h.name as hotel_name FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${s.sql} ORDER BY ${lid == null ? 'r.id' : 'h.id, r.id'}`, s.params); },
+            scopeRooms: (lid) => { const s = inRooms(lid); return db.all(`SELECT r.*, h.name as hotel_name, h.priority AS hotel_priority FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${s.sql} ORDER BY ${lid == null ? 'r.id' : 'h.id, r.id'}`, s.params); },
             scopeOccupants: (lid) => { const s = inRooms(lid); return db.all(`SELECT i.* FROM ${T.inscriptions} i WHERE i.room_id IN (SELECT r.id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? AND ${s.sql} ) ORDER BY i.id`, s.params); },
             shares: (roomIds) => sharesByRoom(roomIds),
             lockFields: () => shareLockFields(conferenceId),
@@ -7227,10 +7262,11 @@ exports.init = async function (wordjs) {
         // scope at all.
         const roomShares = await io.shares(roomRows.map(r => r.id));
         const lockFields = await io.lockFields();
+        const tierOf = hotelTierOf(roomRows);
         const rooms = roomRows.map(r => {
             const occupants = occByRoom.get(r.id) || [];
             const shares = roomShares.get(Number(r.id)) || [];
-            const room = { id: r.id, capacity: Math.max(1, Number(r.capacity) || 1), room_number: r.room_number, hotel_name: r.hotel_name, location_id: r.location_id == null ? null : r.location_id, occupants, gender: r.gender,
+            const room = { id: r.id, capacity: Math.max(1, Number(r.capacity) || 1), room_number: r.room_number, hotel_name: r.hotel_name, location_id: r.location_id == null ? null : r.location_id, occupants, gender: r.gender, tier: tierOf(r),
                 // A shared room's class (see «THE CLASS OF A SHARED ROOM»): nobody of another value takes a bed of it.
                 lock: shareLockOf(r, shares, lockFields), blocked: isBlocked(r) };
             if (isPool) {
@@ -7307,7 +7343,7 @@ exports.init = async function (wordjs) {
             // 'greedy' is 2.19's placement exactly — its chunking and its repair — so the sweep's 'legacy' mode is a
             // true floor: whatever the packing does, the run never ends worse than 2.19 (see THE SWEEP'S MODE).
             const legacy = kind === 'greedy';
-            const R = roomsAtStart.map(r => ({ ...r, occupants: r.occupants.slice() }));
+            const R = roomsAtStart.map(r => ({ ...r, occupants: r.occupants.slice() })).sort((a, b) => (a.tier || 0) - (b.tier || 0));
             let placed = 0;
             const violations = [];
             const noteViol = (rule, detail, hard) => { if (!violations.some(v => v.rule === rule && v.detail === detail)) violations.push({ rule, detail, hard: !!hard }); };
@@ -7433,7 +7469,7 @@ exports.init = async function (wordjs) {
                         }
                         if (group.length) {
                             const empty = R.filter(r => r.occupants.length === 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
-                            const res = pack.packNew(group, empty, fitsBin, costBin);
+                            const res = packNewTiered(group, empty, fitsBin, costBin);
                             for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
                             group = res.left;
                         }
@@ -7478,7 +7514,7 @@ exports.init = async function (wordjs) {
                         }
                         if (left.length) {
                             const emptyRooms = R.filter(r => r.occupants.length === 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
-                            const res = pack.packNew(left, emptyRooms, fitsBin, costBin);
+                            const res = packNewTiered(left, emptyRooms, fitsBin, costBin);
                             for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
                             left = res.left;
                         }
@@ -7542,16 +7578,18 @@ exports.init = async function (wordjs) {
         // [hard broken, without a bed, rooms mixing locations, rooms used, empty beds in them, preferences broken] — lower
         // is better. 2.36.6 (option (a)): a location kept together counts before a room saved.
         const scoreOf = (st) => {
-            let hard = st.violations.filter(v => v.hard).length, soft = st.violations.filter(v => !v.hard).length, used = 0, empty = 0, mixed = 0;
+            let hard = st.violations.filter(v => v.hard).length, soft = st.violations.filter(v => !v.hard).length, used = 0, empty = 0, mixed = 0, lower = 0;
             for (const room of st.rooms) {
                 if (!room.occupants.length) continue;
                 used++; empty += freeOf(room);
+                lower += room.occupants.length * (room.tier || 0);
                 if (new Set(room.occupants.map(o => (o.location_id == null ? null : Number(o.location_id)))).size > 1) mixed++;
                 if (!mergedSeparateOk(room.occupants, [])) hard++;
                 for (const rule of companionUnmet(room.occupants)) { if (rule.hard) hard++; else soft++; }
                 for (const rule of softSeparate) if (distinctValues(judgedBy(rule, viewFor(rule, room.occupants), keepRules), rule.field).length > 1) soft++;
             }
-            return [hard, participants.length - st.assignedCount, mixed, used, empty, soft];
+            // `lower` (2.36.30): people in hotels of a lower priority — 0 whenever no hotel has one.
+            return [hard, participants.length - st.assignedCount, lower, mixed, used, empty, soft];
         };
         const lexLess = (a, b) => { for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] < b[k]; return false; };
         let chosen = null;
@@ -7751,7 +7789,7 @@ exports.init = async function (wordjs) {
             db.all(`SELECT * FROM ${T.rules} WHERE conference_id = ? ORDER BY priority DESC, id ASC`, [conferenceId]),
             ruleFieldNames(conferenceId),
             db.all(`SELECT id, name, lodging_status, lodging_order FROM ${T.locations} WHERE conference_id = ? ORDER BY name`, [conferenceId]),
-            db.all(`SELECT r.*, h.name AS hotel_name FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? ORDER BY r.id`, [conferenceId]),
+            db.all(`SELECT r.*, h.name AS hotel_name, h.priority AS hotel_priority FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? ORDER BY r.id`, [conferenceId]),
             db.all(`SELECT r.id FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id WHERE h.conference_id = ? ORDER BY h.name, r.room_number, r.id`, [conferenceId]),
             db.all(`SELECT * FROM ${T.inscriptions} WHERE conference_id = ? ORDER BY id`, [conferenceId]),
         ]);
@@ -8075,6 +8113,8 @@ exports.init = async function (wordjs) {
             if (r && r.location_id != null) return [r.location_id];
             return sharesOf(snap, roomId).map(b => b.location_id);
         };
+        const planTierOf = hotelTierOf(snap.rooms);
+        for (const r of snap.rooms) r.tier = planTierOf(r);
         const inventory = reusable.map(r => ({ room: r, cap: roomCapacityOf(r), hotel: Number(r.hotel_id), order: snap.reportOrder.indexOf(r.id) }));
         // Free beds in rooms that already hold people (a pool room, or the pool beds of a shared one — never a frozen
         // location's): the pool's people may take them, and with `share` a location too, as beds of its own there.
@@ -8159,11 +8199,11 @@ exports.init = async function (wordjs) {
             const freeFor = (g) => {
                 const hotels = new Set(bins.filter(b => b.members.some(m => m.g === g)).map(b => b.hotel));
                 const rank = (x) => (g && prevOwners(x.room.id).includes(g.id) ? 0 : g && hotels.has(x.hotel) ? 1 : 2);
-                return inventory.filter(x => !taken.has(x.room.id)).sort((a, b) => rank(a) - rank(b) || a.order - b.order || a.room.id - b.room.id);
+                return inventory.filter(x => !taken.has(x.room.id)).sort((a, b) => (a.room.tier || 0) - (b.room.tier || 0) || rank(a) - rank(b) || a.order - b.order || a.room.id - b.room.id);
             };
             // `items` into new rooms by the engine's arithmetic; nothing is committed yet.
             const tryPack = (items, free, prefer) => {
-                const res = pack.packNew(items, free.map(x => ({ x, free: x.cap })), (bin, it, inside) => composedOk(inside.concat([it])) && sexOk(bin.x.room, inside.concat([it]), [it]), prefer);
+                const res = packNewTiered(items, free.map(x => ({ x, free: x.cap })), (bin, it, inside) => composedOk(inside.concat([it])) && sexOk(bin.x.room, inside.concat([it]), [it]), prefer, (b) => b.x.room);
                 const binOf = new Map();
                 for (const [it, b] of res.placed) {
                     if (!binOf.has(b)) binOf.set(b, { room: b.x.room, cap: b.x.cap, hotel: b.x.hotel, members: [] });
