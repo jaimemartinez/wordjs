@@ -7,6 +7,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ## [Unreleased]
 
 ### Fixed
+- **conference-manager 2.36.26: before a locality's lodging opens, its coordinator sees nothing of the lodging.**
+  The portal's «Hospedajes» tab only refused changes before the opening date; it still showed the rooms and the
+  placements the administrators were preparing. Until the opening it now shows only the status and the date it
+  opens, and `GET /portal/lodging` returns no rooms, people or rules.
 - **conference-manager 2.36.25: a «no duplicates» field is checked across the whole conference from the
   coordinators' portal too.** The portal only looked for the same value (the ID document, for example) in the
   coordinator's own locality, so one person could be registered twice from two localities. The refusal still says
