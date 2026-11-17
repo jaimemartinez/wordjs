@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.28',
+    version: '2.36.29',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -1622,6 +1622,20 @@ exports.init = async function (wordjs) {
     };
     const sexAllows = (room, person) => { const sx = roomSexOf(room); return !sx || sexOfText(person && person.gender) === sx; };
     const isMixedRoom = (room) => String((room && room.gender) == null ? '' : room.gender).trim().toUpperCase() === 'MX';
+    // Does `room` take `joining` beside `everyone` (its occupants + who joins), under `keepRules`? The ONE room-sex
+    // check of every placement that is not made by hand — the engine's runs (compatible) and «Sugerir reparto»
+    // (planOnSnapshot), which places people by its own arithmetic and once put a family in a room fixed for men.
+    // One sex: everyone who joins is of it. Mixed: everyone belongs, by a keep_together rule, to a group that holds
+    // both sexes in the room (a family; never two loners, never a single-sex group).
+    const roomTakes = (room, joining, everyone, keepRules) => {
+        if (!joining.every(p => sexAllows(room, p))) return false;
+        if (!isMixedRoom(room)) return true;
+        const key = (p, rule) => { const v = ruleVal(p, rule.field); return v == null ? '' : String(v).trim().toLowerCase(); };
+        return everyone.every(p => (keepRules || []).some(rule => {
+            const k = key(p, rule);
+            return k !== '' && new Set(everyone.filter(o => key(o, rule) === k).map(o => sexOfText(o.gender)).filter(Boolean)).size > 1;
+        }));
+    };
     const roomSexMsg = (room) => (roomSexOf(room) === 'F' ? 'Esa habitación es solo para mujeres.' : 'Esa habitación es solo para hombres.');
     // A room's sex as written by the admin's screens or the API: 'M' / 'F' / 'Mixed'; undefined = not sent.
     const roomGenderInput = (v) => {
@@ -7238,18 +7252,7 @@ exports.init = async function (wordjs) {
         const cond = condMatches;
 
         // Invariant 1 + a shared room's class + hard separate_by, at EVERY placement site.
-        // A mixed room (2.36.28, see ROOM SEX): everyone in it belongs, by a keep_together rule, to a group that
-        // holds both sexes there — a family; never two loners of different sexes, never a single-sex group.
-        const mixedOk = (room, people) => {
-            if (!isMixedRoom(room)) return true;
-            const after = room.occupants.concat(people);
-            const key = (p, rule) => { const v = ruleVal(p, rule.field); return v == null ? '' : String(v).trim().toLowerCase(); };
-            return after.every(p => keepRules.some(rule => {
-                const k = key(p, rule);
-                return k !== '' && new Set(after.filter(o => key(o, rule) === k).map(o => sexOfText(o.gender)).filter(Boolean)).size > 1;
-            }));
-        };
-        const compatible = (room, people) => mixedOk(room, people) && people.every(p => roomAllows(room, p) && sexAllows(room, p) && lockAllows(room.lock, p)) && mergedSeparateOk(room.occupants, people);
+        const compatible = (room, people) => roomTakes(room, people, room.occupants.concat(people), keepRules) && people.every(p => roomAllows(room, p) && lockAllows(room.lock, p)) && mergedSeparateOk(room.occupants, people);
         // Higher = better room for placing `people`: penalize soft-separate mixing, companion gaps, waste.
         const score = (room, people) => {
             let s = 0;
@@ -8149,6 +8152,9 @@ exports.init = async function (wordjs) {
             const composedOk = (members) => [...new Set(members.map(m => m.g))].every(g => g.ctx.mergedSeparateOk([], members.flatMap(m => m.people)));
             // A room that holds people and is shared keeps its class.
             const lockOk = (b, it) => !b.partial || it.people.every(p => lockAllows(b.partial.lock, p));
+            // The room's sex (2.36.28, see roomTakes): who joins, beside everyone already planned or sleeping there.
+            const sexOk = (room, members, joining) => roomTakes(room, joining.flatMap(m => m.people), members.flatMap(m => m.people),
+                [...new Set(members.flatMap(m => (m.g && m.g.ctx && m.g.ctx.keepRules) || []))]);
             // Free rooms for `g`, best first: rooms it had, then rooms in a hotel it already uses, then hotel order.
             const freeFor = (g) => {
                 const hotels = new Set(bins.filter(b => b.members.some(m => m.g === g)).map(b => b.hotel));
@@ -8157,7 +8163,7 @@ exports.init = async function (wordjs) {
             };
             // `items` into new rooms by the engine's arithmetic; nothing is committed yet.
             const tryPack = (items, free, prefer) => {
-                const res = pack.packNew(items, free.map(x => ({ x, free: x.cap })), (bin, it, inside) => composedOk(inside.concat([it])), prefer);
+                const res = pack.packNew(items, free.map(x => ({ x, free: x.cap })), (bin, it, inside) => composedOk(inside.concat([it])) && sexOk(bin.x.room, inside.concat([it]), [it]), prefer);
                 const binOf = new Map();
                 for (const [it, b] of res.placed) {
                     if (!binOf.has(b)) binOf.set(b, { room: b.x.room, cap: b.x.cap, hotel: b.x.hotel, members: [] });
@@ -8173,7 +8179,7 @@ exports.init = async function (wordjs) {
                 const have = items.reduce((n, it) => n + it.size, 0);
                 for (const set of pack.fillSets(free.map(x => x.cap), have)) {
                     const cand = set.map(i => ({ x: free[i], free: free[i].cap }));
-                    const res = pack.packInto(items, cand, (bin, it, inside) => composedOk(inside.concat([it])));
+                    const res = pack.packInto(items, cand, (bin, it, inside) => composedOk(inside.concat([it])) && sexOk(bin.x.room, inside.concat([it]), [it]));
                     const filled = new Map(cand.map(b => [b, 0]));
                     for (const [it, b] of res.placed) filled.set(b, filled.get(b) + it.size);
                     if (![...filled].every(([b, n]) => n === b.x.cap)) continue;
@@ -8200,13 +8206,13 @@ exports.init = async function (wordjs) {
                             if (!view.some(o => condMatches(rule.params.subject, o))) continue;
                             if (view.filter(o => condMatches(rule.params.needs, o)).length >= (Number(rule.params.min) || 1)) continue;
                             const k = items.findIndex(it => it.g === g && it.size === 1 && condMatches(rule.params.needs, it.people[0]) && spareOf(b) >= 1
-                                && mixOk(b, it, []) && lockOk(b, it) && composedOk(b.members.concat([it])));
+                                && mixOk(b, it, []) && lockOk(b, it) && composedOk(b.members.concat([it])) && sexOk(b.room, b.members.concat([it]), [it]));
                             if (k >= 0) { b.members.push(items[k]); items.splice(k, 1); }
                         }
                     }
                 }
                 const res = pack.packInto(items, cands.map(b => ({ b, free: spareOf(b) })),
-                    (x, it, inside) => mixOk(x.b, it, inside) && lockOk(x.b, it) && composedOk(x.b.members.concat(inside, [it])),
+                    (x, it, inside) => mixOk(x.b, it, inside) && lockOk(x.b, it) && composedOk(x.b.members.concat(inside, [it])) && sexOk(x.b.room, x.b.members.concat(inside, [it]), [it]),
                     (x, it) => (x.b.members.some(m => m.g === it.g) ? 0 : 1));
                 for (const [it, x] of res.placed) x.b.members.push(it);
                 return res.left;
