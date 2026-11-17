@@ -286,7 +286,7 @@ function ConferenceManagerContent() {
                     {shown === 'consent' && <ConsentAdmin conferenceId={currentConference.id} />}
                     {shown === 'badges' && <BadgesPage conferenceId={currentConference.id} conference={currentConference} />}
                     {shown === 'accounting' && <AccountingPage conferenceId={currentConference.id} slug={currentConference.slug} onOpenFees={viewAllowed('fees', perms) ? () => setView('fees') : undefined} />}
-                    {shown === 'locations' && <LocationsPage conferenceId={currentConference.id} onOpenExplorer={viewAllowed('assignment', perms) ? openLodgingExplorer : undefined} />}
+                    {shown === 'locations' && <LocationsPage conferenceId={currentConference.id} />}
                     {shown === 'assignment' && <AssignmentPage conferenceId={currentConference.id} focus={lodgingFocus} onFocusConsumed={() => setLodgingFocus(null)} />}
                     {shown === 'fields' && <FieldsPage conferenceId={currentConference.id} />}
                     {shown === 'pricing' && <PricingPage conferenceId={currentConference.id} />}
@@ -4416,6 +4416,497 @@ function ResetAssignmentsDialog({ conferenceId, onClose, onDone }: { conferenceI
     );
 }
 
+// 2.36.27: «Revisar hospedaje» of each locality lives in «Asignaciones» (it was on the Localidades cards):
+// reviewing the coordinators' arrangements is part of the lodging assignment, so it follows the lodging
+// permissions — «ver» opens the review, «gestionar» validates / returns / reopens. GET /locations/:id/lodging
+// and its three transitions ask the server for the same section.
+function LodgingReviewBoard({ conferenceId, onAdjust }: { conferenceId: number; onAdjust?: (focus: { locationId: number }) => void }) {
+    const { t } = useI18n();
+    const tx = useTx();
+    const { addToast } = useToast();
+    const perms = usePerms();
+    const canManage = perms.can('lodging', 'manage');
+    // Hospedaje › gestionar adjusts a submitted / validated arrangement directly (2.17.0), in the explorer below.
+    const canAdjust = canManage && !!onAdjust;
+    const onOpenExplorer = onAdjust;
+    const [locations, setLocations] = useState<Location[]>([]);
+    const loadLocations = async () => {
+        try {
+            setLocations((await conferenceApi.getLocations(conferenceId)).locations);
+        } catch (error) {
+            console.error(error);
+        }
+    };
+    useEffect(() => { loadLocations(); }, [conferenceId]);
+    // In-page confirm above the review modal (see LocationsPage: the shared dialog would sit behind it).
+    const [confirmState, setConfirmState] = useState<{ message: string; label: string; danger: boolean; resolve: (v: boolean) => void } | null>(null);
+    const confirm = (message: string, label = 'Confirmar', danger = false) =>
+        new Promise<boolean>(resolve => setConfirmState({ message, label, danger, resolve }));
+    // "Revisar hospedaje" modal: the location being reviewed, the GET /locations/:id/lodging payload,
+    // the observations typed for a return, and the action in flight.
+    const [reviewLoc, setReviewLoc] = useState<Location | null>(null);
+    const [review, setReview] = useState<LodgingReview | null>(null);
+    const [reviewLoading, setReviewLoading] = useState(false);
+    const [returnNote, setReturnNote] = useState('');
+    const [showReturnForm, setShowReturnForm] = useState(false);
+    const [reviewBusy, setReviewBusy] = useState(false);
+
+    // --- Lodging review (the admin only validates the coordinator's arrangement) ---------------
+    const loadReview = async (id: number) => {
+        setReviewLoading(true);
+        try {
+            setReview(await conferenceApi.getLocationLodging(id));
+        } catch (error: any) {
+            addToast(error?.message || t('lodging.error.loading') || 'Error al cargar el hospedaje', 'error');
+        } finally {
+            setReviewLoading(false);
+        }
+    };
+
+    const openReview = (loc: Location) => {
+        setReviewLoc(loc);
+        setReview(null);
+        setReturnNote('');
+        setShowReturnForm(false);
+        loadReview(loc.id);
+    };
+
+    const closeReview = () => {
+        setReviewLoc(null);
+        setReview(null);
+        setShowReturnForm(false);
+    };
+
+    // Each transition is a compare-and-set on the server (409 when the status moved meanwhile); after
+    // any of them the modal reloads its payload and the cards refresh their status/counters. «Validar» and
+    // «Devolver» also send what the admin is looking at (reviewSeen, 2.17.0): when the arrangement changed
+    // since (an administration adjustment by someone else, or a new submission), the server answers 409
+    // `lodging_changed` and the modal reloads, so the admin decides on what is there now.
+    const reviewRefused = async (error: any) => {
+        if (error && error.code === 'lodging_changed' && reviewLoc) {
+            addToast(tx('lodging.review.changed', 'El hospedaje cambió mientras lo revisabas: ya ves la versión actual. Revísalo antes de validarlo o devolverlo.'), 'warning');
+            await loadReview(reviewLoc.id);
+            loadLocations();
+            return;
+        }
+        addToast(error?.message || 'Error', 'error');
+    };
+    const handleValidate = async () => {
+        if (!reviewLoc) return;
+        if (!await confirm(t('lodging.confirm.validate') || '¿Validar el hospedaje de esta localidad? El encargado no podrá modificarlo hasta que lo reabras.', t('lodging.validate') || 'Validar', false)) return;
+        setReviewBusy(true);
+        try {
+            await conferenceApi.validateLodging(reviewLoc.id, reviewSeen(review));
+            addToast(t('lodging.validated.done') || 'Hospedaje validado', 'success');
+            await loadReview(reviewLoc.id);
+            loadLocations();
+        } catch (error: any) {
+            await reviewRefused(error);
+        } finally {
+            setReviewBusy(false);
+        }
+    };
+
+    const handleReturn = async () => {
+        if (!reviewLoc) return;
+        const note = returnNote.trim();
+        if (!note) { addToast(t('lodging.return.note.required') || 'Indica las observaciones para el encargado.', 'warning'); return; }
+        setReviewBusy(true);
+        try {
+            await conferenceApi.returnLodging(reviewLoc.id, note, reviewSeen(review));
+            addToast(t('lodging.returned.done') || 'Hospedaje devuelto al encargado', 'success');
+            setShowReturnForm(false);
+            setReturnNote('');
+            await loadReview(reviewLoc.id);
+            loadLocations();
+        } catch (error: any) {
+            await reviewRefused(error);
+        } finally {
+            setReviewBusy(false);
+        }
+    };
+
+    const handleReopen = async () => {
+        if (!reviewLoc) return;
+        if (!await confirm(t('lodging.confirm.reopen') || '¿Reabrir el hospedaje? El encargado podrá volver a modificarlo.', t('lodging.reopen') || 'Reabrir', false)) return;
+        setReviewBusy(true);
+        try {
+            await conferenceApi.reopenLodging(reviewLoc.id);
+            addToast(t('lodging.reopened.done') || 'Hospedaje reabierto', 'success');
+            await loadReview(reviewLoc.id);
+            loadLocations();
+        } catch (error: any) {
+            addToast(error?.message || 'Error', 'error');
+        } finally {
+            setReviewBusy(false);
+        }
+    };
+
+    // The server stamps CURRENT_TIMESTAMP: SQLite returns `YYYY-MM-DD HH:MM:SS` in UTC with no zone
+    // marker (Chrome would read it as local time, Safari as an invalid date) — parse that form as UTC.
+    const fmtDate = (v?: string | null) => {
+        if (!v) return '';
+        const s = String(v).trim();
+        const sql = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)$/.exec(s);
+        const d = new Date(sql ? `${sql[1]}T${sql[2]}Z` : s);
+        return isNaN(d.getTime()) ? s : d.toLocaleString();
+    };
+    // The form's name fields (role first_name / last_name); without them, the first filled form fields
+    // (2.16.0: the form may have no name field at all), then the attendee's number.
+    const occupantName = (p: any) => `${p.first_name || ''} ${p.last_name || ''}`.trim() || personDisplayName(p, review?.fields || []);
+
+    if (!locations.length) return null;
+    return (
+        <div className="bg-white rounded-3xl border border-gray-100 shadow-sm p-6 max-sm:p-4 space-y-4" data-lodging-review-board="">
+            <div>
+                <h3 className="text-lg font-black text-gray-900">{tx('lodging.review.board', 'Revisión del hospedaje por localidad')}</h3>
+                <p className="text-xs text-gray-500 mt-1">{tx('lodging.review.board.hint', 'Lo que cada encargado acomodó y envió a validación: revísalo, valídalo, devuélvelo o reábrelo.')}</p>
+            </div>
+            <ul className="grid grid-cols-1 lg:grid-cols-2 gap-3">
+                {locations.map(loc => (
+                    <li key={loc.id} data-lodging-review-location={loc.id}>
+                        <div className="text-sm font-black text-gray-900 mb-1.5 truncate">{loc.name}</div>
+                        {(() => {
+                            const meta = lodgingStatusMeta(loc.lodging_status);
+                            const unlodged = Number(loc.unlodged) || 0;
+                            return (
+                                <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${loc.lodging_status === 'submitted' ? 'border-amber-200' : 'border-gray-50 group-hover:border-blue-100'}`}>
+                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2" data-lodging-row="">
+                                        <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-sm ${loc.lodging_status === 'submitted' ? 'bg-amber-50 text-amber-500' : loc.lodging_status === 'validated' ? 'bg-emerald-50 text-emerald-500' : 'bg-purple-50 text-purple-400'}`}>
+                                            <i className="fa-solid fa-bed"></i>
+                                        </div>
+                                        <div className="flex-1 min-w-[10rem]">
+                                            <div className="flex items-center gap-2 flex-wrap">
+                                                <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('lodging.block') || 'Hospedaje'}</div>
+                                                <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${meta.cls}`}>
+                                                    <i className={`fa-solid ${meta.icon} mr-1`}></i>{t(meta.key) || meta.fallback}
+                                                </span>
+                                            </div>
+                                            {/* The counts wrap between items only; no «·» is left alone at a line's start or end. */}
+                                            <DotList className="text-[11px] font-bold text-gray-600 mt-1" data-lodging-counts="" items={[
+                                                `${Number(loc.rooms_allotted) || 0} ${t('lodging.rooms.short') || 'hab.'}`,
+                                                `${Number(loc.beds_allotted) || 0} ${t('lodging.beds.short') || 'camas'}`,
+                                                `${Number(loc.lodged) || 0} ${t('lodging.lodged.short') || 'alojados'}`,
+                                                <span className={unlodged > 0 ? 'text-amber-600' : ''}>{unlodged} {t('lodging.unlodged.short') || 'sin habitación'}</span>,
+                                            ]} />
+                                        </div>
+                                        <button
+                                            onClick={() => openReview(loc)}
+                                            title={t('lodging.review') || 'Revisar hospedaje'}
+                                            className={`shrink-0 ml-auto text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl transition-all shadow-sm ${loc.lodging_status === 'submitted' ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-white text-purple-600 hover:bg-purple-600 hover:text-white'}`}
+                                        >
+                                            <i className="fa-solid fa-clipboard-check mr-1"></i>{t('lodging.review') || 'Revisar hospedaje'}
+                                        </button>
+                                    </div>
+                                    {/* Full card width, never inside the row's squeezed middle column; the two-line
+                                        form, the whole sentence in its tooltip (2.17.0). */}
+                                    <AdjustStamp location={loc} tx={tx} compact className="mt-2" />
+                                </div>
+                            );
+                        })()}
+                    </li>
+                ))}
+            </ul>
+        {/* Lodging review modal — fed by GET /locations/:id/lodging; the admin validates / returns / reopens. */}
+        {reviewLoc && (() => {
+            const status = review?.location?.lodging_status || reviewLoc.lodging_status || 'draft';
+            const meta = lodgingStatusMeta(status);
+            const counts = review?.counts || { placed: 0, unassigned: 0, hard_violations: 0, soft_violations: 0, placed_elsewhere: 0 };
+            const violations = review?.violations || [];
+            const note = review ? review.location?.lodging_note : reviewLoc.lodging_note;
+            const submittedAt = review ? review.location?.lodging_submitted_at : reviewLoc.lodging_submitted_at;
+            const reviewedAt = review ? review.location?.lodging_reviewed_at : reviewLoc.lodging_reviewed_at;
+            const hardLabel = t('rule.hard') || 'Obligatoria';
+            const softLabel = t('rule.soft') || 'Preferente';
+            return (
+                <Overlay layer={1}>
+                    <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-4xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
+                        <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between gap-4">
+                            <div className="min-w-0">
+                                <div className="flex items-center gap-3 flex-wrap">
+                                    <h3 className="font-bold text-xl text-gray-900 italic truncate">{t('lodging.review.title') || 'Revisión de hospedaje'} — {reviewLoc.name}</h3>
+                                    <span className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${meta.cls}`}>
+                                        <i className={`fa-solid ${meta.icon} mr-1`}></i>{t(meta.key) || meta.fallback}
+                                    </span>
+                                </div>
+                                <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1 flex flex-wrap gap-x-3">
+                                    {submittedAt && <span>{t('lodging.submitted.at') || 'Enviado'}: {fmtDate(submittedAt)}</span>}
+                                    {reviewedAt && <span>{t('lodging.reviewed.at') || 'Revisado'}: {fmtDate(reviewedAt)}</span>}
+                                </p>
+                            </div>
+                            <button onClick={closeReview} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg shrink-0">
+                                <i className="fa-solid fa-xmark text-lg"></i>
+                            </button>
+                        </div>
+
+                        <div className="p-8 space-y-8 overflow-y-auto modern-scrollbar flex-1">
+                            {reviewLoading && !review ? (
+                                <div className="text-center py-16"><div className="inline-block w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div></div>
+                            ) : !review ? (
+                                <div className="text-center py-16 text-gray-400 text-sm">{t('lodging.error.loading') || 'Error al cargar el hospedaje'}</div>
+                            ) : (
+                                <>
+                                    {/* The four counts */}
+                                    <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
+                                        {[
+                                            { label: t('lodging.counts.placed') || 'Alojados', value: counts.placed, cls: 'bg-emerald-50 text-emerald-700', icon: 'fa-bed' },
+                                            { label: t('lodging.counts.unassigned') || 'Sin habitación', value: counts.unassigned, cls: counts.unassigned > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500', icon: 'fa-user-slash' },
+                                            { label: t('lodging.counts.hard') || 'Faltas obligatorias', value: counts.hard_violations, cls: counts.hard_violations > 0 ? 'bg-rose-50 text-rose-700' : 'bg-gray-50 text-gray-500', icon: 'fa-triangle-exclamation' },
+                                            { label: t('lodging.counts.soft') || 'Faltas preferentes', value: counts.soft_violations, cls: counts.soft_violations > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500', icon: 'fa-circle-exclamation' },
+                                        ].map((c, i) => (
+                                            <div key={i} className={`rounded-2xl p-4 ${c.cls}`}>
+                                                <div className="text-[9px] font-black uppercase tracking-widest opacity-70"><i className={`fa-solid ${c.icon} mr-1`}></i>{c.label}</div>
+                                                <div className="text-2xl font-black italic tracking-tighter mt-1">{c.value}</div>
+                                            </div>
+                                        ))}
+                                    </div>
+
+                                    {/* Actions by status */}
+                                    <div className={`rounded-2xl border p-5 ${status === 'submitted' ? 'bg-amber-50/40 border-amber-200' : status === 'validated' ? 'bg-emerald-50/40 border-emerald-200' : 'bg-gray-50 border-gray-100'}`}>
+                                        {status === 'submitted' && !canManage && (
+                                            <p className="text-sm text-amber-800 font-medium"><i className="fa-solid fa-hourglass-half mr-2"></i>{tx('perm.lodging.review.readonly', 'Enviado por el encargado y pendiente de validación. Tu rol solo puede consultarlo.')}</p>
+                                        )}
+                                        {status === 'submitted' && canManage && (
+                                            <div className="space-y-4">
+                                                <div className="flex flex-wrap items-center gap-3">
+                                                    <button
+                                                        onClick={handleValidate}
+                                                        disabled={reviewBusy}
+                                                        className="px-6 py-3 rounded-xl bg-emerald-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-emerald-500/20"
+                                                    >
+                                                        <i className="fa-solid fa-circle-check"></i> {t('lodging.validate') || 'Validar'}
+                                                    </button>
+                                                    <button
+                                                        onClick={() => setShowReturnForm(v => !v)}
+                                                        disabled={reviewBusy}
+                                                        className={`px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50 flex items-center gap-2 border-2 ${showReturnForm ? 'border-amber-500 bg-amber-100 text-amber-800' : 'border-amber-300 bg-white text-amber-700 hover:bg-amber-50'}`}
+                                                    >
+                                                        <i className="fa-solid fa-rotate-left"></i> {t('lodging.return') || 'Devolver'}
+                                                    </button>
+                                                </div>
+                                                {showReturnForm && (
+                                                    <div className="space-y-2">
+                                                        <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">{t('lodging.return.note') || 'Observaciones para el encargado'} *</label>
+                                                        <textarea
+                                                            value={returnNote}
+                                                            onChange={e => setReturnNote(e.target.value)}
+                                                            rows={3}
+                                                            maxLength={2000}
+                                                            aria-required="true"
+                                                            placeholder={t('lodging.return.note.placeholder') || 'Explica qué debe corregir el encargado…'}
+                                                            className="w-full border-2 border-amber-200 rounded-xl px-4 py-3 bg-white focus:border-amber-500 transition-all outline-none text-gray-900 font-medium text-sm"
+                                                            autoFocus
+                                                        />
+                                                        <div className="flex justify-end">
+                                                            <button
+                                                                onClick={handleReturn}
+                                                                disabled={reviewBusy || !returnNote.trim()}
+                                                                className="px-6 py-2.5 rounded-xl bg-amber-500 text-white font-black text-[10px] uppercase tracking-widest hover:bg-amber-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
+                                                            >
+                                                                <i className="fa-solid fa-paper-plane"></i> {t('lodging.return') || 'Devolver'}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                        {status === 'validated' && (
+                                            <div className="flex flex-wrap items-center gap-3">
+                                                <p className="text-sm text-emerald-800 font-medium flex-1"><i className="fa-solid fa-circle-check mr-2"></i>{t('lodging.status.validated') || 'Validado'}</p>
+                                                {canManage && <button
+                                                    onClick={handleReopen}
+                                                    disabled={reviewBusy}
+                                                    className="px-6 py-3 rounded-xl border-2 border-emerald-300 bg-white text-emerald-700 font-black text-[10px] uppercase tracking-widest hover:bg-emerald-50 transition-all disabled:opacity-50 flex items-center gap-2"
+                                                >
+                                                    <i className="fa-solid fa-lock-open"></i> {t('lodging.reopen') || 'Reabrir'}
+                                                </button>}
+                                            </div>
+                                        )}
+                                        {status === 'draft' && (
+                                            <div className="space-y-3">
+                                                <p className="text-sm text-gray-500 font-medium"><i className="fa-solid fa-hourglass-half mr-2"></i>{t('lodging.not.submitted') || 'El encargado aún no ha enviado el hospedaje'}</p>
+                                                {note && (
+                                                    <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
+                                                        <div className="text-[9px] font-black uppercase tracking-widest text-amber-600 mb-1">{t('lodging.note.label') || 'Observaciones enviadas al encargado'}</div>
+                                                        <p className="text-sm text-amber-900 whitespace-pre-wrap">{note}</p>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                        {/* 2.17.0: what the administration changed since the coordinator's submission, and
+                                            the way to change it without reopening (Hospedaje › gestionar). */}
+                                        {(adjustStampOf(review.location) || (canAdjust && isLodgingFrozen(status))) && (
+                                            <div className="mt-4 pt-4 border-t border-black/5 space-y-3" data-adjust-review={status}>
+                                                <AdjustStamp location={review.location} tx={tx} detail />
+                                                {canAdjust && isLodgingFrozen(status) && (
+                                                    <div className="flex flex-wrap items-center gap-3">
+                                                        <p className="text-xs text-gray-600 font-medium flex-1 min-w-[12rem]">{tx('lodging.adjust.review.help', 'Puedes ajustar este hospedaje sin reabrirlo, en Asignación o en Alojamiento: el estado no cambia y cada cambio queda registrado.')}</p>
+                                                        <button
+                                                            type="button"
+                                                            data-adjust-open=""
+                                                            onClick={() => { const id = reviewLoc.id; closeReview(); onOpenExplorer!({ locationId: id }); }}
+                                                            className="px-5 py-2.5 rounded-xl bg-white border-2 border-blue-200 text-blue-700 font-black text-[10px] uppercase tracking-widest hover:bg-blue-50 transition-all flex items-center gap-2"
+                                                        >
+                                                            <i className="fa-solid fa-pen-to-square" aria-hidden="true"></i> {tx('lodging.adjust.open', 'Ajustar en Asignación')}
+                                                        </button>
+                                                    </div>
+                                                )}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Violations: hard in red, soft in amber */}
+                                    <div>
+                                        <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.violations') || 'Reglas incumplidas'}</h4>
+                                        {violations.length === 0 ? (
+                                            <p className="text-xs text-emerald-700 font-medium"><i className="fa-solid fa-check mr-1"></i>{t('lodging.violations.none') || 'Todas las reglas se cumplen.'}</p>
+                                        ) : (
+                                            <ul className="space-y-1.5">
+                                                {violations.map((v: any, i: number) => (
+                                                    <li key={i} className={`flex items-start gap-2 text-xs p-2.5 rounded-xl border ${v.hard ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
+                                                        <span className={`mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest whitespace-nowrap ${v.hard ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-700'}`}>{v.hard ? hardLabel : softLabel}</span>
+                                                        <span><b>{v.rule}</b> — {v.detail}</span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        )}
+                                    </div>
+
+                                    {/* Rooms with occupants */}
+                                    <div>
+                                        <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.rooms.title') || 'Habitaciones y ocupantes'} ({review.rooms.length})</h4>
+                                        {review.rooms.length === 0 ? (
+                                            <p className="text-xs text-gray-400 italic">{t('lodging.rooms.none') || 'Esta localidad no tiene habitaciones asignadas.'}</p>
+                                        ) : (
+                                            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
+                                                {review.rooms.map(room => {
+                                                    const over = (room.occupied || 0) > (room.capacity || 0);
+                                                    return (
+                                                        <div key={room.id} className={`p-4 rounded-2xl border ${over ? 'border-rose-200 bg-rose-50/30' : 'border-gray-100 bg-gray-50/40'}`}>
+                                                            <div className="flex items-center justify-between gap-2 mb-2">
+                                                                <div className="min-w-0">
+                                                                    <div className="font-black text-sm text-gray-900 italic tracking-tighter truncate">{room.room_number}</div>
+                                                                    <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest truncate">{room.hotel_name}</div>
+                                                                </div>
+                                                                <span className={`text-xs font-black whitespace-nowrap ${over ? 'text-rose-600' : 'text-gray-700'}`}>{room.occupied || 0}<span className="text-gray-300">/</span>{room.capacity}</span>
+                                                            </div>
+                                                            {(room.occupants || []).length === 0 ? (
+                                                                <p className="text-[10px] text-gray-300 italic">{t('lodging.room.empty') || 'Vacía'}</p>
+                                                            ) : (
+                                                                <ul className="space-y-1">
+                                                                    {room.occupants.map((p: any) => (
+                                                                        <li key={p.id} className="text-xs text-gray-700 flex items-center gap-2">
+                                                                            <i className={`fa-solid ${genderKey(p.gender) === 'F' ? 'fa-venus text-pink-400' : genderKey(p.gender) === 'M' ? 'fa-mars text-blue-400' : 'fa-user text-gray-300'} text-[9px]`}></i>
+                                                                            <span className="truncate">{occupantName(p)}</span>
+                                                                            {p.family_group && <span className="text-[8px] font-black uppercase tracking-widest text-indigo-500 bg-indigo-50 px-1.5 rounded">{p.family_group}</span>}
+                                                                        </li>
+                                                                    ))}
+                                                                </ul>
+                                                            )}
+                                                        </div>
+                                                    );
+                                                })}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Unassigned */}
+                                    <div>
+                                        <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.unassigned.title') || 'Participantes sin habitación'} ({review.unassigned.length})</h4>
+                                        {review.unassigned.length === 0 ? (
+                                            <p className="text-xs text-emerald-700 font-medium"><i className="fa-solid fa-check mr-1"></i>{t('lodging.unassigned.none') || 'Todos los participantes tienen habitación.'}</p>
+                                        ) : (
+                                            <div className="flex flex-wrap gap-2">
+                                                {review.unassigned.map((p: any) => (
+                                                    <span key={p.id} className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-xs font-bold text-amber-800">{occupantName(p)}</span>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+
+                                    {/* Placed by the admin into pool rooms (read-only for the coordinator) */}
+                                    {(review.placed_elsewhere || []).length > 0 && (
+                                        <div>
+                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.elsewhere.title') || 'Alojados por el administrador en habitaciones del pool'} ({review.placed_elsewhere.length})</h4>
+                                            <ul className="space-y-1">
+                                                {review.placed_elsewhere.map(p => (
+                                                    <li key={p.id} className="text-xs text-gray-700 flex items-center gap-2">
+                                                        <i className="fa-solid fa-bed text-[9px] text-purple-400"></i>
+                                                        <span>{occupantName(p)}</span>
+                                                        <span className="text-gray-400">— {p.hotel_name} · {p.room_number}</span>
+                                                    </li>
+                                                ))}
+                                            </ul>
+                                        </div>
+                                    )}
+
+                                    {/* The location's own rules, read-only */}
+                                    <div>
+                                        <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t('lodging.rules.title') || 'Reglas propias del encargado'} ({(review.rules?.location || []).length})</h4>
+                                        <p className="text-[10px] text-gray-400 mb-3">{t('lodging.rules.conference.hint') || 'Se aplican además las reglas de la conferencia'} ({(review.rules?.conference || []).length}).</p>
+                                        {(review.rules?.location || []).length === 0 ? (
+                                            <p className="text-xs text-gray-400 italic">{t('lodging.rules.none') || 'El encargado no ha definido reglas propias.'}</p>
+                                        ) : (
+                                            <div className="divide-y divide-gray-100 rounded-2xl border border-gray-100 overflow-hidden">
+                                                {review.rules.location.map((rule: any) => (
+                                                    <div key={rule.id} className={`p-3 flex items-center gap-3 ${rule.enabled ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
+                                                        <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-500 flex items-center justify-center text-xs shrink-0">
+                                                            <i className={`fa-solid ${ruleTypeMeta(rule.type).icon}`}></i>
+                                                        </div>
+                                                        <div className="flex-1 min-w-0">
+                                                            <div className="flex items-center gap-2 flex-wrap">
+                                                                <span className="font-black text-sm text-gray-900 truncate">{rule.name}</span>
+                                                                <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest bg-indigo-50 text-indigo-600">{ruleTypeMeta(rule.type).label}</span>
+                                                                <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${rule.hard ? 'bg-rose-50 text-rose-600' : 'bg-gray-100 text-gray-400'}`}>{rule.hard ? hardLabel : softLabel}</span>
+                                                            </div>
+                                                            <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">
+                                                                {t('priority')}: {rule.priority}{rule.config ? ` · ${rule.config}` : ''}
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                </>
+                            )}
+                        </div>
+                    </div>
+                </Overlay>
+            );
+        })()}
+
+        {/* In-page confirm dialog — z-[120], above the review modal (z-100). */}
+        {confirmState && (
+            <Overlay layer={3} onEscape={() => { confirmState.resolve(false); setConfirmState(null); }}>
+                <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-150" role="alertdialog" aria-modal="true"
+                    aria-label={tx('confirm.title', 'Confirmar')} aria-describedby="cm-loc-confirm-msg">
+                    <div className="p-6">
+                        <p id="cm-loc-confirm-msg" className="text-gray-800 font-medium leading-relaxed">{confirmState.message}</p>
+                    </div>
+                    <div className="px-6 py-4 bg-gray-50/50 border-t border-gray-100 flex justify-end gap-3">
+                        <button
+                            type="button"
+                            onClick={() => { confirmState.resolve(false); setConfirmState(null); }}
+                            className="min-h-[44px] px-5 py-2 text-gray-600 font-bold hover:bg-gray-100 rounded-xl transition"
+                        >
+                            {t('cancel') || 'Cancelar'}
+                        </button>
+                        <button
+                            type="button"
+                            onClick={() => { confirmState.resolve(true); setConfirmState(null); }}
+                            className={`min-h-[44px] px-5 py-2 text-white font-bold rounded-xl shadow-lg transition ${confirmState.danger ? 'bg-rose-600 hover:bg-rose-700 shadow-rose-500/30' : 'bg-blue-600 hover:bg-blue-700 shadow-blue-500/30'}`}
+                        >
+                            {confirmState.label}
+                        </button>
+                    </div>
+                </div>
+            </Overlay>
+        )}
+        </div>
+    );
+}
+
 function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId: number; focus?: { hotelId?: number | null; roomId?: number | null; locationId?: number | null } | null; onFocusConsumed?: () => void }) {
     const { t, language } = useI18n();
     const fe = useFieldErrors(language);
@@ -4424,6 +4915,8 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
     // Hospedaje › gestionar = run / reset the engine, edit its rules, and move people in the explorer
     // (drag & drop and pickers); «ver» explores who sleeps where without changing anything.
     const canManage = usePerms().can('lodging', 'manage');
+    // «Ajustar en Asignación» from the review board (2.36.27): the explorer below, filtered by that locality.
+    const [reviewFocus, setReviewFocus] = useState<{ locationId: number } | null>(null);
     const [rules, setRules] = useState<AssignmentRule[]>([]);
     const [fields, setFields] = useState<ConferenceField[]>([]);
     const [stats, setStats] = useState({ total: 0, assigned: 0, unassigned: 0 });
@@ -4813,6 +5306,8 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                 </div>
             )}
 
+            <LodgingReviewBoard conferenceId={conferenceId} onAdjust={(f) => { setReviewFocus(f); boardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
+
             {/* Who sleeps where — «Hoteles › Hotel › Habitación», editable by drag & drop and pickers. */}
             <LodgingExplorer
                 key={conferenceId}
@@ -4826,8 +5321,8 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                 loading={loading}
                 runSummary={runSummary}
                 boardRef={boardRef}
-                focus={focus}
-                onFocusConsumed={onFocusConsumed}
+                focus={focus || reviewFocus}
+                onFocusConsumed={() => { setReviewFocus(null); onFocusConsumed?.(); }}
                 suspendKeys={showRuleModal}
                 loadFailed={loadFailed}
                 onRetry={() => loadData()}
@@ -5031,7 +5526,7 @@ export default function ConferenceManagerAdmin() {
 
 
 // Locations Page Component
-function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number; onOpenExplorer?: (focus: { locationId: number }) => void }) {
+function LocationsPage({ conferenceId }: { conferenceId: number }) {
     const { t, language } = useI18n();
     const tx = useTx();
     const { addToast } = useToast();
@@ -5048,8 +5543,6 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
     const [planHotels, setPlanHotels] = useState<Hotel[] | null>(null);
     const [planLoading, setPlanLoading] = useState(false);
     const canDeadline = canManage || locPerms.can('settings', 'manage');
-    // Hospedaje › gestionar adjusts a submitted / validated arrangement directly (2.17.0), in «Asignación».
-    const canAdjust = locPerms.can('lodging', 'manage') && !!onOpenExplorer;
     const { conferences } = useConference();
     const currentConference = conferences.find(c => c.id === conferenceId);
 
@@ -5079,14 +5572,6 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
     // Inline capacity editor on a card: which location and the value being typed.
     const [capacityEdit, setCapacityEdit] = useState<{ id: number; value: string } | null>(null);
     const [savingCapacity, setSavingCapacity] = useState(false);
-    // "Revisar hospedaje" modal: the location being reviewed, the GET /locations/:id/lodging payload,
-    // the observations typed for a return, and the action in flight.
-    const [reviewLoc, setReviewLoc] = useState<Location | null>(null);
-    const [review, setReview] = useState<LodgingReview | null>(null);
-    const [reviewLoading, setReviewLoading] = useState(false);
-    const [returnNote, setReturnNote] = useState('');
-    const [showReturnForm, setShowReturnForm] = useState(false);
-    const [reviewBusy, setReviewBusy] = useState(false);
 
     const openPlan = async () => {
         setPlanLoading(true);
@@ -5264,109 +5749,6 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
         }
     };
 
-    // --- Lodging review (the admin only validates the coordinator's arrangement) ---------------
-    const loadReview = async (id: number) => {
-        setReviewLoading(true);
-        try {
-            setReview(await conferenceApi.getLocationLodging(id));
-        } catch (error: any) {
-            addToast(error?.message || t('lodging.error.loading') || 'Error al cargar el hospedaje', 'error');
-        } finally {
-            setReviewLoading(false);
-        }
-    };
-
-    const openReview = (loc: Location) => {
-        setReviewLoc(loc);
-        setReview(null);
-        setReturnNote('');
-        setShowReturnForm(false);
-        loadReview(loc.id);
-    };
-
-    const closeReview = () => {
-        setReviewLoc(null);
-        setReview(null);
-        setShowReturnForm(false);
-    };
-
-    // Each transition is a compare-and-set on the server (409 when the status moved meanwhile); after
-    // any of them the modal reloads its payload and the cards refresh their status/counters. «Validar» and
-    // «Devolver» also send what the admin is looking at (reviewSeen, 2.17.0): when the arrangement changed
-    // since (an administration adjustment by someone else, or a new submission), the server answers 409
-    // `lodging_changed` and the modal reloads, so the admin decides on what is there now.
-    const reviewRefused = async (error: any) => {
-        if (error && error.code === 'lodging_changed' && reviewLoc) {
-            addToast(tx('lodging.review.changed', 'El hospedaje cambió mientras lo revisabas: ya ves la versión actual. Revísalo antes de validarlo o devolverlo.'), 'warning');
-            await loadReview(reviewLoc.id);
-            loadLocations();
-            return;
-        }
-        addToast(error?.message || 'Error', 'error');
-    };
-    const handleValidate = async () => {
-        if (!reviewLoc) return;
-        if (!await confirm(t('lodging.confirm.validate') || '¿Validar el hospedaje de esta localidad? El encargado no podrá modificarlo hasta que lo reabras.', t('lodging.validate') || 'Validar', false)) return;
-        setReviewBusy(true);
-        try {
-            await conferenceApi.validateLodging(reviewLoc.id, reviewSeen(review));
-            addToast(t('lodging.validated.done') || 'Hospedaje validado', 'success');
-            await loadReview(reviewLoc.id);
-            loadLocations();
-        } catch (error: any) {
-            await reviewRefused(error);
-        } finally {
-            setReviewBusy(false);
-        }
-    };
-
-    const handleReturn = async () => {
-        if (!reviewLoc) return;
-        const note = returnNote.trim();
-        if (!note) { addToast(t('lodging.return.note.required') || 'Indica las observaciones para el encargado.', 'warning'); return; }
-        setReviewBusy(true);
-        try {
-            await conferenceApi.returnLodging(reviewLoc.id, note, reviewSeen(review));
-            addToast(t('lodging.returned.done') || 'Hospedaje devuelto al encargado', 'success');
-            setShowReturnForm(false);
-            setReturnNote('');
-            await loadReview(reviewLoc.id);
-            loadLocations();
-        } catch (error: any) {
-            await reviewRefused(error);
-        } finally {
-            setReviewBusy(false);
-        }
-    };
-
-    const handleReopen = async () => {
-        if (!reviewLoc) return;
-        if (!await confirm(t('lodging.confirm.reopen') || '¿Reabrir el hospedaje? El encargado podrá volver a modificarlo.', t('lodging.reopen') || 'Reabrir', false)) return;
-        setReviewBusy(true);
-        try {
-            await conferenceApi.reopenLodging(reviewLoc.id);
-            addToast(t('lodging.reopened.done') || 'Hospedaje reabierto', 'success');
-            await loadReview(reviewLoc.id);
-            loadLocations();
-        } catch (error: any) {
-            addToast(error?.message || 'Error', 'error');
-        } finally {
-            setReviewBusy(false);
-        }
-    };
-
-    // The server stamps CURRENT_TIMESTAMP: SQLite returns `YYYY-MM-DD HH:MM:SS` in UTC with no zone
-    // marker (Chrome would read it as local time, Safari as an invalid date) — parse that form as UTC.
-    const fmtDate = (v?: string | null) => {
-        if (!v) return '';
-        const s = String(v).trim();
-        const sql = /^(\d{4}-\d{2}-\d{2})[ T](\d{2}:\d{2}(?::\d{2})?(?:\.\d+)?)$/.exec(s);
-        const d = new Date(sql ? `${sql[1]}T${sql[2]}Z` : s);
-        return isNaN(d.getTime()) ? s : d.toLocaleString();
-    };
-    // The form's name fields (role first_name / last_name); without them, the first filled form fields
-    // (2.16.0: the form may have no name field at all), then the attendee's number.
-    const occupantName = (p: any) => `${p.first_name || ''} ${p.last_name || ''}`.trim() || personDisplayName(p, review?.fields || []);
 
     return (
         <div className="space-y-10 animate-in fade-in duration-500">
@@ -5760,44 +6142,6 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                                                 </div>
                                             </div>
                                         </div>
-                                        {(() => {
-                                            const meta = lodgingStatusMeta(loc.lodging_status);
-                                            const unlodged = Number(loc.unlodged) || 0;
-                                            return (
-                                                <div className={`p-3 bg-white rounded-xl border shadow-sm transition-colors ${loc.lodging_status === 'submitted' ? 'border-amber-200' : 'border-gray-50 group-hover:border-blue-100'}`}>
-                                                    <div className="flex flex-wrap items-center gap-x-4 gap-y-2" data-lodging-row="">
-                                                        <div className={`w-8 h-8 shrink-0 rounded-lg flex items-center justify-center text-sm ${loc.lodging_status === 'submitted' ? 'bg-amber-50 text-amber-500' : loc.lodging_status === 'validated' ? 'bg-emerald-50 text-emerald-500' : 'bg-purple-50 text-purple-400'}`}>
-                                                            <i className="fa-solid fa-bed"></i>
-                                                        </div>
-                                                        <div className="flex-1 min-w-[10rem]">
-                                                            <div className="flex items-center gap-2 flex-wrap">
-                                                                <div className="text-[9px] font-bold text-gray-400 uppercase tracking-widest">{t('lodging.block') || 'Hospedaje'}</div>
-                                                                <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${meta.cls}`}>
-                                                                    <i className={`fa-solid ${meta.icon} mr-1`}></i>{t(meta.key) || meta.fallback}
-                                                                </span>
-                                                            </div>
-                                                            {/* The counts wrap between items only; no «·» is left alone at a line's start or end. */}
-                                                            <DotList className="text-[11px] font-bold text-gray-600 mt-1" data-lodging-counts="" items={[
-                                                                `${Number(loc.rooms_allotted) || 0} ${t('lodging.rooms.short') || 'hab.'}`,
-                                                                `${Number(loc.beds_allotted) || 0} ${t('lodging.beds.short') || 'camas'}`,
-                                                                `${Number(loc.lodged) || 0} ${t('lodging.lodged.short') || 'alojados'}`,
-                                                                <span className={unlodged > 0 ? 'text-amber-600' : ''}>{unlodged} {t('lodging.unlodged.short') || 'sin habitación'}</span>,
-                                                            ]} />
-                                                        </div>
-                                                        <button
-                                                            onClick={() => openReview(loc)}
-                                                            title={t('lodging.review') || 'Revisar hospedaje'}
-                                                            className={`shrink-0 ml-auto text-[10px] font-black uppercase tracking-widest px-3 py-2 rounded-xl transition-all shadow-sm ${loc.lodging_status === 'submitted' ? 'bg-amber-500 text-white hover:bg-amber-600' : 'bg-white text-purple-600 hover:bg-purple-600 hover:text-white'}`}
-                                                        >
-                                                            <i className="fa-solid fa-clipboard-check mr-1"></i>{t('lodging.review') || 'Revisar hospedaje'}
-                                                        </button>
-                                                    </div>
-                                                    {/* Full card width, never inside the row's squeezed middle column; the two-line
-                                                        form, the whole sentence in its tooltip (2.17.0). */}
-                                                    <AdjustStamp location={loc} tx={tx} compact className="mt-2" />
-                                                </div>
-                                            );
-                                        })()}
                                         {(conference?.lodging_opens || conference?.lodging_deadline || loc.lodging_opens || loc.lodging_closes) && (() => {
                                             // Its lodging dates (2.21.0): the general ones, or its own (the 2.8.0
                                             // «permiso fuera de plazo» became an own closing).
@@ -5968,274 +6312,6 @@ function LocationsPage({ conferenceId, onOpenExplorer }: { conferenceId: number;
                     onSaved={(next: any) => setLocations((ls) => ls.map((l) => (l.id === next.id ? { ...l, ...next } : l)))} />
             )}
 
-            {/* Lodging review modal — fed by GET /locations/:id/lodging; the admin validates / returns / reopens. */}
-            {reviewLoc && (() => {
-                const status = review?.location?.lodging_status || reviewLoc.lodging_status || 'draft';
-                const meta = lodgingStatusMeta(status);
-                const counts = review?.counts || { placed: 0, unassigned: 0, hard_violations: 0, soft_violations: 0, placed_elsewhere: 0 };
-                const violations = review?.violations || [];
-                const note = review ? review.location?.lodging_note : reviewLoc.lodging_note;
-                const submittedAt = review ? review.location?.lodging_submitted_at : reviewLoc.lodging_submitted_at;
-                const reviewedAt = review ? review.location?.lodging_reviewed_at : reviewLoc.lodging_reviewed_at;
-                const hardLabel = t('rule.hard') || 'Obligatoria';
-                const softLabel = t('rule.soft') || 'Preferente';
-                return (
-                    <Overlay layer={1}>
-                        <div className="bg-white rounded-[32px] shadow-2xl w-full max-w-4xl border border-gray-100 overflow-hidden animate-in zoom-in-95 duration-200 max-h-[92vh] flex flex-col">
-                            <div className="bg-gray-50/50 px-8 py-6 border-b border-gray-100 flex items-center justify-between gap-4">
-                                <div className="min-w-0">
-                                    <div className="flex items-center gap-3 flex-wrap">
-                                        <h3 className="font-bold text-xl text-gray-900 italic truncate">{t('lodging.review.title') || 'Revisión de hospedaje'} — {reviewLoc.name}</h3>
-                                        <span className={`px-2.5 py-1 rounded-full text-[9px] font-black uppercase tracking-widest ${meta.cls}`}>
-                                            <i className={`fa-solid ${meta.icon} mr-1`}></i>{t(meta.key) || meta.fallback}
-                                        </span>
-                                    </div>
-                                    <p className="text-[10px] text-gray-400 font-bold uppercase tracking-widest mt-1 flex flex-wrap gap-x-3">
-                                        {submittedAt && <span>{t('lodging.submitted.at') || 'Enviado'}: {fmtDate(submittedAt)}</span>}
-                                        {reviewedAt && <span>{t('lodging.reviewed.at') || 'Revisado'}: {fmtDate(reviewedAt)}</span>}
-                                    </p>
-                                </div>
-                                <button onClick={closeReview} className="text-gray-400 hover:text-gray-600 transition-colors p-2 hover:bg-gray-100 rounded-lg shrink-0">
-                                    <i className="fa-solid fa-xmark text-lg"></i>
-                                </button>
-                            </div>
-
-                            <div className="p-8 space-y-8 overflow-y-auto modern-scrollbar flex-1">
-                                {reviewLoading && !review ? (
-                                    <div className="text-center py-16"><div className="inline-block w-8 h-8 border-4 border-purple-500 border-t-transparent rounded-full animate-spin"></div></div>
-                                ) : !review ? (
-                                    <div className="text-center py-16 text-gray-400 text-sm">{t('lodging.error.loading') || 'Error al cargar el hospedaje'}</div>
-                                ) : (
-                                    <>
-                                        {/* The four counts */}
-                                        <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
-                                            {[
-                                                { label: t('lodging.counts.placed') || 'Alojados', value: counts.placed, cls: 'bg-emerald-50 text-emerald-700', icon: 'fa-bed' },
-                                                { label: t('lodging.counts.unassigned') || 'Sin habitación', value: counts.unassigned, cls: counts.unassigned > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500', icon: 'fa-user-slash' },
-                                                { label: t('lodging.counts.hard') || 'Faltas obligatorias', value: counts.hard_violations, cls: counts.hard_violations > 0 ? 'bg-rose-50 text-rose-700' : 'bg-gray-50 text-gray-500', icon: 'fa-triangle-exclamation' },
-                                                { label: t('lodging.counts.soft') || 'Faltas preferentes', value: counts.soft_violations, cls: counts.soft_violations > 0 ? 'bg-amber-50 text-amber-700' : 'bg-gray-50 text-gray-500', icon: 'fa-circle-exclamation' },
-                                            ].map((c, i) => (
-                                                <div key={i} className={`rounded-2xl p-4 ${c.cls}`}>
-                                                    <div className="text-[9px] font-black uppercase tracking-widest opacity-70"><i className={`fa-solid ${c.icon} mr-1`}></i>{c.label}</div>
-                                                    <div className="text-2xl font-black italic tracking-tighter mt-1">{c.value}</div>
-                                                </div>
-                                            ))}
-                                        </div>
-
-                                        {/* Actions by status */}
-                                        <div className={`rounded-2xl border p-5 ${status === 'submitted' ? 'bg-amber-50/40 border-amber-200' : status === 'validated' ? 'bg-emerald-50/40 border-emerald-200' : 'bg-gray-50 border-gray-100'}`}>
-                                            {status === 'submitted' && !canManage && (
-                                                <p className="text-sm text-amber-800 font-medium"><i className="fa-solid fa-hourglass-half mr-2"></i>{tx('perm.lodging.review.readonly', 'Enviado por el encargado y pendiente de validación. Tu rol solo puede consultarlo.')}</p>
-                                            )}
-                                            {status === 'submitted' && canManage && (
-                                                <div className="space-y-4">
-                                                    <div className="flex flex-wrap items-center gap-3">
-                                                        <button
-                                                            onClick={handleValidate}
-                                                            disabled={reviewBusy}
-                                                            className="px-6 py-3 rounded-xl bg-emerald-600 text-white font-black text-[10px] uppercase tracking-widest hover:bg-emerald-700 transition-all disabled:opacity-50 flex items-center gap-2 shadow-lg shadow-emerald-500/20"
-                                                        >
-                                                            <i className="fa-solid fa-circle-check"></i> {t('lodging.validate') || 'Validar'}
-                                                        </button>
-                                                        <button
-                                                            onClick={() => setShowReturnForm(v => !v)}
-                                                            disabled={reviewBusy}
-                                                            className={`px-6 py-3 rounded-xl font-black text-[10px] uppercase tracking-widest transition-all disabled:opacity-50 flex items-center gap-2 border-2 ${showReturnForm ? 'border-amber-500 bg-amber-100 text-amber-800' : 'border-amber-300 bg-white text-amber-700 hover:bg-amber-50'}`}
-                                                        >
-                                                            <i className="fa-solid fa-rotate-left"></i> {t('lodging.return') || 'Devolver'}
-                                                        </button>
-                                                    </div>
-                                                    {showReturnForm && (
-                                                        <div className="space-y-2">
-                                                            <label className="block text-[10px] font-bold text-gray-500 uppercase tracking-widest ml-1">{t('lodging.return.note') || 'Observaciones para el encargado'} *</label>
-                                                            <textarea
-                                                                value={returnNote}
-                                                                onChange={e => setReturnNote(e.target.value)}
-                                                                rows={3}
-                                                                maxLength={2000}
-                                                                aria-required="true"
-                                                                placeholder={t('lodging.return.note.placeholder') || 'Explica qué debe corregir el encargado…'}
-                                                                className="w-full border-2 border-amber-200 rounded-xl px-4 py-3 bg-white focus:border-amber-500 transition-all outline-none text-gray-900 font-medium text-sm"
-                                                                autoFocus
-                                                            />
-                                                            <div className="flex justify-end">
-                                                                <button
-                                                                    onClick={handleReturn}
-                                                                    disabled={reviewBusy || !returnNote.trim()}
-                                                                    className="px-6 py-2.5 rounded-xl bg-amber-500 text-white font-black text-[10px] uppercase tracking-widest hover:bg-amber-600 transition-all disabled:opacity-50 disabled:cursor-not-allowed flex items-center gap-2"
-                                                                >
-                                                                    <i className="fa-solid fa-paper-plane"></i> {t('lodging.return') || 'Devolver'}
-                                                                </button>
-                                                            </div>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-                                            {status === 'validated' && (
-                                                <div className="flex flex-wrap items-center gap-3">
-                                                    <p className="text-sm text-emerald-800 font-medium flex-1"><i className="fa-solid fa-circle-check mr-2"></i>{t('lodging.status.validated') || 'Validado'}</p>
-                                                    {canManage && <button
-                                                        onClick={handleReopen}
-                                                        disabled={reviewBusy}
-                                                        className="px-6 py-3 rounded-xl border-2 border-emerald-300 bg-white text-emerald-700 font-black text-[10px] uppercase tracking-widest hover:bg-emerald-50 transition-all disabled:opacity-50 flex items-center gap-2"
-                                                    >
-                                                        <i className="fa-solid fa-lock-open"></i> {t('lodging.reopen') || 'Reabrir'}
-                                                    </button>}
-                                                </div>
-                                            )}
-                                            {status === 'draft' && (
-                                                <div className="space-y-3">
-                                                    <p className="text-sm text-gray-500 font-medium"><i className="fa-solid fa-hourglass-half mr-2"></i>{t('lodging.not.submitted') || 'El encargado aún no ha enviado el hospedaje'}</p>
-                                                    {note && (
-                                                        <div className="p-4 rounded-xl bg-amber-50 border border-amber-200">
-                                                            <div className="text-[9px] font-black uppercase tracking-widest text-amber-600 mb-1">{t('lodging.note.label') || 'Observaciones enviadas al encargado'}</div>
-                                                            <p className="text-sm text-amber-900 whitespace-pre-wrap">{note}</p>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-                                            {/* 2.17.0: what the administration changed since the coordinator's submission, and
-                                                the way to change it without reopening (Hospedaje › gestionar). */}
-                                            {(adjustStampOf(review.location) || (canAdjust && isLodgingFrozen(status))) && (
-                                                <div className="mt-4 pt-4 border-t border-black/5 space-y-3" data-adjust-review={status}>
-                                                    <AdjustStamp location={review.location} tx={tx} detail />
-                                                    {canAdjust && isLodgingFrozen(status) && (
-                                                        <div className="flex flex-wrap items-center gap-3">
-                                                            <p className="text-xs text-gray-600 font-medium flex-1 min-w-[12rem]">{tx('lodging.adjust.review.help', 'Puedes ajustar este hospedaje sin reabrirlo, en Asignación o en Alojamiento: el estado no cambia y cada cambio queda registrado.')}</p>
-                                                            <button
-                                                                type="button"
-                                                                data-adjust-open=""
-                                                                onClick={() => { const id = reviewLoc.id; closeReview(); onOpenExplorer!({ locationId: id }); }}
-                                                                className="px-5 py-2.5 rounded-xl bg-white border-2 border-blue-200 text-blue-700 font-black text-[10px] uppercase tracking-widest hover:bg-blue-50 transition-all flex items-center gap-2"
-                                                            >
-                                                                <i className="fa-solid fa-pen-to-square" aria-hidden="true"></i> {tx('lodging.adjust.open', 'Ajustar en Asignación')}
-                                                            </button>
-                                                        </div>
-                                                    )}
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        {/* Violations: hard in red, soft in amber */}
-                                        <div>
-                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.violations') || 'Reglas incumplidas'}</h4>
-                                            {violations.length === 0 ? (
-                                                <p className="text-xs text-emerald-700 font-medium"><i className="fa-solid fa-check mr-1"></i>{t('lodging.violations.none') || 'Todas las reglas se cumplen.'}</p>
-                                            ) : (
-                                                <ul className="space-y-1.5">
-                                                    {violations.map((v: any, i: number) => (
-                                                        <li key={i} className={`flex items-start gap-2 text-xs p-2.5 rounded-xl border ${v.hard ? 'bg-rose-50 border-rose-200 text-rose-800' : 'bg-amber-50 border-amber-200 text-amber-800'}`}>
-                                                            <span className={`mt-0.5 px-1.5 py-0.5 rounded text-[8px] font-black uppercase tracking-widest whitespace-nowrap ${v.hard ? 'bg-rose-100 text-rose-600' : 'bg-amber-100 text-amber-700'}`}>{v.hard ? hardLabel : softLabel}</span>
-                                                            <span><b>{v.rule}</b> — {v.detail}</span>
-                                                        </li>
-                                                    ))}
-                                                </ul>
-                                            )}
-                                        </div>
-
-                                        {/* Rooms with occupants */}
-                                        <div>
-                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.rooms.title') || 'Habitaciones y ocupantes'} ({review.rooms.length})</h4>
-                                            {review.rooms.length === 0 ? (
-                                                <p className="text-xs text-gray-400 italic">{t('lodging.rooms.none') || 'Esta localidad no tiene habitaciones asignadas.'}</p>
-                                            ) : (
-                                                <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                                                    {review.rooms.map(room => {
-                                                        const over = (room.occupied || 0) > (room.capacity || 0);
-                                                        return (
-                                                            <div key={room.id} className={`p-4 rounded-2xl border ${over ? 'border-rose-200 bg-rose-50/30' : 'border-gray-100 bg-gray-50/40'}`}>
-                                                                <div className="flex items-center justify-between gap-2 mb-2">
-                                                                    <div className="min-w-0">
-                                                                        <div className="font-black text-sm text-gray-900 italic tracking-tighter truncate">{room.room_number}</div>
-                                                                        <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest truncate">{room.hotel_name}</div>
-                                                                    </div>
-                                                                    <span className={`text-xs font-black whitespace-nowrap ${over ? 'text-rose-600' : 'text-gray-700'}`}>{room.occupied || 0}<span className="text-gray-300">/</span>{room.capacity}</span>
-                                                                </div>
-                                                                {(room.occupants || []).length === 0 ? (
-                                                                    <p className="text-[10px] text-gray-300 italic">{t('lodging.room.empty') || 'Vacía'}</p>
-                                                                ) : (
-                                                                    <ul className="space-y-1">
-                                                                        {room.occupants.map((p: any) => (
-                                                                            <li key={p.id} className="text-xs text-gray-700 flex items-center gap-2">
-                                                                                <i className={`fa-solid ${genderKey(p.gender) === 'F' ? 'fa-venus text-pink-400' : genderKey(p.gender) === 'M' ? 'fa-mars text-blue-400' : 'fa-user text-gray-300'} text-[9px]`}></i>
-                                                                                <span className="truncate">{occupantName(p)}</span>
-                                                                                {p.family_group && <span className="text-[8px] font-black uppercase tracking-widest text-indigo-500 bg-indigo-50 px-1.5 rounded">{p.family_group}</span>}
-                                                                            </li>
-                                                                        ))}
-                                                                    </ul>
-                                                                )}
-                                                            </div>
-                                                        );
-                                                    })}
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        {/* Unassigned */}
-                                        <div>
-                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.unassigned.title') || 'Participantes sin habitación'} ({review.unassigned.length})</h4>
-                                            {review.unassigned.length === 0 ? (
-                                                <p className="text-xs text-emerald-700 font-medium"><i className="fa-solid fa-check mr-1"></i>{t('lodging.unassigned.none') || 'Todos los participantes tienen habitación.'}</p>
-                                            ) : (
-                                                <div className="flex flex-wrap gap-2">
-                                                    {review.unassigned.map((p: any) => (
-                                                        <span key={p.id} className="px-3 py-1.5 rounded-xl bg-amber-50 border border-amber-200 text-xs font-bold text-amber-800">{occupantName(p)}</span>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        {/* Placed by the admin into pool rooms (read-only for the coordinator) */}
-                                        {(review.placed_elsewhere || []).length > 0 && (
-                                            <div>
-                                                <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-3">{t('lodging.elsewhere.title') || 'Alojados por el administrador en habitaciones del pool'} ({review.placed_elsewhere.length})</h4>
-                                                <ul className="space-y-1">
-                                                    {review.placed_elsewhere.map(p => (
-                                                        <li key={p.id} className="text-xs text-gray-700 flex items-center gap-2">
-                                                            <i className="fa-solid fa-bed text-[9px] text-purple-400"></i>
-                                                            <span>{occupantName(p)}</span>
-                                                            <span className="text-gray-400">— {p.hotel_name} · {p.room_number}</span>
-                                                        </li>
-                                                    ))}
-                                                </ul>
-                                            </div>
-                                        )}
-
-                                        {/* The location's own rules, read-only */}
-                                        <div>
-                                            <h4 className="text-[10px] font-black uppercase tracking-widest text-gray-400 mb-1">{t('lodging.rules.title') || 'Reglas propias del encargado'} ({(review.rules?.location || []).length})</h4>
-                                            <p className="text-[10px] text-gray-400 mb-3">{t('lodging.rules.conference.hint') || 'Se aplican además las reglas de la conferencia'} ({(review.rules?.conference || []).length}).</p>
-                                            {(review.rules?.location || []).length === 0 ? (
-                                                <p className="text-xs text-gray-400 italic">{t('lodging.rules.none') || 'El encargado no ha definido reglas propias.'}</p>
-                                            ) : (
-                                                <div className="divide-y divide-gray-100 rounded-2xl border border-gray-100 overflow-hidden">
-                                                    {review.rules.location.map((rule: any) => (
-                                                        <div key={rule.id} className={`p-3 flex items-center gap-3 ${rule.enabled ? 'bg-white' : 'bg-gray-50 opacity-60'}`}>
-                                                            <div className="w-8 h-8 rounded-lg bg-indigo-50 text-indigo-500 flex items-center justify-center text-xs shrink-0">
-                                                                <i className={`fa-solid ${ruleTypeMeta(rule.type).icon}`}></i>
-                                                            </div>
-                                                            <div className="flex-1 min-w-0">
-                                                                <div className="flex items-center gap-2 flex-wrap">
-                                                                    <span className="font-black text-sm text-gray-900 truncate">{rule.name}</span>
-                                                                    <span className="px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest bg-indigo-50 text-indigo-600">{ruleTypeMeta(rule.type).label}</span>
-                                                                    <span className={`px-2 py-0.5 rounded-full text-[8px] font-black uppercase tracking-widest ${rule.hard ? 'bg-rose-50 text-rose-600' : 'bg-gray-100 text-gray-400'}`}>{rule.hard ? hardLabel : softLabel}</span>
-                                                                </div>
-                                                                <div className="text-[9px] text-gray-400 font-bold uppercase tracking-widest mt-0.5">
-                                                                    {t('priority')}: {rule.priority}{rule.config ? ` · ${rule.config}` : ''}
-                                                                </div>
-                                                            </div>
-                                                        </div>
-                                                    ))}
-                                                </div>
-                                            )}
-                                        </div>
-                                    </>
-                                )}
-                            </div>
-                        </div>
-                    </Overlay>
-                );
-            })()}
 
             {/* Create Location Modal */}
             {showModal && (

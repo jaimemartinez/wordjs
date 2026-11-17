@@ -16,6 +16,23 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   rooms. By hand anyone may be placed there. A sex the present occupants do not have is refused, and the room card
   shows the choice.
 
+### Changed
+- **conference-manager 2.36.27: «Revisar hospedaje» of each locality moved from «Localidades» to «Asignación», under
+  the lodging permissions.** Reviewing what a coordinator arranged is part of the lodging assignment: the board with
+  each locality's status and its review (validate, return, reopen) now sits above the explorer in «Asignación».
+  `GET /locations/:id/lodging` asks for Hospedaje › ver and its three transitions for Hospedaje › gestionar (they
+  asked for Localidades before). A role that reviewed lodging with Localidades alone needs Hospedaje now.
+
+### Fixed
+- **conference-manager 2.36.26: before a locality's lodging opens, its coordinator sees nothing of the lodging.**
+  The portal's «Hospedajes» tab only refused changes before the opening date; it still showed the rooms and the
+  placements the administrators were preparing. Until the opening it now shows only the status and the date it
+  opens, and `GET /portal/lodging` returns no rooms, people or rules.
+- **conference-manager 2.36.25: a «no duplicates» field is checked across the whole conference from the
+  coordinators' portal too.** The portal only looked for the same value (the ID document, for example) in the
+  coordinator's own locality, so one person could be registered twice from two localities. The refusal still says
+  nothing about where the other registration is.
+
 ### Marketplace
 - **youtube-videos 1.1.1 shows each video's original title.** 1.1.0 asked YouTube for the list in English, so a
   video whose creator added an English translation showed it instead of its title. The list is now asked in the

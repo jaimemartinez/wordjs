@@ -285,6 +285,8 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
     const hasRooms = rooms.length > 0;
     /** Why nothing can be changed right now (null while editable) — the explorer shows it instead of silently disabled controls. */
     const lockReason = readOnlyReason(d);
+    // Before the opening the server sends nothing of the lodging (2.36.26): only the banner with the date.
+    const notYet = deadlineState(d) === 'not_yet';
 
     /** The ONE write path of every placement (explorer drag & drop, room picker, free-bed picker, «Quitar»). */
     const assign = (inscriptionId: number, roomId: number | null): Promise<boolean> =>
@@ -372,7 +374,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
                         <span className="font-black">{unassignedLabel(summary.unplaced)}.</span> {unassignedHint(status)}
                     </Notice>
                 )}
-                {noLodging.length > 0 && (
+                {!notYet && noLodging.length > 0 && (
                     // «Requiere hospedaje: No» (2.31.0): never offered for a room, here or by the automatic assignment.
                     <Notice tone="blue" icon="fa-bed" data-testid="lodging-no-lodging">
                         <span className="font-black">{noLodging.length === 1 ? '1 participante no requiere hospedaje' : `${noLodging.length} participantes no requieren hospedaje`}:</span>{' '}
@@ -382,6 +384,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
                 )}
             </HeroCard>
 
+            {!notYet && (<>
             {!hasRooms ? (
                 <div data-testid="lodging-empty">
                     <EmptyState icon="fa-bed" title="El administrador aún no te ha asignado habitaciones." />
@@ -560,6 +563,7 @@ export default function Hospedajes({ authHeaders, onLocationRefresh, storageScop
                 </div>
             </Card>
 
+            </>)}
             {confirm && (
                 <Modal
                     size="sm"
