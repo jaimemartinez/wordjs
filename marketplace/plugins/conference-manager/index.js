@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.27',
+    version: '2.36.28',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -1599,6 +1599,40 @@ exports.init = async function (wordjs) {
     const isFrozen = (row) => lodgingStatusOf(row) !== 'draft';
     // Invariant 1: a pool room takes anyone; an allotted room takes only its location's attendees.
     const roomAllows = (room, person) => room.location_id == null || Number(room.location_id) === Number(person.location_id);
+    // ROOM SEX (2.36.28): optional, set by the admin by hand (rooms.gender).
+    //   'Mixed' (the column's default, every older room) = NOT SET: anyone, exactly as before.
+    //   'M' / 'F' = only people whose «Género» answer reads as that sex take a bed there — the automatic
+    //               assignment (compatible), the admin's placement and the coordinator's alike. A person with no
+    //               answer is not placed in a single-sex room.
+    //   'MX'       = MIXED, for the mixed groups the rules keep together (a family): the automatic assignment
+    //               puts there only people who belong, by a keep_together rule, to a group that is of both sexes
+    //               in the room (mixedOk in runAssignmentScope) — the rules still decide whether a family stays
+    //               together at all; loners and single-sex groups take the other rooms. A person placed by hand
+    //               (admin or coordinator) is the placer's call, as in a room not set.
+    // The form may spell the sexes its own way (M / F, Masculino, Hombre, Mujer…), read as the lodging hints read them.
+    const FEMALE_RE = /^(f|fem|femenin[oa]|female|woman|women|mujer|mujeres|mulher|mulheres|feminino)$/;
+    const MALE_RE = /^(m|masc|masculin[oa]|male|man|men|hombre|hombres|homem|homens|var[oó]n|varones)$/;
+    const sexOfText = (v) => {
+        const t = String(v == null ? '' : v).trim().toLowerCase();
+        return FEMALE_RE.test(t) ? 'F' : MALE_RE.test(t) ? 'M' : null;
+    };
+    const roomSexOf = (room) => {
+        const g = String((room && room.gender) == null ? '' : room.gender).trim().toUpperCase();
+        return g === 'M' || g === 'F' ? g : null;
+    };
+    const sexAllows = (room, person) => { const sx = roomSexOf(room); return !sx || sexOfText(person && person.gender) === sx; };
+    const isMixedRoom = (room) => String((room && room.gender) == null ? '' : room.gender).trim().toUpperCase() === 'MX';
+    const roomSexMsg = (room) => (roomSexOf(room) === 'F' ? 'Esa habitación es solo para mujeres.' : 'Esa habitación es solo para hombres.');
+    // A room's sex as written by the admin's screens or the API: 'M' / 'F' / 'Mixed'; undefined = not sent.
+    const roomGenderInput = (v) => {
+        if (v === undefined) return undefined;
+        const t = String(v == null ? '' : v).trim();
+        if (t === '' || /^(mixed|sin fijar|unset|not set)$/i.test(t)) return 'Mixed';
+        if (/^(mx|mixta|mixto|mista|misto)$/i.test(t)) return 'MX';
+        const sx = sexOfText(t);
+        if (!sx) throw httpError(400, 'El sexo de la habitación debe ser Sin fijar, Mixta, Hombres o Mujeres.');
+        return sx;
+    };
     // Rooms SHARED between locations (2.18.0, «camas por localidad»). A room's beds may be split between
     // several locations — rows of room_beds (room_id, location_id, beds) — the rest of its capacity being
     // POOL beds. So a room is one of:
@@ -3972,7 +4006,7 @@ exports.init = async function (wordjs) {
                 const existing = await roomWithNumber(hotel.id, number);
                 if (existing) return { existing };
                 const r = await db.run(`INSERT INTO ${T.rooms} (hotel_id, room_number, capacity, gender, is_family, family_name, notes) VALUES (?, ?, ?, ?, ?, ?, ?)`,
-                    [hotel.id, number, Math.max(1, Number(capacity) || 1), gender || 'Mixed', is_family ? 1 : 0, family_name || null, notes || null]);
+                    [hotel.id, number, Math.max(1, Number(capacity) || 1), roomGenderInput(gender) || 'Mixed', is_family ? 1 : 0, family_name || null, notes || null]);
                 return { id: r.lastID };
             });
             if (outcome.existing) return res.status(409).json({ error: `Ya existe la habitación «${outcome.existing.room_number}» en este hotel.`, code: 'duplicate_room', id: outcome.existing.id, room_number: outcome.existing.room_number });
@@ -4011,7 +4045,16 @@ exports.init = async function (wordjs) {
             }
             let cap = null;
             if (capacity !== undefined) cap = Math.max(1, Number(capacity) || 1);
-            if (gender !== undefined) { sets.push('gender = ?'); params.push(gender || 'Mixed'); }
+            if (gender !== undefined) {
+                const g = roomGenderInput(gender);
+                // A sex its present occupants do not have would leave them in a room they may not be in.
+                if (g === 'M' || g === 'F') {
+                    const occ = await db.all(`SELECT gender FROM ${T.inscriptions} WHERE room_id = ?`, [room.id]);
+                    const other = occ.filter(o => sexOfText(o.gender) !== g).length;
+                    if (other) throw httpError(409, `La habitación tiene ${other === 1 ? '1 ocupante' : `${other} ocupantes`} de otro sexo o sin género: sácalos antes de dejarla solo para ${g === 'F' ? 'mujeres' : 'hombres'}.`);
+                }
+                sets.push('gender = ?'); params.push(g);
+            }
             if (is_family !== undefined) { sets.push('is_family = ?'); params.push(is_family ? 1 : 0); }
             if (family_name !== undefined) { sets.push('family_name = ?'); params.push(family_name || null); }
             if (notes !== undefined) { sets.push('notes = ?'); params.push(notes || null); }
@@ -6048,6 +6091,7 @@ exports.init = async function (wordjs) {
                 if (!room) throw httpError(404, 'Habitación no encontrada.');
                 if (Number(room.conference_id) !== Number(person.conference_id)) throw httpError(400, 'Esa habitación pertenece a otra conferencia.');
                 if (!roomAllows(room, person)) throw httpError(400, `Esa habitación está asignada a la localidad «${room.location_name || room.location_id}».`);
+                if (!sexAllows(room, person)) throw httpError(400, roomSexMsg(room));
                 const alreadyHere = Number(cur.room_id) === Number(roomId);
                 if (alreadyHere) return [];
                 if (room.occupied >= room.capacity) throw httpError(400, 'La habitación está llena.');
@@ -7172,7 +7216,7 @@ exports.init = async function (wordjs) {
         const rooms = roomRows.map(r => {
             const occupants = occByRoom.get(r.id) || [];
             const shares = roomShares.get(Number(r.id)) || [];
-            const room = { id: r.id, capacity: Math.max(1, Number(r.capacity) || 1), room_number: r.room_number, hotel_name: r.hotel_name, location_id: r.location_id == null ? null : r.location_id, occupants,
+            const room = { id: r.id, capacity: Math.max(1, Number(r.capacity) || 1), room_number: r.room_number, hotel_name: r.hotel_name, location_id: r.location_id == null ? null : r.location_id, occupants, gender: r.gender,
                 // A shared room's class (see «THE CLASS OF A SHARED ROOM»): nobody of another value takes a bed of it.
                 lock: shareLockOf(r, shares, lockFields), blocked: isBlocked(r) };
             if (isPool) {
@@ -7194,7 +7238,18 @@ exports.init = async function (wordjs) {
         const cond = condMatches;
 
         // Invariant 1 + a shared room's class + hard separate_by, at EVERY placement site.
-        const compatible = (room, people) => people.every(p => roomAllows(room, p) && lockAllows(room.lock, p)) && mergedSeparateOk(room.occupants, people);
+        // A mixed room (2.36.28, see ROOM SEX): everyone in it belongs, by a keep_together rule, to a group that
+        // holds both sexes there — a family; never two loners of different sexes, never a single-sex group.
+        const mixedOk = (room, people) => {
+            if (!isMixedRoom(room)) return true;
+            const after = room.occupants.concat(people);
+            const key = (p, rule) => { const v = ruleVal(p, rule.field); return v == null ? '' : String(v).trim().toLowerCase(); };
+            return after.every(p => keepRules.some(rule => {
+                const k = key(p, rule);
+                return k !== '' && new Set(after.filter(o => key(o, rule) === k).map(o => sexOfText(o.gender)).filter(Boolean)).size > 1;
+            }));
+        };
+        const compatible = (room, people) => mixedOk(room, people) && people.every(p => roomAllows(room, p) && sexAllows(room, p) && lockAllows(room.lock, p)) && mergedSeparateOk(room.occupants, people);
         // Higher = better room for placing `people`: penalize soft-separate mixing, companion gaps, waste.
         const score = (room, people) => {
             let s = 0;
@@ -9580,13 +9635,14 @@ exports.init = async function (wordjs) {
                 }
                 // L's whole room, or a room L shares (2.18.0) — where only L's beds are L's to fill.
                 const room = await db.get(
-                    `SELECT r.id, r.capacity, r.location_id, r.share_lock, r.blocked, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) AS occupied,
+                    `SELECT r.id, r.capacity, r.location_id, r.share_lock, r.blocked, r.gender, (SELECT COUNT(*) FROM ${T.inscriptions} i WHERE i.room_id = r.id) AS occupied,
                             (SELECT b.beds FROM ${T.roomBeds} b WHERE b.room_id = r.id AND b.location_id = ?) AS share_beds,
                             (SELECT COUNT(*) FROM ${T.inscriptions} i2 WHERE i2.room_id = r.id AND i2.location_id = ?) AS own_occupied
                      FROM ${T.rooms} r JOIN ${T.hotels} h ON r.hotel_id = h.id
                      WHERE r.id = ? AND (r.location_id = ? OR EXISTS (SELECT 1 FROM ${T.roomBeds} b2 WHERE b2.room_id = r.id AND b2.location_id = ?)) AND h.conference_id = ?`,
                     [location.id, location.id, roomId, location.id, location.id, location.conference_id]);
                 if (!room) throw httpError(404, 'Habitación no encontrada.');
+                if (!sexAllows(room, ins)) throw httpError(409, roomSexMsg(room));
                 if (ins.status === 'cancelled') throw httpError(400, 'Un participante cancelado no ocupa habitación.');
                 if (!needsLodging(ins)) throw httpError(400, NO_LODGING_MSG);
                 const alreadyHere = Number(ins.room_id) === Number(room.id);

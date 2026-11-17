@@ -6,6 +6,16 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **conference-manager 2.36.28: an administrator can set a room's sex: men only, women only, or mixed for families.**
+  «Sexo de la habitación» is optional, on «Añadir habitación» and on the room's own sheet. «Sin fijar», the default,
+  keeps the room as before. «Solo hombres» or «Solo mujeres» lets only people whose «Género» answer is that sex
+  take a bed there: the automatic assignment, the administrator's placement and the coordinators' portal alike.
+  «Mixta» is for the mixed groups the rules keep together, such as families: the automatic assignment puts there
+  only people of a «Mantener juntos» group that holds both sexes, and loners and single-sex groups take the other
+  rooms. By hand anyone may be placed there. A sex the present occupants do not have is refused, and the room card
+  shows the choice.
+
 ### Changed
 - **conference-manager 2.36.27: «Revisar hospedaje» of each locality moved from «Localidades» to «Asignación», under
   the lodging permissions.** Reviewing what a coordinator arranged is part of the lodging assignment: the board with
