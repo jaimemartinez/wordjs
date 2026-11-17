@@ -599,7 +599,7 @@ test('«Sugerir reparto» never gives a room fixed for men to the woman of a fam
         ok(await p.call('post', '/assignment/reset', { body: { conference_id: cid } }), 'reset');
         const again = ok(await p.call('post', '/assignment/plan', { body: { conference_id: cid, ...fresh } }), 'plan').plan;
         ok(await p.call('post', '/assignment/plan/apply', { body: { conference_id: cid, token: again.token, ...fresh } }), 'apply');
-        assert.notStrictEqual(roomOf(sandra), men, `${JSON.stringify(fresh)}: the woman is in the men\'s room`);
+        assert.notStrictEqual(roomOf(sandra), men, `${JSON.stringify(fresh)}: the woman is in the men's room`);
     }
     void juan;
 });
