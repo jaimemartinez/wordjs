@@ -25,7 +25,7 @@
     "date-fns": "^4.1.0",
     "dompurify": "^3.4.17",
     "leaflet": "1.9.4",
-    "next": "^16.4.2",
+    "next": "^16.4.5",
     "qrcode-generator": "^2.0.4",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
