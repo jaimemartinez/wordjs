@@ -70,7 +70,8 @@ export interface Room {
     hotel_id: number;
     room_number: string;
     capacity: number;
-    gender: 'M' | 'F' | 'Mixed';
+    /** 2.36.28: 'Mixed' = not set (anyone, as before); 'MX' = mixed groups (families); 'M' / 'F' = one sex. */
+    gender: 'M' | 'F' | 'Mixed' | 'MX';
     is_family: number;
     family_name?: string;
     notes?: string;

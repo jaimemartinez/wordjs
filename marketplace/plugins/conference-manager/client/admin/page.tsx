@@ -2044,11 +2044,11 @@ function LodgingRoomTile({ room, names, selecting, selected, onActivate, onDelet
                 <div className={`flex justify-between items-start gap-2 ${onSplit && onDelete ? 'pr-14' : 'pr-7'} w-full`}>
                     <div className="min-w-0">
                         <span className="font-black text-xl text-gray-900 italic tracking-tighter">{room.room_number}</span>
-                        {(room.gender === 'M' || room.gender === 'F') && (
-                            // A room the admin fixed for one sex (2.36.28): the assignment places nobody else there.
-                            <div className={`mt-0.5 w-fit px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest ${room.gender === 'F' ? 'bg-pink-50 text-pink-700' : 'bg-sky-50 text-sky-700'}`} data-room-sex={room.gender}>
-                                <i className={`fa-solid ${room.gender === 'F' ? 'fa-venus' : 'fa-mars'} mr-1`} aria-hidden="true"></i>
-                                {room.gender === 'F' ? tx('room.sex.women', 'Solo mujeres') : tx('room.sex.men', 'Solo hombres')}
+                        {(room.gender === 'M' || room.gender === 'F' || room.gender === 'MX') && (
+                            // A room the admin fixed (2.36.28): for one sex, or mixed (the families the rules keep together).
+                            <div className={`mt-0.5 w-fit px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest ${room.gender === 'F' ? 'bg-pink-50 text-pink-700' : room.gender === 'M' ? 'bg-sky-50 text-sky-700' : 'bg-emerald-50 text-emerald-700'}`} data-room-sex={room.gender}>
+                                <i className={`fa-solid ${room.gender === 'F' ? 'fa-venus' : room.gender === 'M' ? 'fa-mars' : 'fa-venus-mars'} mr-1`} aria-hidden="true"></i>
+                                {room.gender === 'F' ? tx('room.sex.women', 'Solo mujeres') : room.gender === 'M' ? tx('room.sex.men', 'Solo hombres') : tx('room.sex.mixed.chip', 'Mixta')}
                             </div>
                         )}
                         {badge && (
@@ -2182,7 +2182,7 @@ function RoomBedsSheet({ room, locations, onClose, onSaved }: { room: Room; loca
     const lockLabel = lockText(room.lock, { F: tx('room.lock.women', 'Mujeres').toLowerCase(), M: tx('room.lock.men', 'Hombres').toLowerCase() });
     const [release, setRelease] = useState(false);
     // The room's sex (2.36.28): fixed by hand for men or women, or mixed.
-    const startSex = room.gender === 'M' || room.gender === 'F' ? room.gender : 'Mixed';
+    const startSex = room.gender === 'M' || room.gender === 'F' || room.gender === 'MX' ? room.gender : 'Mixed';
     const [sex, setSex] = useState<string>(startSex);
     const given = Object.values(beds).reduce((n, v) => n + (Number(v) || 0), 0);
     const pool = cap - given;
@@ -2229,11 +2229,12 @@ function RoomBedsSheet({ room, locations, onClose, onSaved }: { room: Room; loca
                         <label htmlFor={`room-sex-${room.id}`} className="block text-[10px] font-black text-gray-400 uppercase tracking-widest">{tx('room.sex', 'Sexo de la habitación')}</label>
                         <Select id={`room-sex-${room.id}`} value={sex} onChange={e => setSex(e.target.value)} disabled={busy}
                             className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/50 focus:bg-white focus:border-violet-500 transition-all outline-none font-bold text-gray-700">
-                            <option value="Mixed">{tx('room.sex.mixed', 'Mixta (como antes)')}</option>
+                            <option value="Mixed">{tx('room.sex.unset', 'Sin fijar (como antes)')}</option>
+                            <option value="MX">{tx('room.sex.mixed', 'Mixta (familias y grupos mixtos)')}</option>
                             <option value="M">{tx('room.sex.men', 'Solo hombres')}</option>
                             <option value="F">{tx('room.sex.women', 'Solo mujeres')}</option>
                         </Select>
-                        <p className="text-[11px] text-gray-500">{tx('room.sex.hint', 'La asignación automática, el administrador y los encargados solo acomodan aquí personas de ese sexo.')}</p>
+                        <p className="text-[11px] text-gray-500">{tx('room.sex.hint', 'Opcional. Solo hombres / mujeres: nadie más duerme aquí. Mixta: la asignación automática pone aquí solo grupos de hombres y mujeres que las reglas mantienen juntos, como familias.')}</p>
                     </div>
                     <p className="text-[11px] text-gray-500 font-medium">{tx('beds.split.hint', 'Cada localidad llena solo sus camas con su gente; las camas del pool las usa la asignación del admin.')}</p>
                     {lockLabel && (
@@ -3105,11 +3106,12 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                 <label htmlFor="room-sex-new" className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{tx('room.sex', 'Sexo de la habitación')}</label>
                                 <Select id="room-sex-new" value={roomForm.gender || 'Mixed'} onChange={e => setRoomForm({ ...roomForm, gender: e.target.value as Room['gender'] })}
                                     className="w-full border-2 border-gray-100 rounded-2xl px-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none font-bold text-gray-700" data-room-sex-input="">
-                                    <option value="Mixed">{tx('room.sex.mixed', 'Mixta (como antes)')}</option>
+                                    <option value="Mixed">{tx('room.sex.unset', 'Sin fijar (como antes)')}</option>
+                                    <option value="MX">{tx('room.sex.mixed', 'Mixta (familias y grupos mixtos)')}</option>
                                     <option value="M">{tx('room.sex.men', 'Solo hombres')}</option>
                                     <option value="F">{tx('room.sex.women', 'Solo mujeres')}</option>
                                 </Select>
-                                <p className="text-[11px] text-gray-500 ml-1">{tx('room.sex.hint', 'La asignación automática, el administrador y los encargados solo acomodan aquí personas de ese sexo.')}</p>
+                                <p className="text-[11px] text-gray-500 ml-1">{tx('room.sex.hint', 'Opcional. Solo hombres / mujeres: nadie más duerme aquí. Mixta: la asignación automática pone aquí solo grupos de hombres y mujeres que las reglas mantienen juntos, como familias.')}</p>
                             </div>
                             <div className="space-y-2">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('room.notes')}</label>

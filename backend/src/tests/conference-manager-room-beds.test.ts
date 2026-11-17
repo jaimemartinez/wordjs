@@ -522,3 +522,31 @@ test('a room fixed for one sex: the run, the admin and the portal place only tha
     assert.strictEqual(refused.body.error, 'Esa habitación es solo para hombres.');
     assert.strictEqual(roomOf(eva), null);
 });
+
+test('a MIXED room (2.36.28): the run puts there the mixed groups the rules keep together; loners and single-sex groups go elsewhere', async () => {
+    const p = await bootPlugin();
+    const cid = ok(await p.call('post', '/create', { body: { name: 'Congreso', slug: `mixed-${++seq}` } })).id as number;
+    for (const template of ['first_name', 'gender', 'family_group']) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }));
+    ok(await p.call('post', '/publish', { body: { conference_id: cid, published: true } }));
+    ok(await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Familias juntas', type: 'keep_together', config: 'family_group', hard: 1 } }), 'rule');
+    const hotel = ok(await p.call('post', '/hotels', { body: { conference_id: cid, name: 'Dorado' } })).id as number;
+    const fam = ok(await p.call('post', '/rooms', { body: { hotel_id: hotel, room_number: 'F1', capacity: 4, gender: 'Mixta' } })).id as number;
+    const other = ok(await p.call('post', '/rooms', { body: { hotel_id: hotel, room_number: 'O1', capacity: 4 } })).id as number;
+    assert.deepStrictEqual([p.one(`SELECT gender FROM ${T('rooms')} WHERE id = ?`, fam).gender, p.one(`SELECT gender FROM ${T('rooms')} WHERE id = ?`, other).gender], ['MX', 'Mixed']);
+
+    const person = async (first_name: string, gender: string, family_group = '') =>
+        ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name, gender, ...(family_group ? { family_group } : {}) } }), first_name).id as number;
+    const papa = await person('Pablo', 'M', 'Pérez'), mama = await person('Marta', 'F', 'Pérez');
+    const luis = await person('Luis', 'M'), sara = await person('Sara', 'F');
+    const roomOf = (id: number) => (p.one(`SELECT room_id FROM ${T('inscriptions')} WHERE id = ?`, id) || {}).room_id ?? null;
+
+    ok(await p.call('post', '/assignment/run', { body: { conference_id: cid } }), 'run');
+    assert.deepStrictEqual([roomOf(papa), roomOf(mama)], [fam, fam], 'the mixed family takes the mixed room');
+    assert.deepStrictEqual([roomOf(luis), roomOf(sara)], [other, other], 'loners take the room not set');
+
+    // By hand the placer decides, as in a room not set.
+    ok(await p.call('post', `/inscriptions/${luis}/assign`, { body: { room_id: fam } }), 'admin places a loner in the mixed room');
+    // «Sin fijar» is still accepted as such.
+    ok(await p.call('put', `/rooms/${fam}`, { body: { gender: 'Sin fijar' } }), 'back to not set');
+    assert.strictEqual(p.one(`SELECT gender FROM ${T('rooms')} WHERE id = ?`, fam).gender, 'Mixed');
+});

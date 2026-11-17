@@ -1598,11 +1598,17 @@ exports.init = async function (wordjs) {
     const isFrozen = (row) => lodgingStatusOf(row) !== 'draft';
     // Invariant 1: a pool room takes anyone; an allotted room takes only its location's attendees.
     const roomAllows = (room, person) => room.location_id == null || Number(room.location_id) === Number(person.location_id);
-    // ROOM SEX (2.36.28): the admin may fix a room for men or for women by hand (rooms.gender 'M' / 'F'; 'Mixed' or
-    // anything else = anyone). Only a person whose «Género» answer reads as that sex takes a bed there — the
-    // automatic assignment (compatible), the admin's placement and the coordinator's alike. A person with no
-    // answer is not placed in a single-sex room. The form may spell the sexes its own way (M / F, Masculino,
-    // Hombre, Mujer…), read the same way the lodging hints read them.
+    // ROOM SEX (2.36.28): optional, set by the admin by hand (rooms.gender).
+    //   'Mixed' (the column's default, every older room) = NOT SET: anyone, exactly as before.
+    //   'M' / 'F' = only people whose «Género» answer reads as that sex take a bed there — the automatic
+    //               assignment (compatible), the admin's placement and the coordinator's alike. A person with no
+    //               answer is not placed in a single-sex room.
+    //   'MX'       = MIXED, for the mixed groups the rules keep together (a family): the automatic assignment
+    //               puts there only people who belong, by a keep_together rule, to a group that is of both sexes
+    //               in the room (mixedOk in runAssignmentScope) — the rules still decide whether a family stays
+    //               together at all; loners and single-sex groups take the other rooms. A person placed by hand
+    //               (admin or coordinator) is the placer's call, as in a room not set.
+    // The form may spell the sexes its own way (M / F, Masculino, Hombre, Mujer…), read as the lodging hints read them.
     const FEMALE_RE = /^(f|fem|femenin[oa]|female|woman|women|mujer|mujeres|mulher|mulheres|feminino)$/;
     const MALE_RE = /^(m|masc|masculin[oa]|male|man|men|hombre|hombres|homem|homens|var[oó]n|varones)$/;
     const sexOfText = (v) => {
@@ -1614,14 +1620,16 @@ exports.init = async function (wordjs) {
         return g === 'M' || g === 'F' ? g : null;
     };
     const sexAllows = (room, person) => { const sx = roomSexOf(room); return !sx || sexOfText(person && person.gender) === sx; };
+    const isMixedRoom = (room) => String((room && room.gender) == null ? '' : room.gender).trim().toUpperCase() === 'MX';
     const roomSexMsg = (room) => (roomSexOf(room) === 'F' ? 'Esa habitación es solo para mujeres.' : 'Esa habitación es solo para hombres.');
     // A room's sex as written by the admin's screens or the API: 'M' / 'F' / 'Mixed'; undefined = not sent.
     const roomGenderInput = (v) => {
         if (v === undefined) return undefined;
         const t = String(v == null ? '' : v).trim();
-        if (t === '' || /^(mixed|mixta|mixto|mista|misto)$/i.test(t)) return 'Mixed';
+        if (t === '' || /^(mixed|sin fijar|unset|not set)$/i.test(t)) return 'Mixed';
+        if (/^(mx|mixta|mixto|mista|misto)$/i.test(t)) return 'MX';
         const sx = sexOfText(t);
-        if (!sx) throw httpError(400, 'El sexo de la habitación debe ser Mixta, Hombres o Mujeres.');
+        if (!sx) throw httpError(400, 'El sexo de la habitación debe ser Sin fijar, Mixta, Hombres o Mujeres.');
         return sx;
     };
     // Rooms SHARED between locations (2.18.0, «camas por localidad»). A room's beds may be split between
@@ -4038,7 +4046,7 @@ exports.init = async function (wordjs) {
             if (gender !== undefined) {
                 const g = roomGenderInput(gender);
                 // A sex its present occupants do not have would leave them in a room they may not be in.
-                if (g !== 'Mixed') {
+                if (g === 'M' || g === 'F') {
                     const occ = await db.all(`SELECT gender FROM ${T.inscriptions} WHERE room_id = ?`, [room.id]);
                     const other = occ.filter(o => sexOfText(o.gender) !== g).length;
                     if (other) throw httpError(409, `La habitación tiene ${other === 1 ? '1 ocupante' : `${other} ocupantes`} de otro sexo o sin género: sácalos antes de dejarla solo para ${g === 'F' ? 'mujeres' : 'hombres'}.`);
@@ -7228,7 +7236,18 @@ exports.init = async function (wordjs) {
         const cond = condMatches;
 
         // Invariant 1 + a shared room's class + hard separate_by, at EVERY placement site.
-        const compatible = (room, people) => people.every(p => roomAllows(room, p) && sexAllows(room, p) && lockAllows(room.lock, p)) && mergedSeparateOk(room.occupants, people);
+        // A mixed room (2.36.28, see ROOM SEX): everyone in it belongs, by a keep_together rule, to a group that
+        // holds both sexes there — a family; never two loners of different sexes, never a single-sex group.
+        const mixedOk = (room, people) => {
+            if (!isMixedRoom(room)) return true;
+            const after = room.occupants.concat(people);
+            const key = (p, rule) => { const v = ruleVal(p, rule.field); return v == null ? '' : String(v).trim().toLowerCase(); };
+            return after.every(p => keepRules.some(rule => {
+                const k = key(p, rule);
+                return k !== '' && new Set(after.filter(o => key(o, rule) === k).map(o => sexOfText(o.gender)).filter(Boolean)).size > 1;
+            }));
+        };
+        const compatible = (room, people) => mixedOk(room, people) && people.every(p => roomAllows(room, p) && sexAllows(room, p) && lockAllows(room.lock, p)) && mergedSeparateOk(room.occupants, people);
         // Higher = better room for placing `people`: penalize soft-separate mixing, companion gaps, waste.
         const score = (room, people) => {
             let s = 0;
