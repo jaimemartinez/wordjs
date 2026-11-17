@@ -7,6 +7,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 ## [Unreleased]
 
 ### Added
+- **conference-manager 2.36.30: an optional priority per hotel.** «Prioridad (opcional)» on the hotel form (1–99).
+  The automatic assignment and «Sugerir reparto» fill the rooms of the prioritized hotels first, 1 then 2…, and
+  the hotels without a priority last, always within the hard rules; the priority weighs more than using few
+  rooms. With no priority on any hotel the assignment works exactly as before. The hotel card shows it.
 - **conference-manager 2.36.28: an administrator can set a room's sex: men only, women only, or mixed for families.**
   «Sexo de la habitación» is optional, on «Añadir habitación» and on the room's own sheet. «Sin fijar», the default,
   keeps the room as before. «Solo hombres» or «Solo mujeres» lets only people whose «Género» answer is that sex

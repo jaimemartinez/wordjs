@@ -2309,12 +2309,12 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
     const [loading, setLoading] = useState(true);
     const [showHotelModal, setShowHotelModal] = useState(false);
     const [showRoomModal, setShowRoomModal] = useState<number | null>(null);
-    const [hotelForm, setHotelForm] = useState<Partial<Hotel>>({ name: '', address: '', capacity: 0, location: '' });
+    const [hotelForm, setHotelForm] = useState<Partial<Hotel> & { priorityText?: string }>({ name: '', address: '', capacity: 0, location: '', priorityText: '' });
     // The hotel being edited (2.23.0: name, address, capacity and its position for «Mi inscripción»'s map), or null = new.
     const [editHotelId, setEditHotelId] = useState<number | null>(null);
     const openHotelForm = (hotel: Hotel | null) => {
         setEditHotelId(hotel ? hotel.id : null);
-        setHotelForm(hotel ? { name: hotel.name, address: hotel.address || '', capacity: hotel.capacity || 0, location: hotel.geo || '' } : { name: '', address: '', capacity: 0, location: '' });
+        setHotelForm(hotel ? { name: hotel.name, address: hotel.address || '', capacity: hotel.capacity || 0, location: hotel.geo || '', priorityText: hotel.priority ? String(hotel.priority) : '' } : { name: '', address: '', capacity: 0, location: '', priorityText: '' });
         setShowHotelModal(true);
     };
     const [roomForm, setRoomForm] = useState<Partial<Room>>({ room_number: '', capacity: 2, notes: '', gender: 'Mixed' });
@@ -2493,13 +2493,14 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
         if (!conferenceId) return;
         const geo = parseGeo(hotelForm.location);
         if (!geo.ok && geo.code !== 'empty') { addToast(GEO_MESSAGES[geo.code], 'error'); return; }
-        const data = { name: hotelForm.name, address: hotelForm.address, capacity: Number(hotelForm.capacity) || 0, location: geo.ok ? geo.geo : '' };
+        // «Prioridad» (2.36.30): optional, 1–99; empty = none (the server says why when it is not a number).
+        const data = { name: hotelForm.name, address: hotelForm.address, capacity: Number(hotelForm.capacity) || 0, location: geo.ok ? geo.geo : '', priority: (hotelForm.priorityText || '').trim() === '' ? null : (hotelForm.priorityText || '').trim() };
         try {
             if (editHotelId) await conferenceApi.updateHotel(editHotelId, data);
             else await conferenceApi.createHotel(conferenceId, data);
             setShowHotelModal(false);
             setEditHotelId(null);
-            setHotelForm({ name: '', address: '', capacity: 0, location: '' });
+            setHotelForm({ name: '', address: '', capacity: 0, location: '', priorityText: '' });
             fetchHotels();
             addToast(editHotelId ? (tx('hotel.updated', 'Hotel actualizado')) : t('hotel.created'), 'success');
         } catch (error: any) {
@@ -2663,6 +2664,12 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                             {t('capacity')}: {hotel.rooms?.reduce((acc, r) => acc + (r.capacity || 0), 0) || 0}
                                         </span>
                                     </div>
+                                    {hotel.priority ? (
+                                        <div className="flex items-center gap-2 px-3 py-1.5 bg-amber-50 rounded-lg border border-amber-100 text-amber-700" data-hotel-priority={hotel.priority}>
+                                            <i className="fa-solid fa-arrow-up-1-9 text-[10px]" aria-hidden="true"></i>
+                                            <span className="text-xs font-black uppercase tracking-widest">{tx('hotel.priority.chip', 'Prioridad {n}', { n: hotel.priority })}</span>
+                                        </div>
+                                    ) : null}
                                     {/* 2.23.0: the position the guests' map uses — or a hint that it is missing. */}
                                     {hotel.geo ? (
                                         <a href={mapsUrl(hotel.geo)} target="_blank" rel="noopener noreferrer" data-hotel-map={hotel.id}
@@ -2952,6 +2959,15 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     onChange={e => setHotelForm({ ...hotelForm, capacity: (e.target.value === '' ? '' : Number(e.target.value)) as any })}
                                 />
                                 <FieldError message={fe.error('hotel_capacity')} id={fe.errorId('hotel_capacity')} />
+                            </div>
+                            <div className="space-y-2">
+                                <label htmlFor="hotel-priority" className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{tx('hotel.priority', 'Prioridad (opcional)')}</label>
+                                <input id="hotel-priority" type="number" min="1" max="99" step="1" inputMode="numeric" data-hotel-priority-input=""
+                                    placeholder={tx('hotel.priority.none', 'Sin prioridad')}
+                                    className="w-full border-2 border-gray-100 rounded-2xl px-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none text-gray-900 font-bold"
+                                    value={hotelForm.priorityText || ''}
+                                    onChange={e => setHotelForm({ ...hotelForm, priorityText: e.target.value })} />
+                                <p className="text-[11px] text-gray-500 ml-1">{tx('hotel.priority.hint', '1 se llena primero, luego 2… Los hoteles sin prioridad se llenan al final. Si ningún hotel tiene prioridad, la asignación funciona como siempre.')}</p>
                             </div>
                             <div className="flex gap-4 pt-6" data-cm-sheet-foot="">
                                 <button

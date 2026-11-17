@@ -603,3 +603,49 @@ test('«Sugerir reparto» never gives a room fixed for men to the woman of a fam
     }
     void juan;
 });
+
+// HOTEL PRIORITY (2.36.30): the owner — «cómo darle prioridad a ciertos hoteles para que se llenen primero», optional.
+test('hotel priority: optional; the run and «Sugerir reparto» fill the prioritized hotel first, even over using fewer rooms', async () => {
+    const p = await bootPlugin();
+    const cid = ok(await p.call('post', '/create', { body: { name: 'Congreso', slug: `prio-${++seq}` } })).id as number;
+    for (const template of ['first_name', 'gender']) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }));
+    ok(await p.call('post', '/publish', { body: { conference_id: cid, published: true } }));
+    const loc = ok(await p.call('post', '/locations', { body: { conference_id: cid, name: 'Norte', capacity: 50 } })).id as number;
+    // «Alfa» first (one room of 4), «Zeta» created later (two doubles): without a priority the run uses ONE room.
+    const alfa = ok(await p.call('post', '/hotels', { body: { conference_id: cid, name: 'Alfa' } })).id as number;
+    const a4 = ok(await p.call('post', '/rooms', { body: { hotel_id: alfa, room_number: 'A4', capacity: 4 } })).id as number;
+    const zeta = ok(await p.call('post', '/hotels', { body: { conference_id: cid, name: 'Zeta' } })).id as number;
+    const z1 = ok(await p.call('post', '/rooms', { body: { hotel_id: zeta, room_number: 'Z1', capacity: 2 } })).id as number;
+    const z2 = ok(await p.call('post', '/rooms', { body: { hotel_id: zeta, room_number: 'Z2', capacity: 2 } })).id as number;
+    const people: number[] = [];
+    for (const n of ['Ana', 'Bea', 'Cata', 'Dora']) people.push(ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name: n, gender: 'F', location_id: loc } }), n).id as number);
+    const roomOf = (id: number) => (p.one(`SELECT room_id FROM ${T('inscriptions')} WHERE id = ?`, id) || {}).room_id ?? null;
+    const rooms = () => people.map(roomOf).sort();
+
+    ok(await p.call('post', '/assignment/run', { body: { conference_id: cid } }), 'run');
+    assert.deepStrictEqual(rooms(), [a4, a4, a4, a4], 'no priority: as before, the fewest rooms');
+
+    // The field is optional and validated.
+    assert.strictEqual((await p.call('put', `/hotels/${zeta}`, { body: { priority: 0 } })).status, 400);
+    assert.strictEqual((await p.call('put', `/hotels/${zeta}`, { body: { priority: 'uno' } })).status, 400);
+    ok(await p.call('put', `/hotels/${zeta}`, { body: { priority: 1 } }), 'priority 1');
+    assert.strictEqual(p.one(`SELECT priority FROM ${T('hotels')} WHERE id = ?`, zeta).priority, 1);
+
+    // Zeta first, though it takes two rooms instead of one.
+    ok(await p.call('post', '/assignment/reset', { body: { conference_id: cid } }), 'reset');
+    ok(await p.call('post', '/assignment/run', { body: { conference_id: cid } }), 'run with priority');
+    assert.deepStrictEqual(rooms(), [z1, z1, z2, z2].sort(), 'the prioritized hotel fills first');
+
+    // «Sugerir reparto» too.
+    ok(await p.call('post', '/assignment/reset', { body: { conference_id: cid } }), 'reset again');
+    const plan = ok(await p.call('post', '/assignment/plan', { body: { conference_id: cid } }), 'plan').plan;
+    ok(await p.call('post', '/assignment/plan/apply', { body: { conference_id: cid, token: plan.token } }), 'apply');
+    assert.deepStrictEqual(rooms(), [z1, z1, z2, z2].sort(), 'the plan fills the prioritized hotel first');
+
+    // Back to no priority: as before again.
+    ok(await p.call('put', `/hotels/${zeta}`, { body: { priority: '' } }), 'clear');
+    assert.strictEqual(p.one(`SELECT priority FROM ${T('hotels')} WHERE id = ?`, zeta).priority, null);
+    ok(await p.call('post', '/assignment/reset', { body: { conference_id: cid } }), 'reset 3');
+    ok(await p.call('post', '/assignment/run', { body: { conference_id: cid } }), 'run 3');
+    assert.deepStrictEqual(rooms(), [a4, a4, a4, a4]);
+});
