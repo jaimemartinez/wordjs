@@ -6,6 +6,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Fixed
+- **conference-manager 2.36.26: before a locality's lodging opens, its coordinator sees nothing of the lodging.**
+  The portal's «Hospedajes» tab only refused changes before the opening date; it still showed the rooms and the
+  placements the administrators were preparing. Until the opening it now shows only the status and the date it
+  opens, and `GET /portal/lodging` returns no rooms, people or rules.
+
 ### Marketplace
 - **youtube-videos 1.1.1 shows each video's original title.** 1.1.0 asked YouTube for the list in English, so a
   video whose creator added an English translation showed it instead of its title. The list is now asked in the

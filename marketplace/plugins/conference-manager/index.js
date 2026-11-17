@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.24',
+    version: '2.36.26',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -9487,9 +9487,22 @@ exports.init = async function (wordjs) {
         const location = await resolvePortalLocation(req);
         if (!location) return res.status(401).json({ error: 'No token' });
         try {
+            const win = await lodgingWindowOf(location);
+            // 2.36.26: before the location's opening the coordinator sees NOTHING of the lodging — not the rooms,
+            // not the arrangement the admin may be preparing (its suggested placements), not the rules. Only the
+            // status and the dates, so the portal can say when it opens. Writes were already refused (403).
+            if (win.not_yet) {
+                const loc = await db.get(`SELECT lodging_status FROM ${T.locations} WHERE id = ?`, [location.id]);
+                return res.json({
+                    status: lodgingStatusOf(loc || {}),
+                    opens: win.opens, not_yet_open: true, deadline: win.closes, deadline_passed: false, window_open: false,
+                    note: null, submitted_at: null, reviewed_at: null, admin_changed_at: null, admin_changes: 0,
+                    can_edit: false, rooms: [], unassigned: [], no_lodging: [], placed_elsewhere: [],
+                    rules: { conference: [], location: [] }, fields: [], violations: [], counts: {},
+                });
+            }
             const view = await loadLodging(location, { forAdmin: false });
             const status = view.location.lodging_status;
-            const win = await lodgingWindowOf(location);
             res.json({
                 status,
                 // The dates THIS location arranges between (its own where the admin set them, the general ones
