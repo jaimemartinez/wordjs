@@ -6,6 +6,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+### Added
+- **conference-manager 2.36.28: an administrator can fix a room for men or for women.** «Sexo de la habitación»
+  (optional) on «Añadir habitación» and on the room's own sheet. «Mixta (como antes)», the default, keeps the room
+  as it was: anyone, families included, with the assignment rules deciding as before. «Solo hombres» or «Solo
+  mujeres» lets only people whose «Género» answer is that sex take a bed there: the automatic assignment, the
+  administrator's placement and the coordinators' portal alike. A sex the room's present occupants do not have is
+  refused, and the room card shows the choice.
+
 ### Marketplace
 - **youtube-videos 1.1.1 shows each video's original title.** 1.1.0 asked YouTube for the list in English, so a
   video whose creator added an English translation showed it instead of its title. The list is now asked in the

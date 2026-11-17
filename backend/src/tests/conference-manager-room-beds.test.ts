@@ -468,3 +468,57 @@ test('a split that changes a VALIDATED location\'s beds is an administration adj
     const g = ok(await p.call('post', `/locations/${w.norte}/beds`, { body: { beds: 1, hotel_id: w.hotel } }), 'give Norte 1');
     assert.deepStrictEqual(g.lodging_adjusted.map((x: any) => x.name), ['Norte']);
 });
+
+// ROOM SEX (2.36.28): the owner — «que los administradores puedan fijar manualmente el sexo de una habitación y la
+// asignación automática lo tenga en cuenta». A room fixed for men or women takes only people whose «Género» reads
+// as that sex: the run, the admin's manual placement and the coordinator's portal alike.
+test('a room fixed for one sex: the run, the admin and the portal place only that sex there; the sex is validated', async () => {
+    const p = await bootPlugin();
+    const cid = ok(await p.call('post', '/create', { body: { name: 'Congreso', slug: `sex-${++seq}` } })).id as number;
+    for (const template of ['first_name', 'gender']) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }));
+    ok(await p.call('post', '/publish', { body: { conference_id: cid, published: true } }));
+    const norte = ok(await p.call('post', '/locations', { body: { conference_id: cid, name: 'Norte', capacity: 50 } })).id as number;
+    const hotel = ok(await p.call('post', '/hotels', { body: { conference_id: cid, name: 'Dorado' } })).id as number;
+    // Created for women with the form's own spelling; a mixed room beside it.
+    const women = ok(await p.call('post', '/rooms', { body: { hotel_id: hotel, room_number: 'W1', capacity: 4, gender: 'Mujeres' } })).id as number;
+    const mixed = ok(await p.call('post', '/rooms', { body: { hotel_id: hotel, room_number: 'X1', capacity: 4 } })).id as number;
+    const sexOf = (id: number) => p.one(`SELECT gender FROM ${T('rooms')} WHERE id = ?`, id).gender;
+    assert.deepStrictEqual([sexOf(women), sexOf(mixed)], ['F', 'Mixed']);
+    assert.strictEqual((await p.call('post', '/rooms', { body: { hotel_id: hotel, room_number: 'Z', capacity: 2, gender: 'azul' } })).status, 400);
+
+    const person = async (first_name: string, gender?: string) =>
+        ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name, ...(gender ? { gender } : {}) } }), first_name).id as number;
+    const ana = await person('Ana', 'F'), bea = await person('Bea', 'F'), carlos = await person('Carlos', 'M'), dani = await person('Dani', 'M');
+    // Dani's answer is gone (the field became optional later, or an import left it blank).
+    p.exec(`UPDATE ${T('inscriptions')} SET gender = NULL WHERE id = ?`, dani);
+    const roomOf = (id: number) => (p.one(`SELECT room_id FROM ${T('inscriptions')} WHERE id = ?`, id) || {}).room_id ?? null;
+
+    // The run fills the women's room with women only; the man and the person with no answer go elsewhere.
+    ok(await p.call('post', '/assignment/run', { body: { conference_id: cid } }), 'run');
+    assert.deepStrictEqual([roomOf(ana), roomOf(bea)], [women, women]);
+    assert.notStrictEqual(roomOf(carlos), women, 'a man was placed in the women\'s room');
+    assert.notStrictEqual(roomOf(dani), women, 'a person with no answer was placed in a single-sex room');
+
+    // The admin cannot put a man there by hand.
+    const wrong = await p.call('post', `/inscriptions/${carlos}/assign`, { body: { room_id: women } });
+    assert.strictEqual(wrong.status, 400, JSON.stringify(wrong.body));
+    assert.strictEqual(wrong.body.error, 'Esa habitación es solo para mujeres.');
+
+    // A sex its occupants do not have is refused (409); back to mixed is always fine; the sex can be set again.
+    const flip = await p.call('put', `/rooms/${women}`, { body: { gender: 'M' } });
+    assert.strictEqual(flip.status, 409, JSON.stringify(flip.body));
+    assert.strictEqual(sexOf(women), 'F');
+    ok(await p.call('put', `/rooms/${women}`, { body: { gender: 'Mixed' } }), 'to mixed');
+    ok(await p.call('put', `/rooms/${women}`, { body: { gender: 'F' } }), 'to women again');
+
+    // The coordinator's portal holds to it too: a room of Norte fixed for men refuses Norte's woman.
+    const men = ok(await p.call('post', '/rooms', { body: { hotel_id: hotel, room_number: 'M1', capacity: 2, gender: 'M' } })).id as number;
+    ok(await p.call('post', `/hotels/${hotel}/allot`, { body: { location_id: norte, room_ids: [men] } }), 'allot');
+    const eva = ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name: 'Eva', gender: 'F', location_id: norte } })).id as number;
+    const code = p.one(`SELECT code FROM ${T('locations')} WHERE id = ?`, norte).code;
+    const token = ok(await p.call('post', '/portal/login', { anonymous: true, body: { location_id: norte, code } })).token as string;
+    const refused = await portal(p, 'post', '/portal/lodging/assign', token, { inscription_id: eva, room_id: men });
+    assert.strictEqual(refused.status, 409, JSON.stringify(refused.body));
+    assert.strictEqual(refused.body.error, 'Esa habitación es solo para hombres.');
+    assert.strictEqual(roomOf(eva), null);
+});

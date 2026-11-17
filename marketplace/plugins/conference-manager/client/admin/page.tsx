@@ -2007,6 +2007,7 @@ function LodgingRoomTile({ room, names, selecting, selected, onActivate, onDelet
     room: Room; names: string[]; selecting: boolean; selected: boolean;
     onActivate?: () => void; onDelete?: () => void; onSplit?: () => void; t: (k: string) => string;
 }) {
+    const tx = useTx();
     const shares = room.shares || [];
     const cap = room.capacity || 0;
     const occ = room.occupied || 0;
@@ -2043,6 +2044,13 @@ function LodgingRoomTile({ room, names, selecting, selected, onActivate, onDelet
                 <div className={`flex justify-between items-start gap-2 ${onSplit && onDelete ? 'pr-14' : 'pr-7'} w-full`}>
                     <div className="min-w-0">
                         <span className="font-black text-xl text-gray-900 italic tracking-tighter">{room.room_number}</span>
+                        {(room.gender === 'M' || room.gender === 'F') && (
+                            // A room the admin fixed for one sex (2.36.28): the assignment places nobody else there.
+                            <div className={`mt-0.5 w-fit px-1.5 py-0.5 rounded-md text-[8px] font-black uppercase tracking-widest ${room.gender === 'F' ? 'bg-pink-50 text-pink-700' : 'bg-sky-50 text-sky-700'}`} data-room-sex={room.gender}>
+                                <i className={`fa-solid ${room.gender === 'F' ? 'fa-venus' : 'fa-mars'} mr-1`} aria-hidden="true"></i>
+                                {room.gender === 'F' ? tx('room.sex.women', 'Solo mujeres') : tx('room.sex.men', 'Solo hombres')}
+                            </div>
+                        )}
                         {badge && (
                             <div className="mt-0.5 max-w-full truncate px-1.5 py-0.5 rounded-md bg-indigo-50 text-indigo-600 text-[8px] font-black uppercase tracking-widest" title={badge}>
                                 <i className="fa-solid fa-map-pin mr-1" aria-hidden="true"></i>{badge}
@@ -2173,6 +2181,9 @@ function RoomBedsSheet({ room, locations, onClose, onSaved }: { room: Room; loca
     // In a sentence: «para hombres» (the words in lower case; any other value as the form spells it).
     const lockLabel = lockText(room.lock, { F: tx('room.lock.women', 'Mujeres').toLowerCase(), M: tx('room.lock.men', 'Hombres').toLowerCase() });
     const [release, setRelease] = useState(false);
+    // The room's sex (2.36.28): fixed by hand for men or women, or mixed.
+    const startSex = room.gender === 'M' || room.gender === 'F' ? room.gender : 'Mixed';
+    const [sex, setSex] = useState<string>(startSex);
     const given = Object.values(beds).reduce((n, v) => n + (Number(v) || 0), 0);
     const pool = cap - given;
     const owners = Object.entries(beds).filter(([, v]) => v > 0);
@@ -2190,6 +2201,7 @@ function RoomBedsSheet({ room, locations, onClose, onSaved }: { room: Room; loca
         if (adjustNote && !await confirm(adjustNote, tx('beds.split.save', 'Guardar reparto'), false)) return;
         setBusy(true);
         try {
+            if (sex !== startSex) await conferenceApi.updateRoom(room.id, { gender: sex as Room['gender'] });
             const result = await conferenceApi.setRoomBeds(room.id, shares, release ? { release_lock: true } : undefined);
             onSaved(result);
         } catch (e: any) {
@@ -2213,6 +2225,16 @@ function RoomBedsSheet({ room, locations, onClose, onSaved }: { room: Room; loca
                     </button>
                 </div>
                 <div className="px-6 sm:px-8 py-4 overflow-y-auto space-y-2">
+                    <div className="space-y-1.5 pb-2" data-room-sex-sheet="">
+                        <label htmlFor={`room-sex-${room.id}`} className="block text-[10px] font-black text-gray-400 uppercase tracking-widest">{tx('room.sex', 'Sexo de la habitación')}</label>
+                        <Select id={`room-sex-${room.id}`} value={sex} onChange={e => setSex(e.target.value)} disabled={busy}
+                            className="w-full border-2 border-gray-100 rounded-2xl px-4 py-3 bg-gray-50/50 focus:bg-white focus:border-violet-500 transition-all outline-none font-bold text-gray-700">
+                            <option value="Mixed">{tx('room.sex.mixed', 'Mixta (como antes)')}</option>
+                            <option value="M">{tx('room.sex.men', 'Solo hombres')}</option>
+                            <option value="F">{tx('room.sex.women', 'Solo mujeres')}</option>
+                        </Select>
+                        <p className="text-[11px] text-gray-500">{tx('room.sex.hint', 'La asignación automática, el administrador y los encargados solo acomodan aquí personas de ese sexo.')}</p>
+                    </div>
                     <p className="text-[11px] text-gray-500 font-medium">{tx('beds.split.hint', 'Cada localidad llena solo sus camas con su gente; las camas del pool las usa la asignación del admin.')}</p>
                     {lockLabel && (
                         <div className="rounded-2xl border-2 border-rose-100 bg-rose-50/50 px-3 py-2.5 space-y-2" data-beds-lock="">
@@ -2294,7 +2316,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
         setHotelForm(hotel ? { name: hotel.name, address: hotel.address || '', capacity: hotel.capacity || 0, location: hotel.geo || '' } : { name: '', address: '', capacity: 0, location: '' });
         setShowHotelModal(true);
     };
-    const [roomForm, setRoomForm] = useState<Partial<Room>>({ room_number: '', capacity: 2, notes: '' });
+    const [roomForm, setRoomForm] = useState<Partial<Room>>({ room_number: '', capacity: 2, notes: '', gender: 'Mixed' });
     const [isBulk, setIsBulk] = useState(false);
     const [bulkConfig, setBulkConfig] = useState({ start: 1, end: 10, prefix: '' });
     // A room batch in flight: the submit button shows «Creando n/N» and a second tap starts nothing (one
@@ -2557,7 +2579,7 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
             }
 
             setShowRoomModal(null);
-            setRoomForm({ room_number: '', capacity: 2, notes: '' });
+            setRoomForm({ room_number: '', capacity: 2, notes: '', gender: 'Mixed' });
             setIsBulk(false);
             fetchHotels();
         } catch (error: any) {
@@ -3079,6 +3101,16 @@ function LodgingPage({ conferenceId, onOpenExplorer }: { conferenceId: number; o
                                     </div>
                                 </div>
                             )}
+                            <div className="space-y-2">
+                                <label htmlFor="room-sex-new" className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{tx('room.sex', 'Sexo de la habitación')}</label>
+                                <Select id="room-sex-new" value={roomForm.gender || 'Mixed'} onChange={e => setRoomForm({ ...roomForm, gender: e.target.value as Room['gender'] })}
+                                    className="w-full border-2 border-gray-100 rounded-2xl px-5 py-4 bg-gray-50/50 focus:bg-white focus:border-blue-500 transition-all outline-none font-bold text-gray-700" data-room-sex-input="">
+                                    <option value="Mixed">{tx('room.sex.mixed', 'Mixta (como antes)')}</option>
+                                    <option value="M">{tx('room.sex.men', 'Solo hombres')}</option>
+                                    <option value="F">{tx('room.sex.women', 'Solo mujeres')}</option>
+                                </Select>
+                                <p className="text-[11px] text-gray-500 ml-1">{tx('room.sex.hint', 'La asignación automática, el administrador y los encargados solo acomodan aquí personas de ese sexo.')}</p>
+                            </div>
                             <div className="space-y-2">
                                 <label className="block text-[10px] font-black text-gray-400 uppercase tracking-widest ml-1">{t('room.notes')}</label>
                                 <textarea
