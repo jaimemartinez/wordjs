@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.33',
+    version: '2.36.34',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -8290,8 +8290,9 @@ exports.init = async function (wordjs) {
         const shortage = demand > supply;
         const rankOfGroup = new Map(groups.map((g, i) => [g.id, i]));
 
-        const attempt = (level) => {
+        const attempt = (level, exact = false) => {
             // level: Map(group key → 0 normal | 1 its own rooms only | 2 … plus a spare bed per class | 3 … two)
+            // exact (2.36.34): THE EXACT ARRANGEMENT — see «EXACT ROOMS PER CLASS» below.
             const taken = new Set();
             const bins = [];
             const keyOfGroup = (g) => (g.id == null ? 'pool' : String(g.id));
@@ -8458,6 +8459,136 @@ exports.init = async function (wordjs) {
                     }
                 }
             }
+            else if (exact) {
+                // EXACT ROOMS PER CLASS (2.36.34; the owner: as many beds as people and two left without one, while an
+                // arrangement with everyone in a bed existed). The classes never share a room (the hard «Separar por»
+                // values: men / women; a family kept whole is a class of its own), so a bed left over in one class is lost
+                // to the others. Each class first takes the spare beds the plan already has, then a set of free rooms
+                // whose beds add up EXACTLY to its people (a subset sum over the rooms' beds — any sizes, any fields),
+                // the classes with the fewest choices first and the largest last (it takes what is left, exact when the
+                // others were). Inside a class the «Requiere acompañante» rules are honoured as it fills: a room that gets
+                // someone who needs a companion (a child) gets a companion first (an adult). What does not fit takes the
+                // usual way (fillSpare, the repairs below). One more candidate: the plan keeps it only when it is better.
+                const opens = [];
+                for (const cls of classList) {
+                    const open = fillSpare(cls.items.slice());
+                    if (open.length) opens.push({ cls, items: open, size: open.reduce((n, it) => n + it.size, 0) });
+                }
+                // A PREFERRED group gives way here (a hard one never): its people go one by one to the class of their own
+                // values (a family's men to the men, its women to the women) — when its own room would leave beds empty, or
+                // when it holds someone who needs a companion it does not bring (children with no adult among them).
+                const keyOfPeople = (people) => confHard.map(r => { const v = distinctValues(people, r.field); return v.length === 0 ? '' : v.length === 1 ? v[0].toLowerCase() : MIX; }).join('\u0001');
+                const openOf = new Map();
+                for (const o of opens) { const k = keyOfPeople(o.items.flatMap(it => it.people)); if (!k.includes(MIX) && !openOf.has(k)) openOf.set(k, o); }
+                const soft = (it) => !(it.group && it.group.rule && it.group.rule.hard);
+                const dissolve = (o, it) => {
+                    o.items = o.items.filter(x => x !== it); o.size -= it.size;
+                    for (const person of it.people) {
+                        const one = { people: [person], group: it.group, size: 1, g: it.g };
+                        const k = keyOfPeople([person]);
+                        let to = openOf.get(k);
+                        if (!to) { to = { cls: null, items: [], size: 0 }; openOf.set(k, to); opens.push(to); }
+                        to.items.push(one); to.size += 1;
+                    }
+                };
+                for (const o of opens.slice()) for (const it of o.items.slice()) {
+                    if (!soft(it) || it.size < 2) continue;
+                    const ownClass = o.items.length === 1 && keyOfPeople(it.people).includes(MIX);
+                    if (ownClass && companionUnmetOf([it]).length) dissolve(o, it);
+                }
+                // Rooms a class may take: free, and of a sex its people may have.
+                const freeRooms = () => inventory.filter(x => !taken.has(x.room.id))
+                    .sort((a, b) => (a.room.tier || 0) - (b.room.tier || 0) || a.order - b.order || a.room.id - b.room.id);
+                const roomFor = (x, items) => sexOk(x.room, items, items);
+                // Exact subset sum, fewest rooms: rooms in preference order, the first set found per sum and count.
+                const exactSet = (rooms, need) => {
+                    const best = new Array(need + 1).fill(null);
+                    best[0] = { n: 0, prev: null, i: -1 };
+                    for (let i = 0; i < rooms.length; i++) {
+                        const c = rooms[i].cap;
+                        for (let t = need; t >= c; t--) {
+                            const from = best[t - c];
+                            if (!from || from.i >= i) continue;
+                            if (!best[t] || from.n + 1 < best[t].n) best[t] = { n: from.n + 1, prev: from, i };
+                        }
+                    }
+                    if (!best[need]) return null;
+                    const out = [];
+                    for (let x = best[need]; x && x.i >= 0; x = x.prev) out.push(rooms[x.i]);
+                    return out;
+                };
+                // Few choices first: a class of its own (a family) by size, then the classes by size, largest last.
+                const ownOf = (o) => o.items.length === 1 && keyOfPeople(o.items[0].people).includes(MIX);
+                opens.sort((a, b) => Number(!ownOf(a)) - Number(!ownOf(b)) || a.size - b.size);
+                const roomsOf = new Map();
+                for (const o of opens.slice()) {
+                    if (!o.items.length) continue;
+                    const allowed = freeRooms().filter(x => roomFor(x, o.items));
+                    // A room no other class still to come may use (a room fixed for men, and this is the men's class) is
+                    // this class's first: it is taken when it fits, the exact set made with the others around it.
+                    const others = opens.filter(x => x !== o && x.items.length && !roomsOf.has(x));
+                    const mine = allowed.filter(x => !others.some(y => roomFor(x, y.items)));
+                    const must = [];
+                    let rest = o.size;
+                    for (const x of mine.sort((a, b) => b.cap - a.cap)) if (x.cap <= rest) { must.push(x); rest -= x.cap; }
+                    let set = exactSet(allowed.filter(x => !must.includes(x)), rest);
+                    if (set) set = must.concat(set);
+                    else set = exactSet(allowed, o.size);
+                    if (!set && ownOf(o) && soft(o.items[0])) { dissolve(o, o.items[0]); continue; }
+                    if (!set) {
+                        // No exact set: the fewest rooms reaching its people, the fewest beds over (pack.roomSets).
+                        const sets = pack.roomSets(allowed.map(x => x.cap), o.size, 1);
+                        set = sets.length ? sets[0].map(i => allowed[i]) : [];
+                    }
+                    for (const x of set) taken.add(x.room.id);
+                    roomsOf.set(o, set);
+                }
+                for (const x of [...roomsOf.values()].flat()) taken.delete(x.room.id);
+                for (const o of opens) {
+                    if (!roomsOf.has(o)) continue;
+                    const rooms = roomsOf.get(o).slice().sort((a, b) => b.cap - a.cap);
+                    const fresh = rooms.map(x => ({ room: x.room, cap: x.cap, hotel: x.hotel, members: [] }));
+                    let items = o.items.slice();
+                    // Companions first: each item that needs one (and does not bring it) beside a single who is one.
+                    const lonely = items.filter(it => companionUnmetOf([it]).length > 0).sort((a, b) => b.size - a.size);
+                    for (let q = 0; q < lonely.length; q++) {
+                        const it = lonely[q];
+                        if (!items.includes(it)) continue;
+                        const rules = companionUnmetOf([it]).map(x => x.rule);
+                        // A companion: any part that brings one (an adult alone, or a family part with one) and is
+                        // fine on its own; the smallest first.
+                        const isCompanion = (c) => c !== it && items.includes(c) && c.people.length > 0 && companionUnmetOf([c]).length === 0
+                            && rules.every(r => c.people.filter(o => condMatches(r.params.needs, o)).length >= (Number(r.params.min) || 1));
+                        let home = fresh.find(b => b.members.length && b.cap - used(b) >= it.size && composedOk(b.members.concat([it]))
+                            && sexOk(b.room, b.members.concat([it]), [it]) && companionUnmetOf(b.members.concat([it])).length === 0);
+                        if (!home) {
+                            let c = null, b = null;
+                            for (const cc of items.filter(isCompanion).sort((x, y) => x.size - y.size)) {
+                                b = fresh.find(x => !x.members.length && x.cap >= it.size + cc.size && composedOk([cc, it]) && sexOk(x.room, [cc, it], [cc, it]));
+                                if (b) { c = cc; break; }
+                            }
+                            if (!b) {
+                                // A preferred part (a family's boys with no man among them): its people one by one.
+                                if (it.size > 1 && soft(it)) {
+                                    const ones = it.people.map(person => ({ people: [person], group: it.group, size: 1, g: it.g }));
+                                    items = items.filter(x => x !== it).concat(ones);
+                                    for (const one of ones) if (companionUnmetOf([one]).length) lonely.push(one);
+                                }
+                                continue;
+                            }
+                            b.members.push(c); items = items.filter(x => x !== c);
+                            home = b;
+                        }
+                        home.members.push(it); items = items.filter(x => x !== it);
+                    }
+                    // The rest, largest first, each where it leaves the fewest free beds; never a child without an adult.
+                    const res = pack.packInto(items, fresh.map(b => ({ b, free: b.cap - used(b) })),
+                        (x, it, inside) => composedOk(x.b.members.concat(inside, [it])) && sexOk(x.b.room, x.b.members.concat(inside, [it]), [it]) && companionOk(x.b.members.concat(inside), it));
+                    for (const [it, x] of res.placed) x.b.members.push(it);
+                    for (const b of fresh) if (b.members.length) { bins.push(b); taken.add(b.room.id); }
+                    for (const it of res.left) it.g.unpacked.push(it);
+                }
+            }
             else for (const cls of classList) {
                 const solo = cls.items.filter(it => lvOf(it.g) >= 1);
                 const open = fillSpare(cls.items.filter(it => lvOf(it.g) < 1));
@@ -8552,6 +8683,41 @@ exports.init = async function (wordjs) {
                     }
                 }
                 for (const g of groups) if (lvOf(g) < 1 && g.unpacked.length) g.unpacked = fillSpare(g.unpacked);
+            }
+            // SOMEONE WAITS WHILE A BED IS FREE (2.36.34; the owner: as many beds as people, two left without one — and an
+            // arrangement with everyone in a bed existed): the free bed is in a room they cannot join (two boys who need a
+            // man of 20 or more; the free beds in rooms of mixed families, theirs alone). Two rooms swap their people when
+            // that moves the free bed to where the one waiting fits: a family of 4 in a room of 5 and 4 men in a room of 4
+            // trade rooms, and the bed now free beside the men takes a boy. Every hard rule is checked again in both rooms
+            // (composedOk, the rooms' sex, the companions); rooms with people already in them or reserved beds stay out.
+            {
+                const swappable = (b) => !b.partial && b.members.length > 0 && b.members.every(m => !m.spare && !m.fixed);
+                const roomOk = (room, members) => composedOk(members) && sexOk(room, members, members) && companionUnmetOf(members).length === 0;
+                // Without sharing, a room keeps one location's people.
+                const oneLoc = (members) => share || new Set(members.map(m => m.g)).size <= 1;
+                // Two rooms swapping their people so that `w` gets a bed: B's people and `w` into A's room (one with a free
+                // bed), A's people into B's room. `only`: that room as A.
+                const trySwap = (w, only) => {
+                    for (const a of only ? [only] : bins) {
+                        if (!swappable(a) || a.cap - used(a) < w.size) continue;
+                        for (const b of bins) {
+                            if (b === a || !swappable(b) || used(b) + w.size > a.cap || used(a) > b.cap) continue;
+                            const into = b.members.concat([w]);
+                            if (!oneLoc(into) || !roomOk(a.room, into) || !roomOk(b.room, a.members)) continue;
+                            const am = a.members;
+                            a.members = into; b.members = am;
+                            return true;
+                        }
+                    }
+                    return false;
+                };
+                for (const g of groups) {
+                    if (lvOf(g) >= 1 || !g.unpacked.length) continue;
+                    for (const w of g.unpacked.slice()) {
+                        if (!w.people.length) continue;
+                        if (trySwap(w)) g.unpacked.splice(g.unpacked.indexOf(w), 1);
+                    }
+                }
             }
             // A room holding only reserved spare beds is no room for anyone: left free.
             const live2 = bins.filter(b => b.members.some(m => !m.spare));
@@ -8687,6 +8853,25 @@ exports.init = async function (wordjs) {
             return splitRuns[lv];
         };
         let best = await runAttempts();
+        // THE EXACT ARRANGEMENT (2.36.34, see «EXACT ROOMS PER CLASS»): with beds enough and someone still without one,
+        // the exact attempt too — families whole, and families as their men and their women (each split level).
+        const exactRuns = [];
+        const runExact = async () => {
+            const a = attempt(new Map(), true);
+            const { done, m } = await settle(a.cand);
+            return { ...a, m, done, score: [m.hard, m.unplaced, m.rooms, m.empty_beds] };
+        };
+        if (!shortage && best.m.unplaced > 0) {
+            exactRuns.push(await runExact());
+            for (let lv = 0; lv < splitLevels.length; lv++) {
+                const splitGroups = groups.filter(g => g.split[lv]);
+                if (!splitGroups.length) continue;
+                for (const g of splitGroups) { g.classesWhole = g.classes; g.classes = g.split[lv].classes; }
+                exactRuns.push(await runExact());
+                for (const g of splitGroups) g.classes = g.classesWhole;
+            }
+            for (const e of exactRuns) if (e.score[0] <= best.score[0] && e.score[1] < best.score[1]) best = e;
+        }
         // Someone still without a bed and a preferred mixed family whose room is its own (2.21.0; the owner: «que ceda
         // si falta cama»): the attempts again with such families as their men and their women.
         for (let lv = 0; lv < splitLevels.length && best.m.unplaced > 0; lv++) {
@@ -8765,6 +8950,7 @@ exports.init = async function (wordjs) {
         const candidates = [best];
         const consider = (c) => { if (c && !candidates.includes(c)) candidates.push(c); };
         for (const s of splitRuns) if (s) consider(s.run);
+        for (const e of exactRuns) consider(e);
         const bestBy = (key) => candidates.reduce((a, b) => (lexLess(key(b), key(a)) ? b : a));
         let divideBest = null;
         if (!shortage && yieldRules.length) {

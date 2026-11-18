@@ -33,6 +33,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   asked for Localidades before). A role that reviewed lodging with Localidades alone needs Hospedaje now.
 
 ### Fixed
+- **conference-manager 2.36.34: «Sugerir reparto» finds a bed for everyone when an arrangement allows it.**
+  With as many beds as people it could leave a few without one: a family kept in a room bigger than it, a men-only
+  room left empty, children with no adult in their group. When someone is still without a bed while beds are
+  enough, the plan now also tries an exact arrangement. Each group that may not share a room (the classes of the
+  mandatory «Separar por» rules, a family kept whole) gets a set of rooms whose beds add up exactly to its people,
+  rooms only it may use first. A preferred family gives way when its own room would leave beds empty or it has
+  children without an adult. Inside a group, each child goes beside an adult. Rooms can also trade their people
+  when that brings a free bed to someone waiting. The plan keeps whichever arrangement is better, as before.
 - **conference-manager 2.36.33: «Sugerir reparto» no longer leaves a child without the adult a mandatory
   «Requiere acompañante» rule asks for.** Short of beds, it could put a child with teenagers only, so the
   suggestion broke the rule and could not be applied. After filling the rooms it now brings a waiting adult

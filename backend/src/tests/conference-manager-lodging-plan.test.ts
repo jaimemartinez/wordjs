@@ -1706,3 +1706,65 @@ test('short of beds: the plan never leaves a child without the adult a hard «Re
         ok(await w.p.call('post', '/assignment/reset', { body: { conference_id: w.cid } }), 'reset');
     }
 });
+
+// 2.36.34, the owner: as many beds as people, two left without one — «¿estamos seguros que no hay ningún arreglo con mis
+// reglas donde todos tengan camas?». There was one. Conferences BUILT around an arrangement with everyone in a bed (each
+// room: a mixed family, or one gender with an adult first), under «Familias juntas» (preferred), «Separar por género» and
+// «Menores con adulto» (hard), sometimes a men-only room: the plan must find a bed for everyone. These seeds are the cases
+// 2.36.33 missed (it left 1 to 3 out); the exact arrangement (each class the rooms that add up to its people) finds them.
+const builtFull = async (seed0: number) => {
+    let seed = seed0;
+    const rnd = () => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed / 2147483648; };
+    const pick = <X>(a: X[]) => a[Math.floor(rnd() * a.length)];
+    const p = await bootPlugin();
+    const cid = ok(await p.call('post', '/create', { body: { name: 'C', slug: `full-${seed0}-${++seq}` } })).id as number;
+    for (const template of ['first_name', 'gender', 'family_group']) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }));
+    ok(await p.call('post', '/fields', { body: { conference_id: cid, label: 'Edad', name: 'age', type: 'number' } }));
+    ok(await p.call('post', '/publish', { body: { conference_id: cid, published: true } }));
+    const [M, F] = (p.one(`SELECT options FROM ${T('fields')} WHERE conference_id = ? AND name = 'gender'`, cid).options as string).split(',').map(x => x.trim());
+    ok(await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Familias juntas', type: 'keep_together', config: 'family_group', hard: 0, priority: 50, params: { min_size: 2 } } }));
+    ok(await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Separar por género', type: 'separate_by', config: 'gender', hard: 1, priority: 20 } }));
+    ok(await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Menores con adulto', type: 'require_companion', hard: 1, priority: 10,
+        params: { subject: [{ field: 'age', op: 'lt', value: '12' }], needs: [{ field: 'age', op: 'gte', value: '20' }], min: 1 } } }));
+    const hotel = ok(await p.call('post', '/hotels', { body: { conference_id: cid, name: 'H' } })).id as number;
+    let n = 0;
+    const person = async (gender: string, age: number, family_group = '') => { n++; ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name: `P${n}`, gender, age, family_group } })); };
+    const rooms: number[] = [];
+    const nRooms = 4 + Math.floor(rnd() * 6);
+    for (let r = 0; r < nRooms; r++) {
+        const cap = pick([2, 3, 4, 5]);
+        if (rnd() < 0.3) {
+            const fam = `Fam${r}`;
+            await person(M, 30 + Math.floor(rnd() * 40), fam); await person(F, 30 + Math.floor(rnd() * 40), fam);
+            for (let i = 2; i < cap; i++) await person(pick([M, F]), Math.floor(rnd() * 25), fam);
+        } else {
+            const g = pick([M, F]);
+            await person(g, 20 + Math.floor(rnd() * 50));
+            for (let i = 1; i < cap; i++) await person(g, Math.floor(rnd() * 30));
+        }
+        rooms.push(cap);
+    }
+    if (rnd() < 0.5) rooms.push(pick([2, 3]));
+    for (let r = 0; r < rooms.length; r++) ok(await p.call('post', '/rooms', { body: { hotel_id: hotel, room_number: `R${r}`, capacity: rooms[r], ...(r === nRooms ? { gender: 'M' } : {}) } }));
+    if (rooms.length > nRooms) for (let i = 0; i < rooms[nRooms]; i++) await person(M, i === 0 ? 40 : 15);
+    return { p, cid, M, people: n, beds: rooms.reduce((a, b) => a + b, 0) };
+};
+test('as many beds as people and an arrangement with everyone in a bed: «Sugerir reparto» finds it (exact rooms per class)', async () => {
+    for (const seed0 of [2037986560, 1186309632, 1831759680, 1252389184, 1552147456]) {
+        const { p, cid, M, people, beds } = await builtFull(seed0);
+        assert.strictEqual(people, beds, `seed ${seed0}: built with as many beds as people`);
+        for (const fresh of [false, true]) {
+            const plan = ok(await p.call('post', '/assignment/plan', { body: { conference_id: cid, replan: true, share: true, fresh } }), 'plan').plan;
+            assert.deepStrictEqual([plan.after.hard, plan.after.unplaced], [0, 0], `seed ${seed0} fresh=${fresh}: ${JSON.stringify(plan.after)}`);
+        }
+        const plan = ok(await p.call('post', '/assignment/plan', { body: { conference_id: cid, replan: true, share: true } }), 'plan').plan;
+        ok(await p.call('post', '/assignment/plan/apply', { body: { conference_id: cid, token: plan.token, replan: true, share: true } }), 'apply');
+        assert.strictEqual(p.one(`SELECT count(*) AS n FROM ${T('inscriptions')} WHERE room_id IS NULL`).n, 0, `seed ${seed0}: everyone in a bed`);
+        for (const r of p.q(`SELECT id, gender FROM ${T('rooms')}`) as any[]) {
+            const occ = p.q(`SELECT gender, age, family_group FROM ${T('inscriptions')} WHERE room_id = ?`, r.id) as any[];
+            if (new Set(occ.map(o => o.gender)).size > 1) assert.strictEqual(new Set(occ.map(o => o.family_group)).size, 1, `seed ${seed0}: a mixed room is one family's`);
+            if (occ.some(o => Number(o.age) < 12)) assert.ok(occ.some(o => Number(o.age) >= 20), `seed ${seed0}: a child beside an adult`);
+            if (r.gender === 'M') assert.ok(occ.every(o => o.gender === M), `seed ${seed0}: the men-only room`);
+        }
+    }
+});
