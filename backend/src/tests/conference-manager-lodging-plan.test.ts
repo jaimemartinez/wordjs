@@ -1688,3 +1688,21 @@ test('2.36.6 «Retirar inscripción»: a coordinator withdraws their own people 
     assert.deepStrictEqual(log.map(x => [x.kind, x.reason]), [['withdraw', 'Se enfermó'], ['restore', null]]);
     assert.strictEqual(log[0].actor, `portal:${norte}`);
 });
+
+// 2.36.33, seen in production: «Sugerir reparto» (short of beds, «Rehacer todo») put a 9-year-old with a 13-year-old and
+// a 10-year-old with two teenagers — a hard «habitación con menores» broken, so the suggestion could not be applied.
+test('short of beds: the plan never leaves a child without the adult a hard «Requiere acompañante» asks for', async () => {
+    const w = await world([['A2', 2], ['B2', 2], ['C3', 3], ['D2', 2]]);
+    await w.hardGender();
+    await kidRule(w, 1);
+    for (const n of ['Teen1', 'Kid1', 'Teen2', 'Teen3', 'Kid2', 'Teen4', 'Adult1', 'Teen5', 'Teen6', 'Teen7', 'Teen8', 'Kid3']) await w.person(n, w.M);
+    for (const fresh of [false, true]) {
+        const plan = await w.plan({ fresh, replan: true, share: true });
+        assert.strictEqual(plan.after.hard, 0, `fresh=${fresh}: ${JSON.stringify(plan.after)}`);
+        ok(await w.p.call('post', '/assignment/plan/apply', { body: { conference_id: w.cid, token: plan.token, fresh, replan: true, share: true } }), 'apply');
+        const kids = w.p.q(`SELECT room_id FROM ${T('inscriptions')} WHERE first_name LIKE 'Kid%' AND room_id IS NOT NULL`) as any[];
+        for (const k of kids) assert.ok((w.p.q(`SELECT first_name FROM ${T('inscriptions')} WHERE room_id = ?`, k.room_id) as any[]).some(x => x.first_name.startsWith('Adult')), `fresh=${fresh}: a child without an adult`);
+        assert.strictEqual(kids.length, 1, 'one adult: one child has a bed, beside him');
+        ok(await w.p.call('post', '/assignment/reset', { body: { conference_id: w.cid } }), 'reset');
+    }
+});
