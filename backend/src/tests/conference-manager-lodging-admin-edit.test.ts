@@ -548,13 +548,15 @@ test('deleting a POOL room, or a hotel of pool rooms, that holds a reviewed loca
     const p1 = ok(await p.call('post', '/rooms', { body: { hotel_id: hostal, room_number: 'P1', capacity: 2 } })).id as number;
     const p2 = ok(await p.call('post', '/rooms', { body: { hotel_id: hostal, room_number: 'P2', capacity: 2 } })).id as number;
     // While Norte is a draft the admin puts dan in the pool room 201 and eve in the pool room P1 (Hostal Pool),
-    // and Sur's carl in P2: all three are `placed_elsewhere` of their location's arrangement.
+    // and Sur's carl in P2. 2.36.36: a pool bed the admin fills becomes the bed of the person's locality (its coordinator
+    // may move them unless the admin fixes them) — Norte now has a bed in 201 and in P1, so nobody of Norte is
+    // `placed_elsewhere`; the rooms still hold Norte's attendees.
     ok(await p.call('post', `/inscriptions/${w.dan}/assign`, { body: { room_id: w.r201 } }));
     ok(await p.call('post', `/inscriptions/${w.eve}/assign`, { body: { room_id: p1 } }));
     ok(await p.call('post', `/inscriptions/${w.carl}/assign`, { body: { room_id: p2 } }));
     await w.submit();
     await w.validate();
-    assert.strictEqual(ok(await portal(p, 'get', '/portal/lodging', w.token)).placed_elsewhere.length, 2);
+    assert.strictEqual(ok(await portal(p, 'get', '/portal/lodging', w.token)).placed_elsewhere.length, 0);
 
     // DELETE /rooms of a pool room with one of Norte's attendees inside: Norte's arrangement changed.
     const room = ok(await p.call('delete', `/rooms/${w.r201}`));

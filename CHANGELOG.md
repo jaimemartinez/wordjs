@@ -21,6 +21,14 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   shows the choice.
 
 ### Changed
+- **conference-manager 2.36.36: «Alojados por el administrador» is only for someone the administration fixed.**
+  The automatic assignment (alone or after applying «Sugerir reparto») and the administrator's manual placement
+  could put a locality's person on a free pool bed, a bed the locality did not have. The portal then listed them as
+  placed by the administrator, and the coordinator could not move them. Now that bed becomes the locality's, as
+  «Dar camas» does, for a draft locality (for the run alone or a manual placement, one that already has rooms of its own). Its coordinator can
+  move the person unless the administration fixes them in the room. Applying «Sugerir reparto» with «Rehacer todo»
+  also gives the localities the pool beds their people already sleep in, except people fixed by the administration.
+  A locality without rooms of its own is still left to the administration.
 - **conference-manager 2.36.32: a family divided by the rules stays in one hotel when it can.**
   When a preferred «Mantener juntos» rule gives way (for example to «Separar por» gender), the automatic
   assignment and «Sugerir reparto» now place the family's rooms in the same hotel when beds there allow it,

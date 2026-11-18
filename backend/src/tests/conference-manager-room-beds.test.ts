@@ -118,7 +118,7 @@ test('PUT /rooms/:id/beds splits a room between locations; every bed to one loca
     assert.deepStrictEqual(w.shares(w.a3), [], 'no refused split wrote anything');
 });
 
-test('a person takes one of their location\'s beds first, then a pool bed; the admin\'s manual assign holds to it', async () => {
+test('a person takes one of their location\'s beds first, then a pool bed — which becomes their location\'s; the admin\'s manual assign holds to it', async () => {
     const w = await world();
     const { p } = w;
     ok(await p.call('put', `/rooms/${w.a3}/beds`, { body: { shares: [{ location_id: w.norte, beds: 2 }, { location_id: w.sur, beds: 1 }] } }));
@@ -128,8 +128,8 @@ test('a person takes one of their location\'s beds first, then a pool bed; the a
 
     ok(await w.assign(n1, w.a3), 'N1 — Norte bed');
     ok(await w.assign(n2, w.a3), 'N2 — Norte bed');
-    ok(await w.assign(n3, w.a3), 'N3 — the pool bed (overflow)');
-    // Norte's 2 beds and the pool bed are taken: N4 and O1 have nowhere; Sur's bed is Sur's.
+    ok(await w.assign(n3, w.a3), 'N3 — the pool bed (overflow), now one of Norte\'s (2.36.36)');
+    // Norte's 3 beds are taken and no pool bed is left: N4 and O1 have nowhere; Sur's bed is Sur's.
     const n4r = await w.assign(n4, w.a3);
     assert.strictEqual(n4r.status, 400, JSON.stringify(n4r.body));
     assert.match(n4r.body.error, /camas de su localidad/);
@@ -141,13 +141,13 @@ test('a person takes one of their location\'s beds first, then a pool bed; the a
     assert.deepStrictEqual([n1, n2, n3, s1].map(w.roomOf), [w.a3, w.a3, w.a3, w.a3]);
 
     const listed = await w.hotelRoom(w.a3);
-    assert.deepStrictEqual(listed.shares.map((s: any) => [s.location_name, s.occupied]), [['Norte', 2], ['Sur', 1]]);
-    assert.strictEqual(listed.pool_occupied, 1);
+    assert.deepStrictEqual(listed.shares.map((s: any) => [s.location_name, s.beds, s.occupied]), [['Norte', 3, 3], ['Sur', 1, 1]]);
+    assert.strictEqual(listed.pool_occupied, 0);
 
-    // The split must keep fitting its occupants: giving the pool bed to Sur leaves N3 without a bed.
+    // The split must keep fitting its occupants: giving N3's bed to Sur leaves N3 without a bed.
     const squeeze = await p.call('put', `/rooms/${w.a3}/beds`, { body: { shares: [{ location_id: w.norte, beds: 2 }, { location_id: w.sur, beds: 2 }] } });
     assert.strictEqual(squeeze.status, 409, JSON.stringify(squeeze.body));
-    ok(await p.call('put', `/rooms/${w.a3}/beds`, { body: { shares: [{ location_id: w.norte, beds: 3 }, { location_id: w.sur, beds: 1 }] } }), 'N3 now in a Norte bed');
+    ok(await p.call('put', `/rooms/${w.a3}/beds`, { body: { shares: [{ location_id: w.norte, beds: 3 }, { location_id: w.sur, beds: 1 }] } }), 'the split as it is');
     // Whole to Norte is refused while Sur sleeps there; capacity never drops below the beds given.
     assert.strictEqual((await p.call('put', `/rooms/${w.a3}/beds`, { body: { shares: [{ location_id: w.norte, beds: 4 }] } })).status, 409);
     const shrink = await p.call('put', `/rooms/${w.a3}`, { body: { capacity: 3 } });
@@ -307,25 +307,27 @@ test('«Dar camas» turns the location\'s people already on pool beds into its s
     assert.deepStrictEqual(w.shares(w.a3), []);
 });
 
-test('the coordinator neither empties nor moves the people the administration put on pool beds of a shared room', async () => {
+// 2.36.36, the owner: «alojados por el administrador» only for someone the admin FIXES in a room — «sí puede moverla a
+// menos de que yo la fije». A pool bed the admin fills by hand becomes a bed of the person's locality.
+test('a pool bed the admin fills becomes the locality\'s: its coordinator moves that person — unless the admin fixes them', async () => {
     const w = await world();
     const { p } = w;
     ok(await p.call('post', `/hotels/${w.hotel}/allot`, { body: { location_id: w.norte, room_ids: [w.a1] } }));
     ok(await p.call('put', `/rooms/${w.a3}/beds`, { body: { shares: [{ location_id: w.norte, beds: 1 }] } }));
     const n1 = await w.person('N1', w.norte), n2 = await w.person('N2', w.norte), n3 = await w.person('N3', w.norte);
-    ok(await w.assign(n1, w.a3)); ok(await w.assign(n2, w.a3));   // N2 on a pool bed — the admin's call
+    ok(await w.assign(n1, w.a3)); ok(await w.assign(n2, w.a3));   // N2 on a pool bed: now Norte's second bed in A3
     ok(await w.assign(n3, w.a1));
+    assert.deepStrictEqual((await w.hotelRoom(w.a3)).shares.map((s: any) => [s.location_name, s.beds]), [['Norte', 2]]);
     const tn = await w.tokenOf(w.norte);
-    for (const [body, what] of [[{ inscription_id: n2, room_id: null }, 'unassign'], [{ inscription_id: n1, room_id: w.a1 }, 'move out']] as const) {
-        const r = await portal(p, 'post', '/portal/lodging/assign', tn, body);
-        assert.strictEqual(r.status, 409, `${what}: ${JSON.stringify(r.body)}`);
-        assert.match(r.body.error, /camas del pool/);
-    }
+    assert.deepStrictEqual(ok(await portal(p, 'get', '/portal/lodging', tn)).placed_elsewhere, [], 'nobody listed as the admin\'s');
+    ok(await portal(p, 'post', '/portal/lodging/assign', tn, { inscription_id: n2, room_id: null }), 'the coordinator takes N2 out');
+    ok(await portal(p, 'post', '/portal/lodging/assign', tn, { inscription_id: n2, room_id: w.a3 }), 'and back');
+    // Fixed by the admin: the coordinator can neither move nor empty them.
+    ok(await p.call('put', `/inscriptions/${n2}/pin`, { body: { pinned: true } }), 'fix N2');
+    const r = await portal(p, 'post', '/portal/lodging/assign', tn, { inscription_id: n2, room_id: null });
+    assert.strictEqual(r.status, 409, JSON.stringify(r.body));
     ok(await portal(p, 'post', '/portal/lodging/reset', tn), 'reset');
-    assert.deepStrictEqual([n1, n2, n3].map(w.roomOf), [w.a3, w.a3, null], 'reset keeps the admin\'s pool placements, empties the rest');
-    // Once the admin takes N2 off the pool bed, the coordinator manages A3 again.
-    ok(await w.assign(n2, null));
-    ok(await portal(p, 'post', '/portal/lodging/assign', tn, { inscription_id: n1, room_id: null }), 'unassign within its beds');
+    assert.deepStrictEqual([n1, n2, n3].map(w.roomOf), [null, w.a3, null], 'the reset empties all but the person the admin fixed');
 });
 
 test('the coordinator sees only its own beds and people of a shared room, fills only its beds, and resets only its people', async () => {
@@ -687,4 +689,30 @@ test('a family the rules divide by gender stays in one hotel when it can, even w
             `${JSON.stringify(opts)}: the plan keeps the family in one hotel`);
     }
     void a2; void a3; void b2;
+});
+
+// 2.36.36: the automatic assignment puts whoever does not fit its locality's rooms on a free pool bed — that bed was never
+// the locality's, so its portal listed the person as «alojados por el administrador» and its coordinator could not move
+// them. Now the bed follows the person: a locality that arranges its own lodging gets it.
+test('the automatic assignment: a pool bed it gives to someone of a locality with rooms of its own becomes that locality\'s', async () => {
+    const w = await world();
+    const { p } = w;
+    ok(await p.call('post', `/hotels/${w.hotel}/allot`, { body: { location_id: w.norte, room_ids: [w.a1] } }));
+    const ids: number[] = [];
+    for (const n of ['N1', 'N2', 'N3', 'N4', 'N5']) ids.push(await w.person(n, w.norte));
+    const s1 = await w.person('S1', w.sur);      // Sur has no rooms of its own: its person stays on a pool bed
+    ok(await p.call('post', '/assignment/run', { body: { conference_id: w.cid } }), 'run');
+    assert.ok(ids.every(id => w.roomOf(id) != null), 'everyone of Norte in a bed');
+    const tn = await w.tokenOf(w.norte);
+    const view = ok(await portal(p, 'get', '/portal/lodging', tn));
+    assert.deepStrictEqual(view.placed_elsewhere, [], 'nobody of Norte listed as the admin\'s');
+    const inPool = ids.filter(id => w.roomOf(id) !== w.a1);
+    assert.strictEqual(inPool.length, 3, 'three of Norte beyond A1');
+    for (const rid of new Set(inPool.map(w.roomOf))) {
+        const mine = inPool.filter(id => w.roomOf(id) === rid).length;
+        assert.deepStrictEqual(w.shares(rid as number).filter(x => x.location_id === w.norte).map(x => x.beds), [mine], `Norte's beds in room ${rid}`);
+    }
+    // The coordinator moves them; Sur (no rooms of its own) is left to the administration.
+    ok(await portal(p, 'post', '/portal/lodging/assign', tn, { inscription_id: inPool[0], room_id: null }), 'the coordinator moves one');
+    assert.ok(w.roomOf(s1) != null && w.shares(w.roomOf(s1) as number).every(x => x.location_id !== w.sur), 'Sur gets no beds');
 });
