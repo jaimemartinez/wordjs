@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.35',
+    version: '2.36.36',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -6158,6 +6158,9 @@ exports.init = async function (wordjs) {
                 // Plain UPDATE on purpose: the capacity check above runs under the assignment lock, and an
                 // UPDATE whose subquery reads the table being updated is refused by MySQL (error 1093).
                 await db.run(`UPDATE ${T.inscriptions} SET room_id = ?, room_locked = NULL WHERE id = ?`, [roomId, id]);
+                // A pool bed becomes the person's locality's (2.36.36, see allotRunBeds; the owner: «sí puede moverla a
+                // menos de que yo la fije»): its coordinator may move them unless the administration fixes them there.
+                if (room.location_id == null && cur.location_id != null) await allotRunBeds(Number(person.conference_id), null, { only: id });
                 return stampAdminAdjustment(req, [cur.location_id]);
             });
             res.json({ success: true, lodging_adjusted: adjusted });
@@ -6809,7 +6812,13 @@ exports.init = async function (wordjs) {
         if (!conference_id) return res.status(400).json({ error: 'Missing conference_id' });
         try {
             // Mutex: two concurrent runs (or a run racing a manual assign/reset) would double-book.
-            const result = await withAssignmentLock(() => runAssignment(conference_id));
+            const result = await withAssignmentLock(async () => {
+                const before = new Map((await db.all(`SELECT id, room_id FROM ${T.inscriptions} WHERE conference_id = ?`, [conference_id])).map(r => [Number(r.id), r.room_id == null ? null : Number(r.room_id)]));
+                const out = await runAssignment(conference_id);
+                // The beds follow the people (2.36.36, see allotRunBeds).
+                await allotRunBeds(Number(conference_id), before);
+                return out;
+            });
             res.json({ success: true, ...result });
         } catch (e) { sendError(res, e); }
     });
@@ -6872,11 +6881,14 @@ exports.init = async function (wordjs) {
                 if (plan.token !== token) return { stale: true, plan };
                 // Never what would leave the people worse off than today (more hard rules broken, more without a bed).
                 if (plan.worse) return { worse: true, plan };
+                // Who had which bed before (see allotRunBeds below).
+                const before = new Map((await db.all(`SELECT id, room_id FROM ${T.inscriptions} WHERE conference_id = ?`, [cid])).map(r => [Number(r.id), r.room_id == null ? null : Number(r.room_id)]));
                 // «Rehacer todo»: the people the plan moves leave their beds first (only those still in them).
                 if (plan.moved_ids.length) await runBatched(plan.moved_ids.map(x => [`UPDATE ${T.inscriptions} SET room_id = NULL, room_locked = NULL WHERE id = ? AND room_id = ?`, [x.inscription_id, x.room_id]]));
                 await applyPlanChanges(plan.changes, plan.placements);
                 // Then the automatic assignment for whoever is still without a bed — the arrangement the plan measured.
                 const run = await runAssignment(cid);
+                await allotRunBeds(cid, before, { all: !!plan.options.fresh, arranged: true });
                 return { plan, run };
             });
             if (out.worse) return res.status(409).json({ error: 'Esta sugerencia dejaría a las personas peor que el reparto actual; no se aplica.', code: 'plan_worse', plan: out.plan });
@@ -9296,6 +9308,58 @@ exports.init = async function (wordjs) {
     }
     // Write a plan (callers hold withAssignmentLock and re-planned under it): the allotments, then the people —
     // only those still without a bed.
+    // THE BEDS FOLLOW THE PEOPLE (2.36.36; the owner: «¿por qué sale "alojados por el administrador" en algunas
+    // localidades cuando es tiempo de que ellos muevan las acomodaciones sugeridas?»). Applying a suggestion ends with
+    // the automatic assignment for whoever still waits, and it puts them in free POOL beds — a shared room's beds no
+    // locality has, or a room of nobody's. Their locality never got those beds, so its portal listed them as placed by
+    // the administrator and its coordinator could not move them. Now each such bed goes to the locality of whoever this
+    // apply put in it (its share in that room, as «Dar camas» does): only for people this apply placed (`before`: their
+    // beds before it) — someone the administration put in a pool bed by hand stays as it is — and only for a locality
+    // still in draft. A whole room of another locality is never touched. With «Rehacer todo» (`all`: think it over as if
+    // nobody had a bed) every draft locality's person in a pool bed counts, but one the administration fixed in the room.
+    // The owner's rule: «alojados por el administrador» is for someone the administration FIXED in a room
+    // («¿eso solo debería salir si lo marco como fijo en una habitación, no?»). So the same holds after the automatic
+    // assignment and after the administrator places someone by hand (`only`: that person) — for a locality that already
+    // arranges its own lodging (it has rooms or beds of its own); one that does not is left to the administration.
+    // `arranged`: applying «Sugerir reparto», which arranges every draft locality — each one counts, rooms of its own or not.
+    async function allotRunBeds(cid, before, { all = false, only = null, arranged = false } = {}) {
+        const rows = await db.all(
+            `SELECT i.id, i.location_id, i.room_id, i.room_locked, r.location_id AS room_location_id
+             FROM ${T.inscriptions} i JOIN ${T.rooms} r ON r.id = i.room_id JOIN ${T.hotels} h ON h.id = r.hotel_id
+             JOIN ${T.locations} l ON l.id = i.location_id
+             WHERE h.conference_id = ? AND i.conference_id = ? AND i.location_id IS NOT NULL AND (i.status IS NULL OR i.status != 'cancelled')`, [cid, cid]);
+        const delegatedIds = new Set((await delegatedLocations(cid)).map(l => Number(l.id)));
+        const draft = new Set((await db.all(`SELECT id, lodging_status FROM ${T.locations} WHERE conference_id = ?`, [cid]))
+            .filter(l => !isFrozen(l) && (arranged || delegatedIds.has(Number(l.id)))).map(l => Number(l.id)));
+        // Per pool or shared room: the people of each draft locality in it, and whether this apply placed one of them.
+        const rooms = new Map();
+        for (const r of rows) {
+            if (r.room_location_id != null) continue;
+            const lid = Number(r.location_id), rid = Number(r.room_id);
+            if (!draft.has(lid)) continue;
+            if (!rooms.has(rid)) rooms.set(rid, new Map());
+            const by = rooms.get(rid);
+            if (!by.has(lid)) by.set(lid, { n: 0, placedNow: false });
+            const x = by.get(lid);
+            x.n++;
+            if (only != null ? Number(r.id) === Number(only) : (before.get(Number(r.id)) !== rid || (all && !isPinned(r)))) x.placedNow = true;
+        }
+        if (!rooms.size) return 0;
+        const shares = await db.all(`SELECT room_id, location_id, beds FROM ${T.roomBeds} WHERE room_id IN (${[...rooms.keys()].map(() => '?').join(',')})`, [...rooms.keys()]);
+        const shareOf = new Map(shares.map(b => [`${Number(b.room_id)}|${Number(b.location_id)}`, Number(b.beds) || 0]));
+        const writes = [];
+        for (const [rid, by] of rooms) for (const [lid, x] of by) {
+            if (!x.placedNow) continue;
+            const k = `${rid}|${lid}`;
+            const has = shareOf.has(k) ? shareOf.get(k) : null;
+            if (has != null && has >= x.n) continue;
+            writes.push(has == null
+                ? [`INSERT INTO ${T.roomBeds} (room_id, location_id, beds, allot_source) VALUES (?, ?, ?, 'plan')`, [rid, lid, x.n]]
+                : [`UPDATE ${T.roomBeds} SET beds = ? WHERE room_id = ? AND location_id = ?`, [x.n, rid, lid]]);
+        }
+        if (writes.length) await runBatched(writes);
+        return writes.length;
+    }
     async function applyPlanChanges(changes, placements = []) {
         const writes = [];
         for (const c of changes) {
