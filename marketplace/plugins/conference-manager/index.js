@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.32',
+    version: '2.36.33',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -8312,6 +8312,26 @@ exports.init = async function (wordjs) {
             // The room's sex (2.36.28, see roomTakes): who joins, beside everyone already planned or sleeping there.
             const sexOk = (room, members, joining) => roomTakes(room, joining.flatMap(m => m.people), members.flatMap(m => m.people),
                 [...new Set(members.flatMap(m => (m.g && m.g.ctx && m.g.ctx.keepRules) || []))]);
+            // HARD «Requiere acompañante» (2.36.33): the rules of `members`' groups a room of them breaks — someone the rule
+            // is about (a child) without the companions it needs (an adult). The plan places by arithmetic, so it checks
+            // this itself (the run compares its strategies and keeps one that breaks no hard rule).
+            const companionUnmetOf = (members) => {
+                const people = members.filter(m => !m.spare).flatMap(m => m.people);
+                const out = [];
+                for (const g of [...new Set(members.map(m => m.g))]) {
+                    if (!g || !g.ctx) continue;
+                    for (const rule of g.ctx.companionRules) {
+                        if (!rule.hard || out.some(x => x.rule === rule)) continue;
+                        const view = g.ctx.viewFor(rule, people);
+                        if (!view.some(o => condMatches(rule.params.subject, o))) continue;
+                        if (view.filter(o => condMatches(rule.params.needs, o)).length < (Number(rule.params.min) || 1)) out.push({ g, rule });
+                    }
+                }
+                return out;
+            };
+            // Joining never leaves a child of `it` without the companions the rule asks for.
+            const companionOk = (members, it) => !it.people.length || companionUnmetOf(members.concat([it])).length === 0
+                || !companionUnmetOf(members.concat([it])).some(({ rule }) => it.people.some(o => condMatches(rule.params.subject, o)));
             // Free rooms for `g`, best first: rooms it had, then rooms in a hotel it already uses, then hotel order.
             const freeFor = (g) => {
                 const hotels = new Set(bins.filter(b => b.members.some(m => m.g === g)).map(b => b.hotel));
@@ -8380,7 +8400,7 @@ exports.init = async function (wordjs) {
                     }
                 }
                 const res = pack.packInto(items, cands.map(b => ({ b, free: spareOf(b) })),
-                    (x, it, inside) => mixOk(x.b, it, inside) && lockOk(x.b, it) && composedOk(x.b.members.concat(inside, [it])) && sexOk(x.b.room, x.b.members.concat(inside, [it]), [it]),
+                    (x, it, inside) => mixOk(x.b, it, inside) && lockOk(x.b, it) && composedOk(x.b.members.concat(inside, [it])) && sexOk(x.b.room, x.b.members.concat(inside, [it]), [it]) && companionOk(x.b.members.concat(inside), it),
                     (x, it) => (x.b.members.some(m => m.g === it.g) ? 0 : 1));
                 for (const [it, x] of res.placed) x.b.members.push(it);
                 return res.left;
@@ -8492,6 +8512,47 @@ exports.init = async function (wordjs) {
             }
             // Whatever is still out: the spare beds left anywhere (a class the rules allow there).
             for (const g of groups) if (lvOf(g) < 1 && g.unpacked.length) g.unpacked = fillSpare(g.unpacked);
+            // A room where a child has no adult (a HARD «Requiere acompañante», 2.36.33; the owner's «habitación con
+            // menores»: under 12 needs someone of 20 or more): a waiting adult takes a free bed there; or takes the bed
+            // of someone who is neither (a teenager), who waits instead; or, when nobody can, the child waits — never a
+            // room that breaks a hard rule. The beds freed go to whoever waits (fillSpare below, which never puts a
+            // child where no adult is).
+            {
+                const waiting = () => groups.flatMap(g => (g.unpacked || []).map(it => ({ it, g })));
+                const unwait = (w) => { const k = w.g.unpacked.indexOf(w.it); if (k >= 0) w.g.unpacked.splice(k, 1); };
+                const takes = (b, members, it) => composedOk(members.concat([it])) && sexOk(b.room, members.concat([it]), [it]) && lockOk(b, it)
+                    && (b.partial ? it.g.id == null || share : share || members.every(m => m.spare || m.g === it.g));
+                for (const b of bins.concat(partialBins)) {
+                    for (let guard = 0; guard < 8; guard++) {
+                        const un = companionUnmetOf(b.members);
+                        if (!un.length) break;
+                        const { g, rule } = un[0];
+                        const adult = (it) => it.size === 1 && it.people.length === 1 && condMatches(rule.params.needs, it.people[0])
+                            && !condMatches(rule.params.subject, it.people[0]) && g.ctx.viewFor(rule, it.people).length > 0;
+                        let done = false;
+                        if (spareOf(b) >= 1) {
+                            const w = waiting().find(x => adult(x.it) && takes(b, b.members, x.it));
+                            if (w) { b.members.push(w.it); unwait(w); done = true; }
+                        }
+                        if (!done) for (const m of b.members) {
+                            if (m.fixed || m.spare || m.size !== 1 || m.people.length !== 1) continue;
+                            const q = m.people[0];
+                            if (condMatches(rule.params.subject, q) || condMatches(rule.params.needs, q)) continue;
+                            const rest = b.members.filter(x => x !== m);
+                            const w = waiting().find(x => adult(x.it) && takes(b, rest, x.it));
+                            if (!w) continue;
+                            b.members = rest.concat([w.it]); unwait(w); m.g.unpacked.push(m); done = true;
+                            break;
+                        }
+                        if (done) continue;
+                        const kids = b.members.filter(m => !m.fixed && !m.spare && m.people.some(q => condMatches(rule.params.subject, q)) && g.ctx.viewFor(rule, m.people).length > 0);
+                        if (!kids.length) break;
+                        b.members = b.members.filter(m => !kids.includes(m));
+                        for (const m of kids) m.g.unpacked.push(m);
+                    }
+                }
+                for (const g of groups) if (lvOf(g) < 1 && g.unpacked.length) g.unpacked = fillSpare(g.unpacked);
+            }
             // A room holding only reserved spare beds is no room for anyone: left free.
             const live2 = bins.filter(b => b.members.some(m => !m.spare));
             for (const b of bins) if (!live2.includes(b)) taken.delete(b.room.id);

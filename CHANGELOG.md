@@ -33,6 +33,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   asked for Localidades before). A role that reviewed lodging with Localidades alone needs Hospedaje now.
 
 ### Fixed
+- **conference-manager 2.36.33: «Sugerir reparto» no longer leaves a child without the adult a mandatory
+  «Requiere acompañante» rule asks for.** Short of beds, it could put a child with teenagers only, so the
+  suggestion broke the rule and could not be applied. After filling the rooms it now brings a waiting adult
+  into such a room, or gives a teenager's bed to one, or, when nobody can, leaves the child waiting. Free beds
+  are never given to a child where no adult is.
 - **conference-manager 2.36.32: opening a hotel or a room in «Asignación» no longer hides the top of the screen.**
   The explorer brought the room into view with `scrollIntoView`, which also scrolled the admin frame (a box
   that cannot be scrolled by hand): the title and the section picker slid out of sight, with a blank band
