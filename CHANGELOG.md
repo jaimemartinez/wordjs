@@ -33,6 +33,12 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   asked for Localidades before). A role that reviewed lodging with Localidades alone needs Hospedaje now.
 
 ### Fixed
+- **conference-manager 2.36.35: «Sugerir reparto» keeps each locality together again.** The exact arrangement of
+  2.36.34 gave everyone a bed but filled each group's rooms without looking at the locality, so a locality could
+  end up with one bed in many rooms. Inside each group, each locality now takes the rooms it fills on its own first.
+  Only what is left shares a room, beside its own locality where it can, and a child's companion comes from its
+  own locality first. When two suggestions bed the same people, the plan prefers the one that mixes fewer
+  localities, even if it divides a few more preferred families (the owner's choice).
 - **conference-manager 2.36.34: «Sugerir reparto» finds a bed for everyone when an arrangement allows it.**
   With as many beds as people it could leave a few without one: a family kept in a room bigger than it, a men-only
   room left empty, children with no adult in their group. When someone is still without a bed while beds are
