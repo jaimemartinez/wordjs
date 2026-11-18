@@ -678,3 +678,24 @@ describe('translations', () => {
         for (const m of read('admin/LodgingAdjust.tsx').matchAll(/\btx\(\s*'([^']+)'/g)) expect(translations.es[m[1]], m[1]).toBeTruthy();
     });
 });
+
+// 2.36.31: opening a hotel or a room in «Asignación» slid the whole admin screen up under its header — the title and
+// the section picker gone, a blank band below, nothing able to scroll them back. scrollIntoView (and a plain
+// focus()) also scroll every `overflow: hidden` ancestor, the admin frame among them; lib/paging moves only the
+// element's own scroller.
+describe('«Asignación» never scrolls the admin frame', () => {
+    const assignment = PAGE.slice(PAGE.indexOf('function LodgingReviewBoard('), PAGE.indexOf('function LocationsPage('));
+    it('no scrollIntoView in the explorer nor in the assignment page: lib/paging scrollToListTop / revealWhole', () => {
+        expect(EXPLORER).not.toMatch(/\.scrollIntoView\(/);
+        expect(assignment).not.toMatch(/\.scrollIntoView\(/);
+        expect(EXPLORER).toMatch(/import \{ revealWhole, scrollToListTop \} from "\.\.\/lib\/paging";/);
+        expect(EXPLORER).toContain('scrollToListTop(root)');
+        expect(assignment).toContain('scrollToListTop(el)');
+        expect(assignment).toContain('scrollToListTop(boardRef.current)');
+    });
+    it('the explorer\'s navigation focus never scrolls (preventScroll), and the card is revealed in its own scroller', () => {
+        expect(EXPLORER).toContain('target.focus({ preventScroll: true }); revealWhole(target);');
+        expect(EXPLORER).toContain('headingRef.current.focus({ preventScroll: true })');
+    });
+});
+

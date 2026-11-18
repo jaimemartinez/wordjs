@@ -47,6 +47,7 @@ import {
 import { hasGenderField } from "../lib/fields";
 import { adjustText } from "./LodgingAdjust";
 import { Select } from "../lib/Select";
+import { revealWhole, scrollToListTop } from "../lib/paging";
 
 // ---------------------------------------------------------------------------------------------
 // Small pure helpers (module level: nothing here is a component defined inside another one)
@@ -250,11 +251,16 @@ export default function LodgingExplorer({
         if (req.scroll && root) {
             const sp = scrollParentOf(root);
             const limit = sp ? sp.getBoundingClientRect().top : 0;
-            if (req.scroll === 'always' || root.getBoundingClientRect().top < limit) root.scrollIntoView({ block: 'start', behavior: 'smooth' });
+            // Only the explorer's own scroller moves (lib/paging scrollToListTop). scrollIntoView also scrolled the
+            // admin frame, an `overflow: hidden` box: opening a room slid the whole screen up under the header —
+            // its title and section picker gone, a blank band below, nothing able to scroll them back (2.36.31).
+            if (req.scroll === 'always' || root.getBoundingClientRect().top < limit) scrollToListTop(root);
         }
         const target = (req.selector && root ? root.querySelector(req.selector) : null) as HTMLElement | null;
-        if (target) target.focus();                                   // back: reveal the card we came from
-        else if ((req.heading || req.selector) && headingRef.current) headingRef.current.focus({ preventScroll: !!req.scroll });
+        // back: the card we came from — focused without scrolling (a plain focus() scrolls the admin frame too, see
+        // above), then brought into ITS scroller's view.
+        if (target) { target.focus({ preventScroll: true }); revealWhole(target); }
+        else if ((req.heading || req.selector) && headingRef.current) headingRef.current.focus({ preventScroll: true });
     }, [nav.hotelId, nav.roomId, shownLevel]);
 
     // «Ver ocupación» from «Hoteles y habitaciones»: open that hotel / room once, with clean filters.
@@ -353,7 +359,7 @@ export default function LodgingExplorer({
         setUnassignedOpen(true);
         // After the commit that shows the (narrow-screen) section: bring it into view and focus its search.
         requestAnimationFrame(() => {
-            if (panelRef.current) panelRef.current.scrollIntoView({ block: 'nearest', behavior: 'smooth' });
+            if (panelRef.current) revealWhole(panelRef.current);   // its own scroller only, as above
             if (searchRef.current) searchRef.current.focus({ preventScroll: true });
         });
     };

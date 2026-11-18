@@ -69,7 +69,7 @@ import {
     parseRosterColumns, parseRosterNav, pendingCount, rawFieldValue, rosterColumnsKey, rosterLocationKey, rosterNavKey, rosterSort, rowHaystack,
     focusFirstVisible, rosterNeighborSelectors,
 } from "../lib/roster";
-import { clampPage, pageAfterResize, pagedScroll, readPageSize, writePageSize } from "../lib/paging";
+import { clampPage, pageAfterResize, pagedScroll, readPageSize, scrollToListTop, writePageSize } from "../lib/paging";
 import { personBalance } from "../lib/feePayments";
 import { toCents } from "../lib/feeSplit";
 import RosterGroup from "./RosterGroup";
@@ -5130,7 +5130,8 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
             // board) is what must be on screen, not scrolled out above the board's top edge.
             const el = nv > 0 ? (reportRef.current || boardRef.current) : boardRef.current;
             if (el) {
-                el.scrollIntoView({ behavior: 'smooth', block: 'start' });
+                // Its own scroller only (lib/paging): scrollIntoView also slid the admin frame (overflow: hidden).
+                scrollToListTop(el);
                 if (el === boardRef.current) el.focus({ preventScroll: true });
             }
         } catch (e: any) {
@@ -5322,7 +5323,7 @@ function AssignmentPage({ conferenceId, focus, onFocusConsumed }: { conferenceId
                 </div>
             )}
 
-            <LodgingReviewBoard conferenceId={conferenceId} onAdjust={(f) => { setReviewFocus(f); boardRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }); }} />
+            <LodgingReviewBoard conferenceId={conferenceId} onAdjust={(f) => { setReviewFocus(f); scrollToListTop(boardRef.current); }} />
 
             {/* Who sleeps where — «Hoteles › Hotel › Habitación», editable by drag & drop and pickers. */}
             <LodgingExplorer

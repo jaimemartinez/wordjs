@@ -28,6 +28,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   asked for Localidades before). A role that reviewed lodging with Localidades alone needs Hospedaje now.
 
 ### Fixed
+- **conference-manager 2.36.31: opening a hotel or a room in «Asignación» no longer hides the top of the screen.**
+  The explorer brought the room into view with `scrollIntoView`, which also scrolled the admin frame (a box
+  that cannot be scrolled by hand): the title and the section picker slid out of sight, with a blank band
+  below. It now moves only its own scroll pane, as the payments queue already did.
 - **conference-manager 2.36.29: «Sugerir reparto» respects the room's sex too.** The plan places people by its own
   arithmetic and only checked the rules and shared rooms: it put a man-and-woman family in a room fixed «Solo
   hombres». It now uses the same room-sex check as the automatic assignment, for fixed and mixed rooms.
