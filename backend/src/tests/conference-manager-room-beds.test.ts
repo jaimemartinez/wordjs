@@ -649,3 +649,42 @@ test('hotel priority: optional; the run and «Sugerir reparto» fill the priorit
     ok(await p.call('post', '/assignment/run', { body: { conference_id: cid } }), 'run 3');
     assert.deepStrictEqual(rooms(), [a4, a4, a4, a4]);
 });
+
+// 2.36.32, the owner: «si se separan familias por lo menos tratar que queden en el mismo hotel».
+test('a family the rules divide by gender stays in one hotel when it can, even with a tighter room elsewhere', async () => {
+    const p = await bootPlugin();
+    const cid = ok(await p.call('post', '/create', { body: { name: 'Congreso', slug: `famhotel-${++seq}` } })).id as number;
+    for (const template of ['first_name', 'gender', 'family_group']) ok(await p.call('post', '/fields', { body: { conference_id: cid, template } }));
+    ok(await p.call('post', '/publish', { body: { conference_id: cid, published: true } }));
+    // «Separar por género» (hard, 60) outranks «Familias juntas» (50): the family is divided by gender.
+    ok(await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Familias juntas', type: 'keep_together', config: 'family_group', hard: 0, priority: 50 } }), 'keep');
+    ok(await p.call('post', '/assignment/rules', { body: { conference_id: cid, name: 'Separar por género', type: 'separate_by', config: 'gender', hard: 1, priority: 60 } }), 'separate');
+    const loc = ok(await p.call('post', '/locations', { body: { conference_id: cid, name: 'Norte', capacity: 50 } })).id as number;
+    const alfa = ok(await p.call('post', '/hotels', { body: { conference_id: cid, name: 'Alfa' } })).id as number;
+    const a2 = ok(await p.call('post', '/rooms', { body: { hotel_id: alfa, room_number: 'A2', capacity: 2 } })).id as number;
+    const a3 = ok(await p.call('post', '/rooms', { body: { hotel_id: alfa, room_number: 'A3', capacity: 3 } })).id as number;
+    const beta = ok(await p.call('post', '/hotels', { body: { conference_id: cid, name: 'Beta' } })).id as number;
+    const b2 = ok(await p.call('post', '/rooms', { body: { hotel_id: beta, room_number: 'B2', capacity: 2 } })).id as number;
+    const person = async (first_name: string, gender: string) =>
+        ok(await p.call('post', '/inscriptions', { body: { conference_id: cid, first_name, gender, family_group: 'Pérez', location_id: loc } }), first_name).id as number;
+    const ana = await person('Ana', 'F'), bea = await person('Bea', 'F'), carlos = await person('Carlos', 'M'), dani = await person('Dani', 'M');
+    const roomOf = (id: number) => (p.one(`SELECT room_id FROM ${T('inscriptions')} WHERE id = ?`, id) || {}).room_id ?? null;
+    const hotelOf = (id: number) => (p.one(`SELECT r.hotel_id FROM ${T('inscriptions')} i JOIN ${T('rooms')} r ON r.id = i.room_id WHERE i.id = ?`, id) || {}).hotel_id ?? null;
+
+    ok(await p.call('post', '/assignment/run', { body: { conference_id: cid } }), 'run');
+    const women = [roomOf(ana), roomOf(bea)], men = [roomOf(carlos), roomOf(dani)];
+    assert.strictEqual(new Set(women).size, 1, 'the women share a room');
+    assert.strictEqual(new Set(men).size, 1, 'the men share a room');
+    assert.notStrictEqual(women[0], men[0], 'divided by gender, as the rules say');
+    assert.deepStrictEqual([hotelOf(ana), hotelOf(bea), hotelOf(carlos), hotelOf(dani)], [alfa, alfa, alfa, alfa],
+        'the whole family in one hotel — the men take A3 next to them, not the tighter B2 in another hotel');
+    // «Sugerir reparto» as well, keeping or dividing families.
+    for (const opts of [{ fresh: true }, { fresh: true, divide_families: true }]) {
+        ok(await p.call('post', '/assignment/reset', { body: { conference_id: cid } }), 'reset');
+        const plan = ok(await p.call('post', '/assignment/plan', { body: { conference_id: cid, ...opts } }), 'plan').plan;
+        ok(await p.call('post', '/assignment/plan/apply', { body: { conference_id: cid, token: plan.token, ...opts } }), 'apply');
+        assert.deepStrictEqual([hotelOf(ana), hotelOf(bea), hotelOf(carlos), hotelOf(dani)], [alfa, alfa, alfa, alfa],
+            `${JSON.stringify(opts)}: the plan keeps the family in one hotel`);
+    }
+    void a2; void a3; void b2;
+});

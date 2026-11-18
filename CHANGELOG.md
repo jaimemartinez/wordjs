@@ -21,6 +21,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   shows the choice.
 
 ### Changed
+- **conference-manager 2.36.32: a family divided by the rules stays in one hotel when it can.**
+  When a preferred «Mantener juntos» rule gives way (for example to «Separar por» gender), the automatic
+  assignment and «Sugerir reparto» now place the family's rooms in the same hotel when beds there allow it,
+  before saving a room or an empty bed. The run's final comparison between its two passes also honours the
+  hotel priority of 2.36.30, which it ignored.
 - **conference-manager 2.36.27: «Revisar hospedaje» of each locality moved from «Localidades» to «Asignación», under
   the lodging permissions.** Reviewing what a coordinator arranged is part of the lodging assignment: the board with
   each locality's status and its review (validate, return, reopen) now sits above the explorer in «Asignación».
@@ -28,7 +33,7 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   asked for Localidades before). A role that reviewed lodging with Localidades alone needs Hospedaje now.
 
 ### Fixed
-- **conference-manager 2.36.31: opening a hotel or a room in «Asignación» no longer hides the top of the screen.**
+- **conference-manager 2.36.32: opening a hotel or a room in «Asignación» no longer hides the top of the screen.**
   The explorer brought the room into view with `scrollIntoView`, which also scrolled the admin frame (a box
   that cannot be scrolled by hand): the title and the section picker slid out of sight, with a blank band
   below. It now moves only its own scroll pane, as the payments queue already did.

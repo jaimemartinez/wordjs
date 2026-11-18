@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.31',
+    version: '2.36.32',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -7266,7 +7266,7 @@ exports.init = async function (wordjs) {
         const rooms = roomRows.map(r => {
             const occupants = occByRoom.get(r.id) || [];
             const shares = roomShares.get(Number(r.id)) || [];
-            const room = { id: r.id, capacity: Math.max(1, Number(r.capacity) || 1), room_number: r.room_number, hotel_name: r.hotel_name, location_id: r.location_id == null ? null : r.location_id, occupants, gender: r.gender, tier: tierOf(r),
+            const room = { id: r.id, capacity: Math.max(1, Number(r.capacity) || 1), room_number: r.room_number, hotel_name: r.hotel_name, location_id: r.location_id == null ? null : r.location_id, occupants, gender: r.gender, tier: tierOf(r), hotel_id: r.hotel_id == null ? null : Number(r.hotel_id),
                 // A shared room's class (see «THE CLASS OF A SHARED ROOM»): nobody of another value takes a bed of it.
                 lock: shareLockOf(r, shares, lockFields), blocked: isBlocked(r) };
             if (isPool) {
@@ -7460,7 +7460,81 @@ exports.init = async function (wordjs) {
                     }
                     const groups = [...byLocation.values()].sort((a, b) => b.reduce((n, it) => n + it.people.length, 0) - a.reduce((n, it) => n + it.people.length, 0));
                     let rest = [];
+                    // A FAMILY THE RULES DIVIDE stays in one hotel when it can (2.36.32, the owner: «si se separan familias
+                    // por lo menos tratar que queden en el mismo hotel»). A part whose group (a keep_together value, the
+                    // family) already sleeps in a hotel goes there first — the parts headed to one hotel packed together
+                    // (the men of several families share rooms there), its rooms with people first, then its free ones;
+                    // what does not fit there takes the usual way. Never against a hard rule (fitsBin / ownBin).
+                    const famKey = (v) => (v == null ? '' : String(v).trim().toLowerCase());
+                    const familyHotelOf = (it) => {
+                        if (!it.group || !it.group.rule || !it.group.rule.field || famKey(it.group.key) === '') return null;
+                        const field = it.group.rule.field, key = famKey(it.group.key);
+                        const mine = new Set(it.people.map(x => x.id));
+                        const count = new Map();
+                        for (const r of R) {
+                            if (r.hotel_id == null) continue;
+                            const n = r.occupants.filter(o => !mine.has(o.id) && famKey(ruleVal(o, field)) === key).length;
+                            if (n) count.set(r.hotel_id, (count.get(r.hotel_id) || 0) + n);
+                        }
+                        let best = null;
+                        for (const [h, n] of count) if (best == null || n > count.get(best)) best = h;
+                        return best;
+                    };
+                    // The family of a part: its keep_together rule and value ('' when it has none).
+                    const famOf = (it) => (it.group && it.group.rule && it.group.rule.field && famKey(it.group.key) !== ''
+                        ? `${it.group.rule.field}\u0001${famKey(it.group.key)}` : '');
+                    // Rooms of hotel `h` for `list`, its rooms with people first, then its free ones. Commits only when
+                    // `all` is false or every item fits; returns what is left.
+                    const intoHotel = (h, list, fits, all) => {
+                        const partialH = partialRooms().filter(b => b.room.hotel_id === h);
+                        const emptyH = R.filter(r => r.hotel_id === h && r.occupants.length === 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
+                        if (all) {
+                            const need = list.reduce((n, it) => n + it.size, 0);
+                            if (partialH.reduce((n, b) => n + b.free, 0) + emptyH.reduce((n, b) => n + b.free, 0) < need) return list;
+                            const trial = pack.packNew(list, partialH.concat(emptyH), fits, costBin);
+                            if (trial.left.length) return list;
+                            for (const [it, b] of trial.placed) for (const p of it.people) assignTo(b.room, p);
+                            return [];
+                        }
+                        let left = list;
+                        if (partialH.length) {
+                            const res = pack.packInto(left, partialH, fits, costBin);
+                            for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
+                            left = res.left;
+                        }
+                        if (left.length && emptyH.length) {
+                            const res = pack.packNew(left, emptyH, fits, costBin);
+                            for (const [it, b] of res.placed) for (const p of it.people) assignTo(b.room, p);
+                            left = res.left;
+                        }
+                        return left;
+                    };
+                    const toFamilyHotels = (items, fits) => {
+                        // One hotel: nothing to choose — the usual packing, as before.
+                        if (new Set(R.filter(r => r.hotel_id != null).map(r => r.hotel_id)).size < 2) return items;
+                        // A family whose parts arrive together (its men and its women in this batch): the first hotel —
+                        // in priority, then room order — that takes every part of it.
+                        const parts = new Map();
+                        for (const it of items) { const f = famOf(it); if (f && familyHotelOf(it) == null) { if (!parts.has(f)) parts.set(f, []); parts.get(f).push(it); } }
+                        const together = new Set();
+                        const hotelsInOrder = [...new Set(R.filter(r => r.hotel_id != null).map(r => r.hotel_id))];
+                        for (const [, list] of parts) {
+                            if (list.length < 2) continue;
+                            for (const h of hotelsInOrder) { if (!intoHotel(h, list, fits, true).length) { for (const it of list) together.add(it); break; } }
+                        }
+                        items = items.filter(it => !together.has(it));
+                        const byHotel = new Map(), rest = [];
+                        for (const it of items) {
+                            const h = familyHotelOf(it);
+                            if (h == null) { rest.push(it); continue; }
+                            if (!byHotel.has(h)) byHotel.set(h, []);
+                            byHotel.get(h).push(it);
+                        }
+                        for (const [h, list] of byHotel) rest.push(...intoHotel(h, list, fits, false));
+                        return rest;
+                    };
                     for (let group of groups) {
+                        group = toFamilyHotels(group, ownBin);
                         const partial = partialRooms();
                         if (partial.length) {
                             const res = pack.packInto(group, partial, ownBin, costBin);
@@ -7506,6 +7580,9 @@ exports.init = async function (wordjs) {
                             for (const d of it.donors) pieces.push({ people: [d], group: null, size: 1, donors: [] });
                         }
                         let left = pieces;
+                        // The family's hotel first for these pieces as well (see toFamilyHotels): one piece is placed first,
+                        // the others follow it there.
+                        left = toFamilyHotels(left, fitsBin);
                         const partialRooms = R.filter(r => r.occupants.length > 0 && freeOf(r) > 0).map(r => ({ room: r, free: freeOf(r) }));
                         if (left.length && partialRooms.length) {
                             const res = pack.packInto(left, partialRooms, fitsBin, costBin);
@@ -7579,17 +7656,28 @@ exports.init = async function (wordjs) {
         // is better. 2.36.6 (option (a)): a location kept together counts before a room saved.
         const scoreOf = (st) => {
             let hard = st.violations.filter(v => v.hard).length, soft = st.violations.filter(v => !v.hard).length, used = 0, empty = 0, mixed = 0, lower = 0;
+            // Families (keep_together values) in more than one hotel (2.36.32) — 0 when nobody is divided.
+            const famHotels = new Map();
             for (const room of st.rooms) {
                 if (!room.occupants.length) continue;
                 used++; empty += freeOf(room);
                 lower += room.occupants.length * (room.tier || 0);
+                if (room.hotel_id != null) for (const rule of keepRules) for (const o of room.occupants) {
+                    const v = ruleVal(o, rule.field);
+                    const k = v == null ? '' : String(v).trim().toLowerCase();
+                    if (!k) continue;
+                    const key = `${rule.field}\u0001${k}`;
+                    if (!famHotels.has(key)) famHotels.set(key, new Set());
+                    famHotels.get(key).add(room.hotel_id);
+                }
                 if (new Set(room.occupants.map(o => (o.location_id == null ? null : Number(o.location_id)))).size > 1) mixed++;
                 if (!mergedSeparateOk(room.occupants, [])) hard++;
                 for (const rule of companionUnmet(room.occupants)) { if (rule.hard) hard++; else soft++; }
                 for (const rule of softSeparate) if (distinctValues(judgedBy(rule, viewFor(rule, room.occupants), keepRules), rule.field).length > 1) soft++;
             }
             // `lower` (2.36.30): people in hotels of a lower priority — 0 whenever no hotel has one.
-            return [hard, participants.length - st.assignedCount, lower, mixed, used, empty, soft];
+            const spread = [...famHotels.values()].filter(h => h.size > 1).length;
+            return [hard, participants.length - st.assignedCount, lower, spread, mixed, used, empty, soft];
         };
         const lexLess = (a, b) => { for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] < b[k]; return false; };
         let chosen = null;
@@ -7965,7 +8053,36 @@ exports.init = async function (wordjs) {
     // A finished sweep, for the choice of its mode: everyone not in a frozen location.
     const sweepScore = (S) => {
         const frozen = new Set(S.locations.filter(isFrozen).map(l => Number(l.id)));
-        const m = makeAuditor(S).measure(S, (p) => p.location_id == null || !frozen.has(Number(p.location_id)));
+        const auditor = makeAuditor(S);
+        const counted = (p) => p.location_id == null || !frozen.has(Number(p.location_id));
+        const m = auditor.measure(S, counted);
+        // As each scope's own choice (runAssignmentScope's scoreOf): people in hotels of a lower priority (2.36.30),
+        // then families spread over more than one hotel (2.36.32) — both 0 when no hotel has a priority and no
+        // family is divided, so the comparison is the one before.
+        const roomById = new Map(S.rooms.map(r => [r.id, r]));
+        const tierOf = hotelTierOf(S.rooms);
+        const keepRules = auditor.allRules.filter(r => r.type === 'keep_together' && r.field);
+        let lower = 0;
+        const famHotels = new Map();
+        for (const p0 of S.people) {
+            if (p0.room_id == null || !counted(p0) || (p0.status != null && p0.status === 'cancelled')) continue;
+            const room = roomById.get(p0.room_id);
+            if (!room) continue;
+            lower += tierOf(room);
+            if (room.hotel_id == null || !keepRules.length) continue;
+            const p = { ...p0, custom_data: parseCd(p0.custom_data) };
+            for (const rule of keepRules) {
+                if (rule.location_id != null && Number(rule.location_id) !== p.location_id) continue;
+                if (!condMatches(rule.params && rule.params.when, p)) continue;
+                const v = ruleVal(p, rule.field);
+                const k = v == null ? '' : String(v).trim().toLowerCase();
+                if (!k) continue;
+                const key = `${rule.id}|${k}`;
+                if (!famHotels.has(key)) famHotels.set(key, new Set());
+                famHotels.get(key).add(Number(room.hotel_id));
+            }
+        }
+        const spread = [...famHotels.values()].filter(h => h.size > 1).length;
         // 2.36.6 (option (a)): rooms holding people of more than one location — a location kept together counts
         // before a room saved, as in each scope's own choice (runAssignmentScope's scoreOf).
         const locsIn = new Map();
@@ -7975,7 +8092,7 @@ exports.init = async function (wordjs) {
             locsIn.get(p.room_id).add(p.location_id == null ? null : Number(p.location_id));
         }
         const mixed = [...locsIn.values()].filter(s => s.size > 1).length;
-        return [m.hard, m.unplaced, mixed, m.rooms, m.empty_beds, m.soft];
+        return [m.hard, m.unplaced, lower, spread, mixed, m.rooms, m.empty_beds, m.soft];
     };
     const sweepLess = (a, b) => { for (let k = 0; k < a.length; k++) if (a[k] !== b[k]) return a[k] < b[k]; return false; };
     // What the automatic assignment (the admin's conference-wide run) would do on `snap` — on a copy; returns
@@ -8213,6 +8330,17 @@ exports.init = async function (wordjs) {
                 return { bins: out, left: res.left, rooms: out.length, empty: out.reduce((n, b) => n + b.cap - used(b), 0) };
             };
             const commit = (r) => { for (const b of r.bins) { bins.push(b); taken.add(b.room.id); } return r.left; };
+            // A FAMILY THE RULES DIVIDE stays in one hotel when it can (2.36.32, as the automatic assignment): a part's
+            // family is its keep_together value in its location; its hotels, those of the rooms the plan gives its
+            // other parts.
+            const famOfItem = (it) => (it && it.group && it.group.rule && it.group.rule.field && it.group.key != null && String(it.group.key).trim() !== ''
+                ? `${it.g && it.g.id != null ? it.g.id : ''}\u0001${it.group.rule.field}\u0001${String(it.group.key).trim().toLowerCase()}` : '');
+            const famHotels = (fam, exceptBin) => {
+                const hs = new Set();
+                if (!fam) return hs;
+                for (const b of bins.concat(partialBins)) if (b !== exceptBin && b.members.some(m => !m.fixed && famOfItem(m) === fam)) hs.add(b.hotel);
+                return hs;
+            };
             // Beds short: the free rooms `items` can FILL with the most beds, then the fewest rooms (lodging-pack
             // fillSets) — the people in by Best Fit Decreasing; a set they cannot fill exactly is skipped.
             const fillRooms = (items, free) => {
@@ -8324,7 +8452,31 @@ exports.init = async function (wordjs) {
                 const own = { bins: [], left: [], rooms: 0, empty: 0 };
                 const scratch = new Set();
                 for (const g of groupOrder(open)) {
-                    const r = tryPack(open.filter(it => it.g === g), freeFor(g).filter(x => !scratch.has(x.room.id)));
+                    const mine = open.filter(it => it.g === g);
+                    const free = freeFor(g).filter(x => !scratch.has(x.room.id));
+                    let r = tryPack(mine, free);
+                    // A part sent to another hotel than the rest of its family: the parts whose family already has rooms
+                    // in a hotel packed into that hotel's free rooms first, the others after — taken when nobody more
+                    // is left without a bed.
+                    const away = (res) => res.bins.some(b => b.members.some(it => { const hs = famHotels(famOfItem(it)); return hs.size > 0 && !hs.has(b.hotel); }));
+                    if (away(r)) {
+                        const byHotel = new Map();
+                        for (const it of mine) { const hs = famHotels(famOfItem(it)); if (hs.size) { const h = [...hs][0]; if (!byHotel.has(h)) byHotel.set(h, []); byHotel.get(h).push(it); } }
+                        const alt = { bins: [], left: [], rooms: 0, empty: 0 };
+                        const usedIds = new Set();
+                        let rest = mine;
+                        for (const [h, list] of byHotel) {
+                            const rh = tryPack(list, free.filter(x => x.hotel === h && !usedIds.has(x.room.id)));
+                            for (const b of rh.bins) usedIds.add(b.room.id);
+                            alt.bins.push(...rh.bins); alt.rooms += rh.rooms; alt.empty += rh.empty;
+                            const placed = new Set(rh.bins.flatMap(b => b.members));
+                            rest = rest.filter(it => !placed.has(it));
+                        }
+                        const rr = tryPack(rest, free.filter(x => !usedIds.has(x.room.id)));
+                        alt.bins.push(...rr.bins); alt.left.push(...rr.left); alt.rooms += rr.rooms; alt.empty += rr.empty;
+                        const outOf = (res) => res.left.reduce((n, it) => n + it.size, 0);
+                        if (outOf(alt) <= outOf(r)) r = alt;
+                    }
                     for (const b of r.bins) scratch.add(b.room.id);
                     own.bins.push(...r.bins); own.left.push(...r.left); own.rooms += r.rooms; own.empty += r.empty;
                 }
@@ -8347,7 +8499,9 @@ exports.init = async function (wordjs) {
             for (const b of [...live2].sort((x, y) => (y.cap - used(y)) - (x.cap - used(x)) || x.room.id - y.room.id)) {
                 const need = used(b);
                 const owners = groupsIn(b);
-                const swap = inventory.filter(x => !taken.has(x.room.id) && x.cap >= need && x.cap < b.cap)
+                // Never to another hotel when that takes a family away from the rest of it (2.36.32).
+                const stay = b.members.some(m => famHotels(famOfItem(m), b).has(b.hotel));
+                const swap = inventory.filter(x => !taken.has(x.room.id) && x.cap >= need && x.cap < b.cap && (!stay || x.hotel === b.hotel))
                     .sort((x, y) => x.cap - y.cap || (x.hotel === b.hotel ? 0 : 1) - (y.hotel === b.hotel ? 0 : 1)
                         || (owners.some(g => prevOwners(x.room.id).includes(g.id)) ? 0 : 1) - (owners.some(g => prevOwners(y.room.id).includes(g.id)) ? 0 : 1)
                         || x.order - y.order)[0];
@@ -8515,9 +8669,38 @@ exports.init = async function (wordjs) {
             dividedOf.set(c, n);
             return n;
         };
+        // A divided family stays in one hotel when it can (2.36.32, the owner: «si se separan familias por lo menos
+        // tratar que queden en el mismo hotel»): the families of those rules with people in more than one hotel, right
+        // after the families divided.
+        const hotelOfRoom = new Map(snap.rooms.map(r => [Number(r.id), r.hotel_id == null ? null : Number(r.hotel_id)]));
+        // Every «Mantener juntos» rule: a family a higher rule divides (gender) counts as well as one that gives way.
+        const keepAllRules = allRules.filter(r => r.type === 'keep_together' && r.field);
+        const spreadOf = new Map();
+        const familiesSpread = (c) => {
+            if (spreadOf.has(c)) return spreadOf.get(c);
+            const fams = new Map();
+            for (const p0 of c.done.people) {
+                if (!isTouched(p0) || p0.room_id == null) continue;
+                const h = hotelOfRoom.get(Number(p0.room_id));
+                if (h == null) continue;
+                const p = { ...p0, custom_data: parseCd(p0.custom_data) };
+                for (const rule of keepAllRules) {
+                    if (rule.location_id != null && Number(rule.location_id) !== p.location_id) continue;
+                    if (!condMatches(rule.params && rule.params.when, p)) continue;
+                    const v = ruleVal(p, rule.field);
+                    if (v == null || String(v).trim() === '') continue;
+                    const k = `${rule.id}|${p.location_id == null ? '' : p.location_id}|${String(v).trim().toLowerCase()}`;
+                    if (!fams.has(k)) fams.set(k, new Set());
+                    fams.get(k).add(h);
+                }
+            }
+            const n = [...fams.values()].filter(hs => hs.size > 1).length;
+            spreadOf.set(c, n);
+            return n;
+        };
         // Last, the preferences broken (`soft`): between arrangements alike in everything else, the one that keeps more.
-        const keepKey = (c) => [...c.score.slice(0, -2), familiesDivided(c), ...c.score.slice(-2), c.m.soft];
-        const divideKey = (c) => [...c.score.slice(0, -1), familiesDivided(c), c.score[c.score.length - 1], c.m.soft];
+        const keepKey = (c) => [...c.score.slice(0, -2), familiesDivided(c), familiesSpread(c), ...c.score.slice(-2), c.m.soft];
+        const divideKey = (c) => [...c.score.slice(0, -1), familiesDivided(c), familiesSpread(c), c.score[c.score.length - 1], c.m.soft];
         const candidates = [best];
         const consider = (c) => { if (c && !candidates.includes(c)) candidates.push(c); };
         for (const s of splitRuns) if (s) consider(s.run);
