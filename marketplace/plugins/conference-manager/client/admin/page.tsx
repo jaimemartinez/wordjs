@@ -770,7 +770,8 @@ function ConferenceDashboard({ conferenceId, onNavigate, onOpenFees }: { confere
                 const lodgingToValidate = locData ? (locData.locations || []).filter(l => l.lodging_status === 'submitted').length : na;
 
                 setStats({
-                    inscriptions: inscriptions ? inscriptions.length : na,
+                    // 2.36.37: «Inscripciones» = the live registrations (a cancelled / withdrawn one is not counted).
+                    inscriptions: inscriptions ? inscriptions.filter(i => i.status !== 'cancelled').length : na,
                     hotels: hotels ? hotels.length : na,
                     rooms: totalRooms,
                     paid,

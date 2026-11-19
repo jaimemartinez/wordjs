@@ -116,6 +116,7 @@ describe('tabs and permissions (D-P16, D-P20)', () => {
     it('the dashboard: «sin pagar» leaves out money only awaiting validation; «Pagos por validar» opens the queue', () => {
         const dash = PAGE.slice(PAGE.indexOf('function ConferenceDashboard('), PAGE.indexOf('function BarcodeModal('));
         expect(dash).toContain('const unpaid = inscriptions ? inscriptions.filter(i => personBalance(i).toCover > 0).length : na;');
+        expect(dash).toContain("inscriptions: inscriptions ? inscriptions.filter(i => i.status !== 'cancelled').length : na,");   // withdrawn people are not counted
         expect(dash).toMatch(/viewAllowed\('fees', perms\) \? feePaymentsApi\.getView\(conferenceId\)/);
         expect(dash).toMatch(/onClick=\{onOpenFees \? \(\) => onOpenFees\(\{ section: 'queue' \}\) : undefined\}/);
     });

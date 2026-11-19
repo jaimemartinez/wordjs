@@ -21,6 +21,10 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   shows the choice.
 
 ### Changed
+- **conference-manager 2.36.37: the Dashboard and «Reportes» count only live registrations.** «Inscripciones» on
+  the Dashboard, and «Inscritos», «Alojados» (x/total) and «Por género» in «Reportes», counted cancelled and
+  withdrawn registrations too. They now count only the live ones, like the roster; cancelled ones stay apart in
+  «N canceladas».
 - **conference-manager 2.36.36: «Alojados por el administrador» is only for someone the administration fixed.**
   The automatic assignment (alone or after applying «Sugerir reparto») and the administrator's manual placement
   could put a locality's person on a free pool bed, a bed the locality did not have. The portal then listed them as

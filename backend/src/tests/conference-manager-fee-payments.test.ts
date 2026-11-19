@@ -1398,7 +1398,7 @@ test('«Reportes» uses the Resumen per-person model: cancelled people owe nothi
     const pick = (x: any) => ({ due: x.due, paid: x.paid, pending: x.pending, to_cover: x.to_cover, credit: x.credit, paid_count: x.paid_count, partial_count: x.partial_count,
         unpaid_count: x.unpaid_count, owing_count: x.owing_count, cancelled_count: x.cancelled_count, people: x.people });
     assert.deepStrictEqual(pick(s.totals), { due: 300, paid: 30, pending: 100, to_cover: 170, credit: 100, paid_count: 0, partial_count: 1, unpaid_count: 2, owing_count: 2, cancelled_count: 2, people: 3 });
-    assert.strictEqual(s.totals.total, 5, '«Inscritos» still counts every inscription');
+    assert.strictEqual(s.totals.total, 3, '«Inscritos» counts the live registrations only (the 2 cancelled are apart)');
     assert.strictEqual(Math.round((s.totals.due - s.totals.paid) * 100), Math.round((s.totals.pending + s.totals.to_cover) * 100), '«Saldo pendiente» = Por validar + Por cobrar');
     const bog = s.byLocation.find((x: any) => x.location === 'Bogotá');
     assert.deepStrictEqual(pick(bog), { due: 200, paid: 30, pending: 100, to_cover: 70, credit: 100, paid_count: 0, partial_count: 1, unpaid_count: 1, owing_count: 1, cancelled_count: 2, people: 2 });
