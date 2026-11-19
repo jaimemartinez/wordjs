@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.36',
+    version: '2.36.37',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -6522,8 +6522,10 @@ exports.init = async function (wordjs) {
                        COALESCE(m.validated, 0) as validated, COALESCE(m.pending, 0) as pending, COALESCE(m.returned, 0) as returned
                 FROM ${T.inscriptions} i LEFT JOIN ${fees.PERSON_MONEY} m ON m.iid = i.id WHERE i.conference_id = ?`, [conference_id, conference_id]);
             const fig = fees.reportFigures(people);
+            // 2.36.37: «Inscritos» (and «Alojados» x/total, «Por género») = the live registrations — a cancelled /
+            // withdrawn one is apart (the roster's «N canceladas»).
             const rooms = await db.get(`SELECT COUNT(*) as total, SUM(CASE WHEN room_id IS NOT NULL THEN 1 ELSE 0 END) as assigned_count
-                FROM ${T.inscriptions} WHERE conference_id = ?`, [conference_id]);
+                FROM ${T.inscriptions} WHERE conference_id = ? AND ${occupiedSql()}`, [conference_id]);
             const totals = { ...fig.totals, total: Number(rooms && rooms.total) || 0, assigned_count: Number(rooms && rooms.assigned_count) || 0 };
             const byLocation = fig.byLocation;
             // The gender breakdown exists only while the form has a «Género» field (column `gender`); without
@@ -6531,7 +6533,7 @@ exports.init = async function (wordjs) {
             const genderField = await db.get(`SELECT id FROM ${T.fields} WHERE conference_id = ? AND name = 'gender'`, [conference_id]);
             const byGender = !genderField ? [] : await db.all(`
                 SELECT COALESCE(NULLIF(gender, ''), '—') as gender, COUNT(*) as count
-                FROM ${T.inscriptions} WHERE conference_id = ? GROUP BY COALESCE(NULLIF(gender, ''), '—')`, [conference_id]);
+                FROM ${T.inscriptions} WHERE conference_id = ? AND ${occupiedSql()} GROUP BY COALESCE(NULLIF(gender, ''), '—')`, [conference_id]);
             res.json({ totals, byLocation, byGender });
         } catch (e) { sendError(res, e); }
     });
