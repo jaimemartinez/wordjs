@@ -21,6 +21,11 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   shows the choice.
 
 ### Changed
+- **conference-manager 2.36.38: «Reactivar» works for someone who has not authorized their data yet.** With
+  «Autorización de datos» on, a registration cancelled or withdrawn before the person authorized could not be
+  reactivated: the administration's «Reactivar» was refused because it confirms the person. Now it puts them back
+  as «Pendiente», and the notice says they are confirmed once they authorize. Confirming someone who has not
+  authorized is still refused.
 - **conference-manager 2.36.37: the Dashboard and «Reportes» count only live registrations.** «Inscripciones» on
   the Dashboard, and «Inscritos», «Alojados» (x/total) and «Por género» in «Reportes», counted cancelled and
   withdrawn registrations too. They now count only the live ones, like the roster; cancelled ones stay apart in

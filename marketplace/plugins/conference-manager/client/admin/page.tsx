@@ -1488,7 +1488,9 @@ export function InscriptionsPage({ conferenceId, onSeePayments, initial = null }
             const result = await conferenceApi.updateInscription(person.id, { status: cancelling ? 'cancelled' : 'active' });
             // 2.36.6: a withdrawn registration put back does not get its old bed back (the withdrawal freed it).
             const restoredNote = !cancelling && result && (result as any).restored ? ` ${tx('roster.done.restored.room', 'No recupera su habitación anterior: asígnala de nuevo en Alojamiento si la necesita.')}` : '';
-            setSheetNotice({ id: person.id, type: 'success', text: withAdjusted(tx, (cancelling ? tx('roster.done.cancelled', 'Inscripción cancelada.') : tx('roster.done.reactivated', 'Inscripción reactivada.')) + restoredNote, result) });
+            // 2.36.38: someone who has not authorized the processing of their data comes back as «Pendiente».
+            const consentNote = !cancelling && result && (result as any).awaiting_consent ? ` ${tx('roster.done.reactivated.consent', 'Queda pendiente hasta que autorice el tratamiento de sus datos (Autorizaciones › Reenviar enlace).')}` : '';
+            setSheetNotice({ id: person.id, type: 'success', text: withAdjusted(tx, (cancelling ? tx('roster.done.cancelled', 'Inscripción cancelada.') : tx('roster.done.reactivated', 'Inscripción reactivada.')) + restoredNote + consentNote, result) });
             await patchRows([person.id]);
             setPaymentsKey((k) => k + 1);
         } catch (error: any) {

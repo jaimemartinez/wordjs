@@ -103,6 +103,13 @@ test('with consent on, a portal registration checks a written e-mail, stays pend
     const put = await w.p.call('put', `/inscriptions/${id}`, { body: { status: 'active' } });
     assert.strictEqual(put.status, 409);
     assert.strictEqual(put.body.code, 'consent_pending');
+    // 2.36.38: cancelled (or withdrawn) before authorizing, «Reactivar» puts them back as pending, not refused.
+    ok(await w.p.call('put', `/inscriptions/${id}`, { body: { status: 'cancelled' } }));
+    const back = ok(await w.p.call('put', `/inscriptions/${id}`, { body: { status: 'active' } }));
+    assert.strictEqual(back.awaiting_consent, true);
+    assert.strictEqual(back.status, 'pending');
+    assert.strictEqual((w.p.q(`SELECT status FROM ${PREFIX}inscriptions WHERE id = ?`, id) as any[])[0].status, 'pending');
+    assert.strictEqual((await w.p.call('put', `/inscriptions/${id}`, { body: { status: 'active' } })).status, 409, 'still not confirmed before authorizing');
     assert.strictEqual((await w.p.call('put', `/inscriptions/${id}`, { body: { health_conditions: { answer: 'none' } } })).status, 400, 'the admin too needs the verbal tick');
     // The coordinator sees «pendiente».
     const list = ok(await portal(w.p, 'get', '/portal/inscriptions', w.ptoken));
