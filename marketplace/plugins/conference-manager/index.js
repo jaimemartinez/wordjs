@@ -128,7 +128,7 @@ const phoneMod = require('./server/phone');
 
 exports.metadata = {
     name: 'Conference Manager',
-    version: '2.36.37',
+    version: '2.36.38',
     description: 'Manage multiple conference inscriptions, payments, and lodging assignments.',
     author: 'WordJS'
 };
@@ -5847,14 +5847,19 @@ exports.init = async function (wordjs) {
             const sets = [], params = [];
             for (const [k, v] of Object.entries(vals)) { sets.push(`${k} = ?`); params.push(v); }
             let newStatus = existing.status;
+            let awaitingConsent = false;
             if (fieldValues.status !== undefined) {
                 // Closed vocabulary — the same rule the conference `status` already follows. 'pending' is the
                 // insert default, 'active' is what the admin's toggle writes; anything else is a typo or a probe.
-                const st = fieldValues.status == null ? null : String(fieldValues.status);
+                let st = fieldValues.status == null ? null : String(fieldValues.status);
                 if (st !== null && !INSCRIPTION_STATUSES.has(st)) return res.status(400).json({ error: 'Estado de inscripción inválido.' });
                 // «Autorización de datos» (2.33.0): nobody is confirmed before they authorize the processing of their data.
+                // 2.36.38: «Reactivar» (cancelled → active) of someone who has not authorized yet puts them back as
+                // PENDING — confirmed once they authorize — instead of refusing: a person cancelled or withdrawn before
+                // authorizing could otherwise never come back.
                 if (st === 'active' && existing.status !== 'active' && await consent.isEnabled(existing.conference_id) && !await consent.isGranted(id)) {
-                    return res.status(409).json({ error: 'Esta persona aún no autoriza el tratamiento de sus datos: la inscripción se confirma cuando lo haga (Autorizaciones › Reenviar enlace).', code: 'consent_pending' });
+                    if (existing.status === 'cancelled') { st = 'pending'; awaitingConsent = true; }
+                    else return res.status(409).json({ error: 'Esta persona aún no autoriza el tratamiento de sus datos: la inscripción se confirma cuando lo haga (Autorizaciones › Reenviar enlace).', code: 'consent_pending' });
                 }
                 sets.push('status = ?'); params.push(st);
                 newStatus = st;
@@ -5990,7 +5995,7 @@ exports.init = async function (wordjs) {
                 await db.run(`INSERT INTO ${T.withdrawals} (conference_id, inscription_id, kind, actor, at_utc, reason) VALUES (?, ?, 'restore', ?, ?, NULL)`,
                     [existing.conference_id, id, actorOf(req), new Date().toISOString().slice(0, 19).replace('T', ' ')]);
             }
-            res.json({ success: true, lodging_adjusted: adjusted, ...(restored ? { restored: true } : {}) });
+            res.json({ success: true, lodging_adjusted: adjusted, ...(restored ? { restored: true } : {}), ...(awaitingConsent ? { status: 'pending', awaiting_consent: true } : {}) });
         } catch (e) { sendError(res, e); }
     });
     http.route('delete', '/inscriptions/:id', { auth: true }, async (req, res) => {
