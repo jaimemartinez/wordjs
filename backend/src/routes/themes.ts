@@ -888,6 +888,10 @@ router.delete('/:slug', authenticate, isAdmin, networkThemeFiles, auditOnSuccess
     if (!validateSlug(req.params.slug)) {
         return res.status(400).json({ error: 'Invalid theme slug' });
     }
+    // The installed folder's own name (read from disk before it goes) names the AppContainer identity below,
+    // so what reaches the sandbox's files is never the request's string.
+    let installedSlug: string | undefined;
+    try { installedSlug = require('fs').readdirSync(THEMES_DIR).find((name: string) => name === req.params.slug); } catch { /* no themes folder */ }
     const result = await deleteTheme(req.params.slug);
     // A theme uploaded later under this name is other code: it starts with nothing granted.
     try { await require('../core/plugin-permissions').removeThemeGrants(req.params.slug); }
@@ -895,11 +899,11 @@ router.delete('/:slug', authenticate, isAdmin, networkThemeFiles, auditOnSuccess
     // …and with no declaration cached from the old one, and no Windows AppContainer identity left over: a
     // theme uploaded later under this name must not reuse the deleted one's SID and the ACEs it still holds.
     try { require('../core/plugin-context').forgetThemeDeclaration(req.params.slug); } catch { /* not loaded */ }
-    try {
+    if (installedSlug) try {
         const appRoot = require('path').resolve(__dirname, '..', '..');
         const win = require('../core/sandbox-windows');
         for (const id of require('../core/plugins').pluginWorkerSiteIds()) {
-            try { await win.retireAppContainerPlugin(appRoot, `theme:${req.params.slug}`, id); }
+            try { await win.retireAppContainerPlugin(appRoot, `theme:${installedSlug}`, id); }
             catch (e: any) { log.warn({ err: e, slug: req.params.slug, site: id }, '[Themes] AppContainer cleanup of a deleted theme failed'); }
         }
     } catch (e: any) { log.warn({ err: e, slug: req.params.slug }, '[Themes] AppContainer cleanup of a deleted theme skipped'); }
