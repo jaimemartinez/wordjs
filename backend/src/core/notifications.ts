@@ -28,6 +28,21 @@ function siteOf(): number {
     return siteContext.currentSiteIdOrNull() ?? siteContext.PRIMARY_SITE_ID;
 }
 
+/** Transports one plugin may register (per site). */
+const MAX_PLUGIN_TRANSPORTS = 16;
+
+/**
+ * A notification's link: a same-site path (`/admin/...`, not `//host`) or an http(s) URL — never a
+ * `javascript:` / `data:` / other scheme, whatever renders it.
+ */
+function safeActionUrl(v: unknown): string | null {
+    if (typeof v !== 'string') return null;
+    const u = v.trim();
+    if (!u || u.length > 2048) return null;
+    if (u.startsWith('/') && !u.startsWith('//') && !u.startsWith('/\\')) return u;
+    try { const p = new URL(u); return p.protocol === 'http:' || p.protocol === 'https:' ? u : null; } catch { return null; }
+}
+
 class NotificationService {
     transports: Map<string, { handler: (...args: any[]) => any; pluginSlug: string | null }>;
     // Plugin transports, per site: in a multisite network each site runs its own worker of a plugin, and a
@@ -116,9 +131,19 @@ class NotificationService {
         const { getCurrentPlugin } = require('./plugin-context');
         const pluginSlug = getCurrentPlugin();
         if (pluginSlug) {
+            // A plugin adds transports of its own: a plain name, never one core already provides (`db`,
+            // `sse`, …) — a plugin entry shadows core's on its site, so taking `db` diverted every
+            // notification away from the store — never one another plugin holds, and a bounded number.
+            if (typeof name !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(name)) throw new Error('Notification transport: invalid name.');
+            if (this.transports.has(name)) throw new Error(`Notification transport '${name}' is provided by WordJS and cannot be replaced.`);
             const id = siteOf();
             let table = this.siteTransports.get(id);
             if (!table) { table = new Map(); this.siteTransports.set(id, table); }
+            const held = table.get(name);
+            if (held && held.pluginSlug !== pluginSlug) throw new Error(`Notification transport '${name}' belongs to another plugin.`);
+            if (!held && [...table.values()].filter((t: any) => t.pluginSlug === pluginSlug).length >= MAX_PLUGIN_TRANSPORTS) {
+                throw new Error(`Notification transport: at most ${MAX_PLUGIN_TRANSPORTS} per plugin.`);
+            }
             table.set(name, { handler, pluginSlug });
         } else {
             this.transports.set(name, { handler, pluginSlug: null });
@@ -234,7 +259,7 @@ class NotificationService {
             // Modern UI support
             icon: data.icon || null, // e.g. 'fa-envelope'
             color: data.color || null, // e.g. 'blue'
-            action_url: data.action_url || null
+            action_url: safeActionUrl(data.action_url)
         };
 
         // Determine which transports to use

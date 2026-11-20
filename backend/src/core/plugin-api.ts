@@ -297,6 +297,23 @@ function lexSql(sql: string): { toks: SqlTok[]; cleaned: string } {
 // detector also matched WINDOW clauses and aliased-subquery column lists (#1/#2, rounds 5-7). So instead a
 // CTE reference must simply use the plugin's own wjp_<slug>_ prefix like any table — then it passes the
 // prefix check with no exemption at all.) Quoted-identifier tokens (q) are ALWAYS names, never keywords.
+// The object a CREATE/ALTER/DROP INDEX|VIEW|TRIGGER names, read from the TOKENS (a quoted name stays ONE
+// token, spaces and all, so it fails the identifier test instead of splitting into words). ['', kind, name] (regex-match shape) | null.
+function ddlObjectName(toks: SqlTok[]): [string, string, string] | null {
+    const w = (i: number) => (toks[i] && toks[i].k === 'w' && !toks[i].q ? toks[i].v : '');
+    if (!['create', 'alter', 'drop'].includes(w(0))) return null;
+    let i = 1;
+    if (w(i) === 'or' && w(i + 1) === 'replace') i += 2;
+    if (w(i) === 'temp' || w(i) === 'temporary') i++;
+    if (w(i) === 'unique') i++;
+    const kind = w(i);
+    if (!['index', 'view', 'trigger'].includes(kind)) return null;
+    i++;
+    if (w(i) === 'if') { i++; if (w(i) === 'not') i++; if (w(i) === 'exists') i++; }
+    const t = toks[i];
+    return ['', kind, t && t.k === 'w' ? t.v : '(none)'];
+}
+
 function collectTableTokens(toks: SqlTok[]): string[] {
     // `straight_join` is MySQL/MariaDB's single-token inner-join operator — it introduces a table exactly
     // like JOIN, but lexes as ONE word (the `_` is a word char), so it MUST be an opener or the right-hand
@@ -329,6 +346,12 @@ function collectTableTokens(toks: SqlTok[]): string[] {
     let parenTableList = false;
     let prevWord = '', prevPunct = '';
     let lastCaptured = '';
+    // The word right after an unquoted AS is an ALIAS — a name, whatever it spells. `FROM t AS offset, users`:
+    // read as the ENDER keyword OFFSET it disarmed the FROM list, so `, users` was never captured.
+    let afterAs = false;
+    // The slot opened by INSERT / REPLACE (MySQL lets both omit INTO: `INSERT users (…)`, `REPLACE options …`).
+    let insertSlot = false;
+    const INSERT_MODIFIERS = new Set(['into', 'ignore', 'low_priority', 'delayed', 'high_priority', 'or', 'replace', 'abort', 'fail', 'rollback']);
     // SQLite's `x IN tbl` names a table with no FROM. `IN (` is a list or a subquery, and `IN` inside these
     // functions' own syntax is not a table slot.
     const NOT_A_TABLE_IN = new Set(['position', 'against']);
@@ -336,9 +359,15 @@ function collectTableTokens(toks: SqlTok[]): string[] {
     let afterIn = false;
     const isCreateTable = toks.length > 1 && toks[0].k === 'w' && toks[0].v === 'create'
         && toks.slice(1, 4).some((x) => x.k === 'w' && !x.q && x.v === 'table');
-    for (const tk of toks) {
+    for (let ti = 0; ti < toks.length; ti++) {
+        const tk = toks[ti];
+        const next = toks[ti + 1];
+        // A keyword followed directly by a comma cannot be acting as that keyword (no ENDER takes a comma
+        // next): it is an alias, as in `FROM t offset, users` / `UPDATE t set, users SET …`.
+        const commaNext = !!next && next.k === 'p' && next.v === ',';
         if (tk.k === 'p') {
             prevPunct = tk.v;
+            afterAs = false;
             if (afterIn) { afterIn = false; expectTable = false; }
             if (tk.v === '(') fnStack.push(prevWord);
             else if (tk.v === ')') fnStack.pop();
@@ -356,17 +385,21 @@ function collectTableTokens(toks: SqlTok[]): string[] {
             if (tk.v === ',') { if (fromClause || listKind) expectTable = true; listAliased = false; continue; }
             continue;
         }
-        const quoted = tk.q === true; // a quoted identifier is a NAME, never a keyword/opener/ENDER
+        // A quoted identifier is a NAME, never a keyword/opener/ENDER — and so is the word right after AS.
+        const quoted = tk.q === true || afterAs;
+        afterAs = false;
         const t = tk.v;
         const before = prevWord;
         const afterPunct = prevPunct;
         prevWord = quoted ? '' : t; prevPunct = '';
         afterIn = false;
         if (expectTable) {
+            if (!quoted && insertSlot && INSERT_MODIFIERS.has(t)) continue;                  // INSERT [OR …] [IGNORE] INTO t
             if (!quoted && MODIFIERS.has(t)) continue;                                         // IF [NOT] EXISTS / ONLY / IGNORE …
             if (!quoted && OPENERS_FROM.has(t)) { fromClause = true; listKind = ''; continue; } // `DELETE FROM t` — the FROM list starts here
             if (!quoted && t === 'on') { expectTable = false; listKind = ''; continue; }      // `DELETE … ON` (an event, never a table)
-            if (!quoted && ENDERS.has(t)) { expectTable = false; fromClause = false; listKind = ''; continue; } // `(SELECT…/VALUES…)` = subquery, not a table
+            if (!quoted && ENDERS.has(t) && !commaNext) { expectTable = false; fromClause = false; listKind = ''; insertSlot = false; continue; } // `(SELECT…/VALUES…)` = subquery, not a table
+            insertSlot = false;
             out.push(t);                                                                       // CAPTURE — no exemption; the caller prefix-checks it
             lastCaptured = t;
             expectTable = false;
@@ -376,8 +409,8 @@ function collectTableTokens(toks: SqlTok[]): string[] {
         if (listKind) {
             // Only a comma continues a target list. UPDATE's target may carry an alias first (`UPDATE a x, b`);
             // anything else closes the list and is processed normally below.
-            if (listKind === 'update' && !listAliased && !quoted && t === 'as') continue;
-            if (listKind === 'update' && !listAliased && (quoted || !ENDERS.has(t)) && !OPENERS_FROM.has(t)) { listAliased = true; continue; }
+            if (listKind === 'update' && !listAliased && !quoted && t === 'as') { afterAs = true; continue; }
+            if (listKind === 'update' && !listAliased && (quoted || commaNext || !ENDERS.has(t)) && !OPENERS_FROM.has(t)) { listAliased = true; continue; }
             listKind = '';
         }
         if (!quoted && OPENERS_FROM.has(t)) { fromClause = true; expectTable = true; pendingList = ''; }
@@ -389,11 +422,17 @@ function collectTableTokens(toks: SqlTok[]): string[] {
         // template of `CREATE TABLE t (LIKE src …)` / MySQL `CREATE TABLE t LIKE src`.
         else if (!quoted && t === 'of' && before === 'partition') { expectTable = true; pendingList = ''; }
         else if (!quoted && t === 'inherits') { parenTableList = true; pendingList = ''; }
+        // `ALTER TABLE t [NO] INHERIT parent` (Postgres) names the parent table with no parens.
+        else if (!quoted && t === 'inherit') { expectTable = true; pendingList = ''; }
+        // `INSERT users (…)` / `REPLACE options SET …` (MySQL, INTO optional) — but not the REPLACE() function,
+        // `CREATE OR REPLACE`, nor a trigger's `AFTER INSERT` event.
+        else if (!quoted && (t === 'insert' || t === 'replace') && !EVENT_CONTEXT.has(before) && before !== 'row'
+            && !(next && next.k === 'p' && next.v === '(')) { expectTable = true; insertSlot = true; pendingList = ''; }
         else if (!quoted && t === 'like' && isCreateTable && (afterPunct === '(' || before === lastCaptured)) { expectTable = true; pendingList = ''; }
         else if (!quoted && t === 'in' && !NOT_A_TABLE_IN.has(fnStack[fnStack.length - 1] || '')) { expectTable = true; afterIn = true; pendingList = ''; }
         else if (!quoted && t === 'on') { expectTable = false; }                              // keep fromClause: `JOIN y ON a=b , z` — z is still a cross-join
-        else if (!quoted && t === 'as') { /* alias marker — ignore */ }
-        else if (!quoted && ENDERS.has(t)) { fromClause = false; expectTable = false; }
+        else if (!quoted && t === 'as') { afterAs = true; }                                   // the next word is an alias
+        else if (!quoted && ENDERS.has(t) && !(commaNext && fromClause)) { fromClause = false; expectTable = false; }
         // else (incl. ANY quoted token in a non-table slot = alias/column): ignore, and do NOT disarm fromClause
     }
     return out;
@@ -609,13 +648,17 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
         // <table>), a slot the generic walker does not read — and a trigger fires its body as part of every
         // write to that table. The first `ON` is that table; it must be one this plugin owns.
         if (/\bindex\b/.test(lower) || (isDdl && /^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)?\s+)?trigger\b/.test(lower))) {
-            const onTbl = lower.match(/\bon\s+([^\s(;,]+)/);
-            if (onTbl) assertOwned(onTbl[1], 'index/trigger target');
+            // From the TOKENS: the first UNQUOTED `on` word and the token after it. The cleaned text keeps a
+            // quoted identifier's content as plain words, so ``CREATE TRIGGER `x on wjp_me_t` … ON users``
+            // matched the `on` inside the quoted name and the real target was never checked.
+            const onAt = toks.findIndex((x) => x.k === 'w' && !x.q && x.v === 'on');
+            const onTok = onAt >= 0 ? toks[onAt + 1] : undefined;
+            if (onAt >= 0) assertOwned(onTok && onTok.k === 'w' ? onTok.v : '(none)', 'index/trigger target');
         }
         // INDEX / VIEW / TRIGGER object names (missed by the table matcher) must be prefixed too, else a
         // plugin squats an unprefixed object in the shared namespace or shadows another's — whether it is
         // created, replaced, altered or dropped.
-        const objName = lower.match(/^(?:create|alter|drop)\s+(?:or\s+replace\s+)?(?:temp(?:orary)?\s+)?(?:unique\s+)?(index|view|trigger)(?:\s+if\s+(?:not\s+)?exists)?\s+([^\s(;,]+)/);
+        const objName = ddlObjectName(toks);
         if (objName) {
             if (!/^[a-z_][a-z0-9_$.]*$/.test(objName[2]) || !objName[2].startsWith(tablePrefix)) {
                 throw new Error(`🛡️ Plugin DB access denied: ${objName[1] === 'index' ? 'index' : 'view/trigger'} name '${objName[2]}' must use the '${tablePrefix}' prefix.`);
@@ -624,6 +667,13 @@ function assertSqlAllowed(sql: string, allowedVerbs: string[], tablePrefix?: str
         }
     }
     return { owned };
+}
+
+/** createTable's statement, judged like any plugin DDL: ownership of the table and of every name the columns cite. */
+function assertCreateTableAllowed(name: string, columns: unknown, tablePrefix: string, slug: string): void {
+    const { buildCreateTable } = require('./safe-sql');
+    const sql = buildCreateTable(name, columns); // the exact text createPluginTable builds (it validates the form)
+    assertSqlAllowed(sql, ['create'], tablePrefix, slug);
 }
 
 // Confine a plugin-supplied relative path to its own dir or the uploads dir; realpath-checked.
@@ -930,6 +980,11 @@ function createPluginApi(slug: string) {
                 if (!String(name).toLowerCase().startsWith(tablePrefix)) {
                     throw new Error(`🛡️ Plugin tables must be named with the '${tablePrefix}' prefix (use wordjs.db.tablePrefix).`);
                 }
+                // The SAME rule every statement passes (assertSqlAllowed): the table must not belong to another
+                // plugin (recorded creator / longer claimed prefix), and whatever the column text names —
+                // REFERENCES, LIKE, a subquery in DEFAULT/CHECK — must be this plugin's own too, with no
+                // forbidden function. Only the CREATE TABLE statement itself is judged; nothing runs here.
+                assertCreateTableAllowed(String(name).toLowerCase(), columns, tablePrefix, slug);
                 const { createPluginTable } = require('../config/database');
                 const r = await createPluginTable(name, columns);
                 recordTableCreator(name, slug); // authoritative creator record (#12)
@@ -1328,4 +1383,4 @@ function createPluginApi(slug: string) {
 // projectUser / projectUserFor are exported for TESTS only: projectUserFor is one of the two wires carrying
 // an account's grants to a plugin, and asserting the real function is what makes that wire load-bearing
 // (a suite that hand-builds the projection stays green when the field is deleted).
-module.exports = { createPluginApi, isProtectedOption, PROTECTED_OPTION_NAMES, projectUser, projectUserFor, assertSqlAllowed, isTableOwnedBy };
+module.exports = { createPluginApi, isProtectedOption, PROTECTED_OPTION_NAMES, projectUser, projectUserFor, assertSqlAllowed, assertCreateTableAllowed, isTableOwnedBy };

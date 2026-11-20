@@ -177,6 +177,17 @@ function translateSql(sql: string): string {
  * better-sqlite3's lastInsertRowid, which is only meaningful for rowid (id-bearing) inserts; returns 0
  * for composite/no-id inserts so callers must use `changes`/explicit RETURNING instead.
  */
+/**
+ * Give back a client that ran under a plugin role. RESET ROLE first; if that fails the session may still be
+ * the plugin's role (or in an aborted state), so the client is DESTROYED (release(err)) rather than returned to
+ * the pool, where the next caller would run with that role's — or worse, a stale — identity.
+ */
+async function releaseAfterRole(client: any): Promise<void> {
+    let failure: Error | undefined;
+    try { await client.query('RESET ROLE'); } catch (e: any) { failure = e instanceof Error ? e : new Error(String(e)); }
+    client.release(failure);
+}
+
 function extractLastId(rows: any[]): any {
     if (rows && rows.length > 0) {
         const firstRow = rows[0];
@@ -528,13 +539,14 @@ class PostgresDriver extends DatabaseDriverInterface {
             if (method === 'run' && /^\s*INSERT\s+/i.test(normalizedSql) && !/RETURNING\s+/i.test(normalizedSql)) {
                 normalizedSql += ' RETURNING *';
             }
-            const res = await client.query(normalizedSql, params);
+            // EXTENDED protocol even without params: the simple protocol (pg's default for a query with no
+            // values) runs several `;`-separated statements, extended runs exactly one.
+            const res = await client.query({ text: normalizedSql, values: params, queryMode: 'extended' } as any);
             if (method === 'all') return res.rows;
             if (method === 'get') return res.rows[0];
             return { lastID: extractLastId(res.rows), changes: res.rowCount };
         } finally {
-            try { await client.query('RESET ROLE'); } catch { /* the client is discarded on release anyway */ }
-            client.release();
+            await releaseAfterRole(client);
         }
     }
     /** Create the plugin's role (idempotent). Runs as the admin pool user (needs CREATEROLE). */
@@ -597,11 +609,10 @@ class PostgresDriver extends DatabaseDriverInterface {
         const client = await this.pool.connect();
         try {
             await client.query(`SET ROLE ${r}`);
-            const res = await client.query(this.normalizeSql(translateSql(sql)), params);
+            const res = await client.query({ text: this.normalizeSql(translateSql(sql)), values: params, queryMode: 'extended' } as any);
             return { lastID: 0, changes: res.rowCount || 0 };
         } finally {
-            try { await client.query('RESET ROLE'); } catch { /* the client is discarded on release anyway */ }
-            client.release();
+            await releaseAfterRole(client);
         }
     }
     /**

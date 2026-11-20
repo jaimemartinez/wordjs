@@ -1271,7 +1271,7 @@ function assignProcessToJobObject(pid: number, limitBytes: number): Promise<bool
         let ps: any;
         try {
             const b64 = Buffer.from(buildJobCapScript(pid, limitBytes), 'utf16le').toString('base64'); // -EncodedCommand = UTF-16LE b64 (no quoting pitfalls)
-            ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', b64], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
+            ps = spawn(require('./sandbox-windows').POWERSHELL_EXE, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', b64], { windowsHide: true, stdio: ['ignore', 'pipe', 'ignore'] });
         } catch { return resolve(false); }
         let out = '';
         try { ps.stdout.on('data', (d: any) => { out += String(d); }); } catch { /* */ }
@@ -1749,7 +1749,7 @@ function probePlatformConfinement(): Promise<ConfinementState> {
  */
 async function launchAppContainerChild(slug: string, siteId: number, appRoot: string, io: {
     args: string[]; env: Record<string, string>; stdio: any; allowNetwork: boolean; allowPrivateNetwork: boolean;
-    zones: { traverse: string[]; readExec: string[]; write: string[] };
+    zones: { traverse: string[]; readExec: string[]; write: string[]; storage?: string[] };
 }): Promise<{ child: any; containedPid: number | null }> {
     const win = require('./sandbox-windows');
     // A SID is derived from the install, the worker (site + slug) and a per-install generation. Sharing
@@ -1762,12 +1762,13 @@ async function launchAppContainerChild(slug: string, siteId: number, appRoot: st
     // What the policy no longer includes is taken back FIRST (a withdrawn filesystem grant, a folder that
     // became read-only); the grants below then add exactly the current shapes.
     await win.revokeZonesOutsidePolicy(sid, appRoot, slug, siteId, zones);
-    const grant = async (dirs: string[], mode: 'traverse' | 'rx' | 'full') => {
+    const grant = async (dirs: string[], mode: 'traverse' | 'rx' | 'ro' | 'full') => {
         const ok = await win.grantAppContainerAccess(sid, dirs, mode);
         if (!ok) throw new Error(`could not grant AppContainer ${mode} access to ${dirs.join(', ')}`);
     };
     await grant(zones.traverse, 'traverse');
     await grant(zones.readExec, 'rx');
+    if (zones.readOnly.length) await grant(zones.readOnly, 'ro');
     await grant(zones.write, 'full');
     const runtimeExe = await win.ensureAppContainerRuntime(sid);
     const r = await win.launchInAppContainer({ sid, exe: runtimeExe, args: io.args, cwd: appRoot, env: io.env, stdio: io.stdio, allowNetwork: io.allowNetwork, allowPrivateNetwork: io.allowPrivateNetwork });
@@ -1781,10 +1782,19 @@ async function launchAppContainerChild(slug: string, siteId: number, appRoot: st
  * shape's cache marker invalidated the other's, so both were redone, launch after launch. The writable
  * shape already includes read, so a write zone is granted `full` only.
  */
-function appContainerLaunchZones(z: { traverse: string[]; readExec: string[]; write: string[] }): { traverse: string[]; readExec: string[]; write: string[] } {
+function appContainerLaunchZones(z: { traverse: string[]; readExec: string[]; write: string[]; storage?: string[] }): { traverse: string[]; readExec: string[]; write: string[]; readOnly: string[] } {
     const key = (d: string) => path.resolve(d).toLowerCase();
     const writes = new Set(z.write.map(key));
-    return { traverse: z.traverse, readExec: z.readExec.filter((d) => !writes.has(key(d))), write: z.write };
+    // The plugin's private storage, when it may only READ it, is granted read without execute: what it wrote
+    // there while it held the write grant must not become runnable code (see the 'ro' ACL mode).
+    const storage = new Set((z.storage || []).map(key));
+    const readable = z.readExec.filter((d) => !writes.has(key(d)));
+    return {
+        traverse: z.traverse,
+        readExec: readable.filter((d) => !storage.has(key(d))),
+        write: z.write,
+        readOnly: readable.filter((d) => storage.has(key(d))),
+    };
 }
 
 // Per-plugin permission grant check (Android-style, default-deny). No plugin bypasses the sandbox:
@@ -2274,8 +2284,9 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
             // Read roots get the same treatment for the same reason (the shim fails closed on a read root
             // it cannot grant). Both entries below normally exist, so this only bites a broken install —
             // where a missing required runtime root means the child could not have loaded anyway.
-            const runtimePrefix = path.dirname(path.dirname(process.execPath));
-            const roots = [...sandboxReadable, ...tsNodeProjectFiles, ...(runtimePrefix.split(path.sep).filter(Boolean).length >= 2 ? [runtimePrefix] : [])]
+            const homeDir: string = (() => { try { return require('os').homedir() || ''; } catch { return ''; } })();
+            const runtimeRoots = lz.linuxRuntimeRoots(process.execPath, APP_ROOT, homeDir);
+            const roots = [...sandboxReadable, ...tsNodeProjectFiles, ...runtimeRoots]
                 .filter((d) => { try { const st = fsx.statSync(d); return st.isDirectory() || st.isFile(); } catch { return false; } });
             if (!zones.length) {
                 // Every zone gone is not a tighter sandbox, it is an unlaunchable one: the plugin could
@@ -2385,7 +2396,7 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                 // host egress tunnel, so no Windows setting is involved.
                 allowNetwork: false,
                 allowPrivateNetwork: false,
-                zones: { traverse: nativePaths.traverse, readExec: sandboxReadable, write: sandboxWritable },
+                zones: { traverse: nativePaths.traverse, readExec: sandboxReadable, write: sandboxWritable, storage: nativePaths.storage },
             });
         } catch (e: any) {
             if (requireNativeSandbox) {
@@ -2938,19 +2949,39 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
         // memory-capped on its own side, so this is the second bound). Cheap size check for string/
         // buffer replies; object replies are bounded by the worker's memory watchdog.
         const MAX_REPLY_BYTES = 32 * 1024 * 1024;
-        const replySize = (v: any, maxNodes = 5_000_000): number => {
+        const replySize = (v: any, maxNodes = 1_000_000): number => {
             if (typeof v === 'string') return Buffer.byteLength(v);
-            if (Buffer.isBuffer(v) || v instanceof Uint8Array) return (v as any).byteLength || (v as any).length || 0;
+            // Binary data counts its real size wherever it sits — an ArrayBuffer, a view (Buffer, typed array,
+            // DataView: the bytes it covers) — at the top OR nested. Nested binary, Map and Set values used to
+            // measure as a few bytes, so a reply carrying 80 MB inside them passed the cap.
+            const binarySize = (x: any): number => {
+                if (x instanceof ArrayBuffer || (typeof SharedArrayBuffer !== 'undefined' && x instanceof SharedArrayBuffer)) return x.byteLength;
+                if (ArrayBuffer.isView(x)) return x.byteLength;
+                return -1;
+            };
+            const top = binarySize(v);
+            if (top >= 0) return top;
             if (v && typeof v === 'object') {
                 // Bounded structural estimate so a giant nested object/array reply ALSO trips the cap
                 // (it was already structured-cloned onto the host; we reject + recycle to stop repeats).
+                // Each object is visited once: the advanced serialization keeps references, so a cycle (or a
+                // shared sub-tree) is one node, not an endless walk.
                 let bytes = 0, n = 0;
+                const seen = new Set<any>();
                 const stack: any[] = [v];
                 while (stack.length) {
                     const cur = stack.pop();
                     if (++n > maxNodes) return Number.MAX_SAFE_INTEGER; // pathological node count → over budget
                     if (typeof cur === 'string') bytes += cur.length;
-                    else if (cur && typeof cur === 'object') { for (const k in cur) stack.push((cur as any)[k]); bytes += 16; }
+                    else if (cur && typeof cur === 'object') {
+                        if (seen.has(cur)) continue;
+                        seen.add(cur);
+                        const bin = binarySize(cur);
+                        if (bin >= 0) bytes += bin;
+                        else if (cur instanceof Map) { for (const [k, val] of cur) { stack.push(k); stack.push(val); } bytes += 16; }
+                        else if (cur instanceof Set) { for (const val of cur) stack.push(val); bytes += 16; }
+                        else { for (const k of Object.keys(cur)) { bytes += k.length; stack.push((cur as any)[k]); } bytes += 16; }
+                    }
                     else bytes += 8;
                     if (bytes > MAX_REPLY_BYTES) return bytes;
                 }
@@ -3391,7 +3422,12 @@ async function startIsolate(slug: string, siteId: number, entryFile: string, opt
                                 if (!name.startsWith(cookieNs)) name = cookieNs + name;
                                 options.path = `/api/v1/plugin/${slug.replace('theme:', 'theme-')}`;
                                 const MAX_AGE = 7 * 24 * 3600 * 1000;
-                                if (typeof options.maxAge === 'number' && options.maxAge > MAX_AGE) options.maxAge = MAX_AGE;
+                                // Express also accepts a numeric STRING ('99999999999'), which skipped a numbers-only clamp.
+                                if (options.maxAge !== undefined) {
+                                    const age = Number(options.maxAge);
+                                    if (!Number.isFinite(age) || age < 0) delete options.maxAge;
+                                    else options.maxAge = Math.min(age, MAX_AGE);
+                                }
                                 if (c.clear) res.clearCookie(name, options);
                                 else res.cookie(name, c.value, options);
                             }

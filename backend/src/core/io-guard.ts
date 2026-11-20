@@ -690,6 +690,8 @@ function isModuleResolutionRead(resolved: string, ownDir: string): boolean {
 /** Test/host hook: drop the cached manifest declaration for a slug (install/update rewrites it). */
 function forgetDeclaredPermissions(pluginSlug?: string): void {
     if (pluginSlug) _manifestPermCache.delete(pluginSlug); else _manifestPermCache.clear();
+    // The bridge's permission check (plugin-context) keeps its own copy of the manifest: same moment, same drop.
+    try { require('./plugin-context').forgetPluginDeclaration(pluginSlug); } catch { /* not loaded yet */ }
 }
 
 /**

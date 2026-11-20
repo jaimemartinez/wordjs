@@ -65,6 +65,10 @@ const PROVIDER_PUBLISHED_OPTIONS = new Set(['mail_domain', 'mail_delivery_ready'
 const CORE_OPTION_NAMES = new Set([
     'require_email_verification', 'comment_registration', 'comment_moderation', 'comments_notify', 'moderation_notify',
     'upload_max_size_mb', 'graphql_introspection', 'mail_domain', 'mail_delivery_ready', 'users_can_register', 'default_role',
+    // Backups, the cache and certificates: a plugin whose slug spells the start of one (backup, auto, redis,
+    // acme) would otherwise own it as `<slug>_…`. Named one by one: `acme-shop`'s `acme_shop_…` stays its own.
+    'auto_backup', 'backup_schedule', 'backup_retention', 'backup_time', 'backup_day', 'backup_failed',
+    'redis_cache_enabled', 'acme_last_renewal',
 ]);
 const CORE_OPTION_PREFIXES = ['media_storage_', 'audit_', 'account_mail_', 'email_'];
 

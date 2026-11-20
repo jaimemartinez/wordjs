@@ -42,7 +42,7 @@ test('the probe protects the secrets first and requires an install-root canary t
     assert.match(src, /if \(!netDenied \|\| !readDenied \|\| !execDenied \|\| !canWork \|\| !secretDenied\)/);
     const script = String(sw.__buildSecretAclScript());
     assert.match(script, /\$groups = @\('S-1-15-2-1', 'S-1-15-2-2'\)/);
-    assert.match(script, / {4}\$null = & icacls \$p \/inheritance:d \/C \/Q\n {4}\$null = & icacls \$p \/remove:g \*S-1-15-2-1 \*S-1-15-2-2 \/C \/Q\n/,
+    assert.match(script, / {4}\$null = & \$IcaclsExe \$p \/inheritance:d \/C \/Q\n {4}\$null = & \$IcaclsExe \$p \/remove:g \*S-1-15-2-1 \*S-1-15-2-2 \/C \/Q\n/,
         'the two groups\' entries are removed: a deny entry for them is not honoured by the AppContainer check');
     assert.doesNotMatch(script, /\/deny/, 'and no deny entry is relied on');
     assert.match(String(sw.__probeChildSource), /WJS_PROBE_SECRET/);

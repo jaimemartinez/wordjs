@@ -65,6 +65,12 @@ function currentOwner(): string | null {
  */
 function addShortcode(tag: string, callback: (...args: any[]) => any) {
     const owner = currentOwner();
+    // The tag becomes part of the matching pattern for EVERY post: a non-string threw on each render and an
+    // empty one matched every `[`. Letters, digits, `_` and `-`, starting with a letter (WordPress' alphabet).
+    if (typeof tag !== 'string' || !/^[A-Za-z][A-Za-z0-9_-]{0,63}$/.test(tag)) {
+        log.warn(`[Security Block] ${owner === null ? 'Core' : `Plugin '${owner}'`} tried to register an invalid shortcode tag — refused.`);
+        return;
+    }
     if (owner === null) {
         coreShortcodes.set(tag, callback);
         return;

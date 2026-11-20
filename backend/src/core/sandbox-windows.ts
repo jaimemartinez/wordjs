@@ -104,6 +104,14 @@ const { sandboxPaths, siteStorageSlug } = require('./sandbox-paths');
 const log = require('./module-logger').moduleLogger('core/sandbox-windows');
 
 /** Strip line breaks before a value reaches a log line (same reason as plugin-isolate's logSafe). */
+// The Windows tools this module runs, by their full System32 path: a bare name resolves through the
+// working directory and PATH first, so a file of that name in either would run in their place.
+const SYSTEM32 = require('path').join(process.env.SystemRoot || process.env.windir || 'C:\\Windows', 'System32');
+const POWERSHELL_EXE = require('path').join(SYSTEM32, 'WindowsPowerShell', 'v1.0', 'powershell.exe');
+const TASKKILL_EXE = require('path').join(SYSTEM32, 'taskkill.exe');
+// Inside the generated PowerShell: the same full path for icacls (set by every script that calls it).
+const ICACLS_PS = "$IcaclsExe = Join-Path $env:SystemRoot 'System32\\icacls.exe'";
+
 function logSafe(v: any): string {
     return String(v == null ? '' : v).replace(/\n/g, '').replace(/\r/g, '');
 }
@@ -340,7 +348,7 @@ function runPowerShellWithEnv(script: string, extra: Record<string, string>, tim
         let ps: any;
         try {
             const b64 = Buffer.from(script, 'utf16le').toString('base64');
-            ps = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', b64],
+            ps = spawn(POWERSHELL_EXE, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-EncodedCommand', b64],
                 { windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'], env: { ...launcherEnv(), ...extra } });
         } catch { return resolve({ code: -1, out: '' }); }
         let out = '';
@@ -365,7 +373,7 @@ function runPowerShellWithEnv(script: string, extra: Record<string, string>, tim
 /** taskkill /T /F: the process and every descendant. Synchronous and bounded; a missing pid is a no-op. */
 function killProcessTree(pid: number | undefined | null): void {
     if (!pid || process.platform !== 'win32') return;
-    try { spawnSync('taskkill.exe', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 15000 }); } catch { /* already gone */ }
+    try { spawnSync(TASKKILL_EXE, ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore', timeout: 15000 }); } catch { /* already gone */ }
 }
 
 /**
@@ -398,7 +406,7 @@ function launcherEnv(): Record<string, string> {
 
 // 'revoke-deep' is the one-time cleanup of a zone granted by an earlier release, whose recursive (/T) rx
 // grant stamped an EXPLICIT ACE on every sub-folder (see the revoke below). Only retirement uses it.
-type AclMode = 'traverse' | 'rx' | 'full' | 'revoke' | 'revoke-deep';
+type AclMode = 'traverse' | 'rx' | 'ro' | 'full' | 'revoke' | 'revoke-deep';
 type GrantMode = Exclude<AclMode, 'revoke' | 'revoke-deep'>;
 /** The PowerShell line that verifies a batch entry after icacls ran (see the read-back in buildIcaclsScript). */
 function aclReadbackCheck(mode: AclMode): string {
@@ -418,19 +426,24 @@ function buildIcaclsScript(mode: AclMode): string {
         // two passes, and past the 120 s timeout on a OneDrive checkout — every plugin update waited two
         // minutes. Root-only takes ~5 s on the same tree, measured.
         ? [
-            "  $null = & icacls $d /remove:g \"*${sid}\" /C /Q",
+            "  $null = & $IcaclsExe $d /remove:g \"*${sid}\" /C /Q",
             "  if ($LASTEXITCODE -ne 0) { $fail++; continue }",
-            "  $null = & icacls $d /remove:d \"*${sid}\" /C /Q",
+            "  $null = & $IcaclsExe $d /remove:d \"*${sid}\" /C /Q",
         ]
         : mode === 'revoke-deep'
             // A zone granted by a release before this one: its rx grant used /T, which stamps an EXPLICIT
             // (non-inherited) ACE on every sub-folder — a root-only revoke would leave those, and their
             // descendants would keep access. Only retirement runs this, once per such zone.
             ? [
-                "  $null = & icacls $d /remove:g \"*${sid}\" /T /C /Q",
+                "  $null = & $IcaclsExe $d /remove:g \"*${sid}\" /T /C /Q",
                 "  if ($LASTEXITCODE -ne 0) { $fail++; continue }",
-                "  $null = & icacls $d /remove:d \"*${sid}\" /T /C /Q",
+                "  $null = & $IcaclsExe $d /remove:d \"*${sid}\" /T /C /Q",
             ]
+        : mode === 'ro'
+            // READ, NEVER EXECUTE: a plugin's private storage once its write grant is gone. (OI)(CI)(RX) would
+            // make every file it wrote there earlier executable; folders get RX (list + traverse), files
+            // only R. Root-only and inheritable like rx, so a root-only revoke takes it all back.
+            ? ["  $null = & $IcaclsExe $d /grant:r \"*${sid}:(CI)(RX)\" \"*${sid}:(OI)(IO)(R)\" /C /Q"]
         : mode === 'traverse'
             // TRAVERSE-ONLY, not (RX). The simple right RX = FILE_GENERIC_READ|FILE_GENERIC_EXECUTE, and on a
             // DIRECTORY FILE_GENERIC_READ includes FILE_LIST_DIRECTORY (0x1) — so (RX) let a plugin ENUMERATE
@@ -439,34 +452,35 @@ function buildIcaclsScript(mode: AclMode): string {
             // full grants on specific children, which needs FILE_TRAVERSE (X) plus attribute reads to stat a
             // KNOWN path — never FILE_LIST_DIRECTORY. Grant exactly that: RA/REA (stat), RC/S, X (traverse),
             // and deliberately NOT RD (list) or read-data. (adversarial-audit: AppContainer traverse enumerates)
-            ? ["  $null = & icacls $d /grant:r \"*${sid}:(RA,REA,RC,S,X)\" /C /Q"]
+            ? ["  $null = & $IcaclsExe $d /grant:r \"*${sid}:(RA,REA,RC,S,X)\" /C /Q"]
             : mode === 'rx'
                 // ROOT-ONLY, inheritable: Windows propagates it to every descendant that inherits, as
                 // INHERITED copies, so a root-only revoke takes them all back. /T stamped an explicit ACE on
                 // each sub-folder instead (17 s on node_modules versus 2.8 s, measured), which no root-only
                 // revoke can reach. It also reaches files an update moved in by rename.
-                ? ["  $null = & icacls $d /grant:r \"*${sid}:(OI)(CI)(RX)\" /C /Q"]
+                ? ["  $null = & $IcaclsExe $d /grant:r \"*${sid}:(OI)(CI)(RX)\" /C /Q"]
                 : [
                     // Remove earlier recursive Full/Modify ACEs first. The new authority is inherited
                     // from the zone root and splits containers from files: directories need X to
                     // traverse, while files deliberately never receive X. Modify excludes WRITE_DAC and
                     // WRITE_OWNER, so the child cannot remove or widen this policy itself.
-                    "  $null = & icacls $d /remove:g \"*${sid}\" /T /C /Q",
+                    "  $null = & $IcaclsExe $d /remove:g \"*${sid}\" /T /C /Q",
                     "  if ($LASTEXITCODE -ne 0) { $fail++; continue }",
-                    "  $null = & icacls $d /remove:d \"*${sid}\" /T /C /Q",
+                    "  $null = & $IcaclsExe $d /remove:d \"*${sid}\" /T /C /Q",
                     "  if ($LASTEXITCODE -ne 0) { $fail++; continue }",
-                    "  $null = & icacls $d /grant:r \"*${sid}:(CI)(M)\" \"*${sid}:(OI)(CI)(IO)(RD,WD,AD,REA,WEA,RA,WA,DE,RC,S)\" /C /Q",
+                    "  $null = & $IcaclsExe $d /grant:r \"*${sid}:(CI)(M)\" \"*${sid}:(OI)(CI)(IO)(RD,WD,AD,REA,WEA,RA,WA,DE,RC,S)\" /C /Q",
                     // OWNER RIGHTS (S-1-3-4) on what is created below the root: the owner of a file the child
                     // creates gets these rights INSTEAD of the implicit READ_CONTROL + WRITE_DAC, so being
                     // the owner never lets anyone rewrite that file's DACL (to open it to other containers).
                     "  if ($LASTEXITCODE -ne 0) { $fail++; continue }",
-                    "  $null = & icacls $d /grant \"*S-1-3-4:(OI)(CI)(IO)(M)\" /C /Q",
+                    "  $null = & $IcaclsExe $d /grant \"*S-1-3-4:(OI)(CI)(IO)(M)\" /C /Q",
                 ];
     const script = [
         "$ErrorActionPreference='Continue'",
         "$sid = $env:WJS_AC_SID",
         "$dirs = [Text.Encoding]::UTF8.GetString([Convert]::FromBase64String($env:WJS_AC_DIRS_B64)) -split \"`n\" | Where-Object { $_.Length -gt 0 }",
         "$fail = 0; $skip = 0",
+        ICACLS_PS,
         "foreach ($d in $dirs) {",
         // A zone that does not exist on this install is SKIPPED, never fatal -- the same tolerance
         // Missing optional uploads/logs zones are skipped rather than making the launch fail.
@@ -609,7 +623,7 @@ function writeAclMarker(sid: string, dir: string, mode: GrantMode): void {
 
 function removeAclMarkers(sid: string, dir: string, versions: string[] = [ACL_CACHE_VERSION]): void {
     for (const version of versions) {
-        for (const mode of ['traverse', 'rx', 'full'] as const) {
+        for (const mode of ['traverse', 'rx', 'ro', 'full'] as const) {
             // Markers for the directory's CURRENT identity. A directory that is already gone has no current
             // identity and therefore no reachable marker: anything left in the cache is keyed on an identity
             // that can never recur, so it is inert rather than stale. Missing is a no-op, never a throw.
@@ -729,7 +743,7 @@ async function grantAppContainerAccess(sid: string, dirs: string[], mode: AclMod
             for (const dir of pending) {
                 writeAclMarker(sid, dir, mode as GrantMode);
                 // The real ACE was replaced, so an alternate-shape marker is now stale.
-                for (const other of ['traverse', 'rx', 'full'] as const) {
+                for (const other of ['traverse', 'rx', 'ro', 'full'] as const) {
                     if (other === mode) continue;
                     const stale = aclMarkerPath(sid, dir, other);
                     if (stale === null) continue;
@@ -1144,7 +1158,7 @@ async function launchInAppContainer(opts: LaunchOpts): Promise<LaunchResult> {
     // relay looks for it. A caller that omits it gets a child with no `process.send`, which the probe
     // would (correctly) call not-active.
     const stdio = opts.stdio || ['ignore', 'pipe', 'pipe', 'ipc'];
-    const child = spawn('powershell.exe', ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', relayScript], {
+    const child = spawn(POWERSHELL_EXE, ['-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', relayScript], {
         windowsHide: true,
         stdio,
         serialization: 'advanced',
@@ -1405,13 +1419,14 @@ function buildSecretAclScript(): string {
         "  }",
         "  return $false",
         "}",
+        ICACLS_PS,
         "foreach ($p in $paths) {",
         "  if (-not (Exposed $p)) { continue }",
         "  if ($env:WJS_AC_PROTECT -eq '1') {",
         // Inherited entries become explicit copies on this path, then both groups' entries are removed;
         // Windows re-propagates the result to everything below that inherits from it.
-        "    $null = & icacls $p /inheritance:d /C /Q",
-        `    $null = & icacls $p /remove:g ${ALL_APP_PACKAGES.map((g) => `*${g}`).join(' ')} /C /Q`,
+        "    $null = & $IcaclsExe $p /inheritance:d /C /Q",
+        `    $null = & $IcaclsExe $p /remove:g ${ALL_APP_PACKAGES.map((g) => `*${g}`).join(' ')} /C /Q`,
         "    if (-not (Exposed $p)) { Write-Output ('PROTECTED ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($p))); continue }",
         "  }",
         "  Write-Output ('EXPOSED ' + [Convert]::ToBase64String([Text.Encoding]::UTF8.GetBytes($p)))",
@@ -1665,8 +1680,9 @@ function workerZoneCandidates(appRoot: string, slug: string, siteId: number = 1)
         ...p.traverse.map((dir: string) => ({ dir, mode: 'traverse' as const })),
         ...p.readOnly.map((dir: string) => ({ dir, mode: 'rx' as const })),
         { dir: p.own, mode: 'full' as const },
-        // Private storage is granted rx (readable) or full (writable), depending on the plugin's grants.
-        ...[...p.writable, ...p.storage].flatMap((dir: string) => [{ dir, mode: 'rx' as const }, { dir, mode: 'full' as const }]),
+        // Private storage is granted ro (readable, read-only plugins), full (writable) — or rx by releases
+        // before ro existed — depending on the plugin's grants.
+        ...[...p.writable, ...p.storage].flatMap((dir: string) => [{ dir, mode: 'rx' as const }, { dir, mode: 'ro' as const }, { dir, mode: 'full' as const }]),
     ];
 }
 
@@ -1768,11 +1784,12 @@ async function launchProfileNameFor(appRoot: string, slug: string, siteId: numbe
  * includes - the private storage of a plugin whose filesystem grant was withdrawn, a writable shape that
  * became read-only. Without it a narrowed policy only narrowed the JavaScript guard.
  */
-async function revokeZonesOutsidePolicy(sid: string, appRoot: string, slug: string, siteId: number, current: { traverse: string[]; readExec: string[]; write: string[] }): Promise<string[]> {
+async function revokeZonesOutsidePolicy(sid: string, appRoot: string, slug: string, siteId: number, current: { traverse: string[]; readExec: string[]; write: string[]; readOnly?: string[] }): Promise<string[]> {
     if (profileApi.platform() !== 'win32') return [];
     const want = new Set<string>([
         ...current.traverse.map((d) => `traverse\0${aclTarget(d).toLowerCase()}`),
         ...current.readExec.map((d) => `rx\0${aclTarget(d).toLowerCase()}`),
+        ...(current.readOnly || []).map((d) => `ro\0${aclTarget(d).toLowerCase()}`),
         ...current.write.map((d) => `full\0${aclTarget(d).toLowerCase()}`),
     ]);
     const stale = Array.from(new Map(workerZoneCandidates(appRoot, slug, siteId)
@@ -1814,6 +1831,7 @@ async function refreshPluginDirGrants(appRoot: string, slug: string, siteIds: nu
 }
 
 module.exports = {
+    POWERSHELL_EXE,
     refreshPluginDirGrants,
     launchProfileNameFor,
     revokeZonesOutsidePolicy,

@@ -248,6 +248,23 @@ export type ShimArgsOptions = {
  * rejected the result carries none, and the shim then fails closed with exit 79 rather than launching a
  * child with a confinement nobody can describe.
  */
+/**
+ * The read roots for the Node runtime itself: `dirname(dirname(execPath))`, the install's prefix — but never
+ * the home directory or one of its ancestors (`/home/u/bin/node` made the whole home readable), never the
+ * application root or one of ITS ancestors (a node inside the app would open its config), and for a shared
+ * package prefix (/usr/local, /opt, …) only the parts a runtime needs, not every other package's data.
+ * When the prefix itself is refused, the binary's own directory is granted so the child still boots.
+ */
+function linuxRuntimeRoots(execPath: string, appRoot: string, homeDir: string): string[] {
+    const prefix = pathl.dirname(pathl.dirname(execPath));
+    const within = (child: string, parent: string) => !!parent && (child === parent || child.startsWith(parent.endsWith('/') ? parent : parent + '/'));
+    if (prefix.split('/').filter(Boolean).length < 2) return [];
+    if ((homeDir && within(homeDir, prefix)) || (appRoot && within(appRoot, prefix))) return [pathl.dirname(execPath)];
+    const SHARED = new Set(['/usr/local', '/opt/local', '/opt/homebrew', '/usr/lib', '/usr/share']);
+    if (SHARED.has(prefix)) return [`${prefix}/bin`, `${prefix}/lib`];
+    return [prefix];
+}
+
 function shimArgs(opts: ShimArgsOptions): string[] {
     const zones = uniq((Array.isArray(opts && opts.zone) ? (opts.zone as string[]) : [(opts && opts.zone) as string])
         .map((z) => shimPath(z))
@@ -593,7 +610,8 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
         // would be unreadable and the child would never boot. `dirname(dirname(execPath))` is that
         // prefix; for a /usr/bin/node it lands on /usr, which the shim grants anyway, so the entry is
         // harmless where it is redundant and load-bearing where it is not.
-        const nodePrefix = pathl.dirname(pathl.dirname(process.execPath));
+        const homeDir: string = (() => { try { return require('os').homedir() || ''; } catch { return ''; } })();
+        const runtimeRoots = linuxRuntimeRoots(process.execPath, pathl.resolve(__dirname, '..', '..'), homeDir);
 
         try {
             unixServer = require('net').createServer((socket: any) => socket.end());
@@ -640,8 +658,9 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
             const pre = [PERL_BIN, ...shimArgs({
                 zone: [zone as string],
                 denyNetwork: true,
-                readRoot: [zone as string, coreRoot as string, exactFile, ...(nodePrefix.split(pathl.sep).filter(Boolean).length >= 2 ? [nodePrefix] : [])],
-                execRoot: [process.execPath, PERL_BIN],
+                readRoot: [zone as string, coreRoot as string, exactFile, ...runtimeRoots],
+                // The probe's child is node, exactly as a real launch: perl runs BEFORE the shim confines.
+                execRoot: [process.execPath],
                 nodeArgs: [],
             })];
             const confined = await runProbeChild(pre, inside, outside, true, unixPath, exactFile, siblingFile, 25000, extra);
@@ -734,6 +753,7 @@ function probeLinuxZeroConf(): Promise<'active' | 'degraded' | 'unsupported' | '
 }
 
 module.exports = {
+    linuxRuntimeRoots,
     PERL_BIN,
     SHIM_PATH,
     SHIM_EXIT,

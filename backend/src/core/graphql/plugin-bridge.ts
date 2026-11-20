@@ -55,6 +55,36 @@ function validPath(p: unknown): p is string {
 }
 
 /**
+ * What a plugin's SDL may contain: NEW types of its own, and `extend type Query` adding exactly the fields
+ * it routes (its `fields` keys). Nothing that changes what already exists — extending another type, input,
+ * enum, interface, union or scalar (one required field on a core input type broke every mutation that
+ * takes it), a schema definition, or a directive. Returns the reason, or null when the shape is allowed.
+ */
+function sdlShapeProblem(typeDefs: string, fieldKeys: string[]): string | null {
+    let doc: any;
+    try { doc = require('graphql').parse(typeDefs, { noLocation: true }); } catch (e: any) { return `\`typeDefs\` is not valid SDL (${String(e && e.message).slice(0, 120)})`; }
+    const declared = new Set(fieldKeys.map((k) => k.replace(/^Query\./, '')));
+    const NEW_TYPES = new Set(['ObjectTypeDefinition', 'InputObjectTypeDefinition', 'EnumTypeDefinition', 'InterfaceTypeDefinition', 'UnionTypeDefinition', 'ScalarTypeDefinition']);
+    for (const d of doc.definitions || []) {
+        if (NEW_TYPES.has(d.kind)) {
+            if (d.name && ['Query', 'Mutation', 'Subscription'].includes(d.name.value)) return `\`${d.name.value}\` cannot be redefined — use \`extend type Query\``;
+            continue;
+        }
+        if (d.kind === 'ObjectTypeExtension' && d.name && d.name.value === 'Query') {
+            if (d.interfaces && d.interfaces.length) return '`extend type Query` cannot add interfaces';
+            if (d.directives && d.directives.length) return '`extend type Query` cannot add directives';
+            for (const f of d.fields || []) {
+                if (!declared.has(f.name.value)) return `"Query.${f.name.value}" is added by the SDL but not routed in \`fields\``;
+            }
+            continue;
+        }
+        const what = d.name && d.name.value ? `${d.kind} ${d.name.value}` : d.kind;
+        return `only new types and \`extend type Query\` are allowed (found ${what})`;
+    }
+    return null;
+}
+
+/**
  * The extension a plugin's declaration describes, or the reason it is refused. `getRouter()` returns the
  * plugin's GET routes for the current request (null while it is not running here).
  */
@@ -71,6 +101,8 @@ function buildPluginExtension(
     const entries = Object.entries(def.fields as Record<string, unknown>);
     if (!entries.length) return '`fields` declares no field';
     if (entries.length > MAX_FIELDS) return `at most ${MAX_FIELDS} fields per plugin`;
+    const shape = sdlShapeProblem(def.typeDefs, entries.map(([k]) => k));
+    if (shape) return shape;
 
     const query: Record<string, GraphQLResolverSpec> = Object.create(null);
     for (const [key, raw] of entries) {
