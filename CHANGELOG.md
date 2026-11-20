@@ -6,6 +6,8 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
 
 ## [Unreleased]
 
+## [2.11.29] - 2026-11-20
+
 ### Added
 - **conference-manager 2.36.30: an optional priority per hotel.** «Prioridad (opcional)» on the hotel form (1–99).
   The automatic assignment and «Sugerir reparto» fill the rooms of the prioritized hotels first, 1 then 2…, and
