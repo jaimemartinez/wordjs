@@ -95,8 +95,28 @@ function assertSchedulable(timestamp: any, hook: any): number {
     return ts;
 }
 
+/**
+ * An event a PLUGIN schedules never replaces one it does not own (a core event, or another plugin's): the
+ * same (time, hook, args) slot taken by someone else is refused rather than silently handed over, which
+ * would make that event run only the newcomer's callbacks.
+ */
+function assertSlotOwnedBy(events: any, timestamp: number, key: string, pluginSlug: string | null): void {
+    if (!pluginSlug) return;
+    const at = events[timestamp];
+    const cur = at && Object.prototype.hasOwnProperty.call(at, key) ? at[key] : undefined;
+    if (cur && (cur.pluginSlug || null) !== pluginSlug) {
+        throw new Error('🛡️ Cron schedule denied: that event belongs to someone else.');
+    }
+}
+
 async function scheduleEvent(timestamp: any, recurrence: any, hook: any, args = []) {
     timestamp = assertSchedulable(timestamp, hook);
+    // A recurrence is the NAME of a schedule (hourly, daily, or one registered with addSchedule — possibly
+    // later, which is why it is not looked up here): a short plain name, never an arbitrary value stored as is.
+    // null / false / undefined = no recurrence (a one-off event scheduled through this entry point).
+    if (recurrence != null && recurrence !== false && (typeof recurrence !== 'string' || !/^[A-Za-z0-9_-]{1,64}$/.test(recurrence))) {
+        throw new Error('Cron schedule denied: invalid recurrence name.');
+    }
     const events = await getCronEventsForWrite();
     const pluginSlug = getCurrentPlugin();
     assertCronCapacity(events, pluginSlug, args);
@@ -106,6 +126,7 @@ async function scheduleEvent(timestamp: any, recurrence: any, hook: any, args = 
     }
 
     const key = `${hook}_${JSON.stringify(args)}`;
+    assertSlotOwnedBy(events, timestamp, key, pluginSlug);
     events[timestamp][key] = {
         hook,
         args,
@@ -134,6 +155,7 @@ async function scheduleSingleEvent(timestamp: any, hook: any, args = []) {
     }
 
     const key = `${hook}_${JSON.stringify(args)}`;
+    assertSlotOwnedBy(events, timestamp, key, pluginSlug);
     events[timestamp][key] = {
         hook,
         args,

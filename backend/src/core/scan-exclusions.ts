@@ -46,9 +46,12 @@ const SKIPPED_BUNDLE_DIRS = ['dist', 'client', 'frontend'];
  * `isTheme` matters: a theme's functions.js may require from any of its own subdirectories, so the
  * scanner reads all of them and only skips dependencies.
  */
-function isScannerSkippedDir(name: string, isTheme: boolean): boolean {
+function isScannerSkippedDir(name: string, isTheme: boolean, depth = 0): boolean {
     const n = String(name);
-    if (SKIPPED_FOR_ALL.some((d) => n.includes(d))) return true;
+    // ONLY the package's own top-level `node_modules` (read by the dependency pass), matched EXACTLY: a
+    // substring test also skipped `my_node_modules/` and `lib/node_modules/`, which no pass read and the
+    // runtime still loaded. Any other directory, whatever its name, is the plugin's own code.
+    if (SKIPPED_FOR_ALL.some((d) => n.toLowerCase() === d)) return depth === 0;
     if (isTheme) return false;
     return n.startsWith('.') || SKIPPED_BUNDLE_DIRS.includes(n.toLowerCase());
 }
@@ -64,9 +67,11 @@ function isScannerSkippedDir(name: string, isTheme: boolean): boolean {
 function isUnscannedCodePath(segments: string[], isTheme: boolean): boolean {
     if (isTheme) return false;                     // themes are scanned in full
     // The last segment is the file itself; only directories are considered.
-    for (const seg of segments.slice(0, -1)) {
-        if (String(seg).includes('node_modules')) return false;   // dependencies: requirable by design
-        if (isScannerSkippedDir(seg, isTheme)) return true;
+    const dirs = segments.slice(0, -1);
+    // The top-level node_modules holds the dependencies, read by their own pass: requirable by design.
+    if (dirs.length && String(dirs[0]).toLowerCase() === 'node_modules') return false;
+    for (let i = 0; i < dirs.length; i++) {
+        if (isScannerSkippedDir(dirs[i], isTheme, i)) return true;
     }
     return false;
 }

@@ -81,6 +81,7 @@
 use strict;
 use warnings;
 use Cwd qw(realpath);
+use POSIX ();
 
 # --- exit codes, as named constants so the caller and this file cannot drift -----------------------
 my $EX_UNSUPPORTED = 78;
@@ -103,7 +104,8 @@ sub fail        { print STDERR "SHIM-FAIL: $_[0]\n";        exit $EX_FAIL; }
 # this file's aarch64 identity-change denylist already carries.
 # Anything else refuses to run rather than guessing: a wrong syscall number would not fail loudly, it
 # would call SOMETHING ELSE.
-my $arch = `uname -m`; chomp $arch;
+# uname(2) directly, not `uname -m`: a backtick command runs through PATH before anything is confined.
+my $arch = (POSIX::uname())[4];
 my ($NR_prctl, $NR_seccomp, $NR_socket, $NR_socketpair, $NR_clone, $NR_clone3, $NR_capset, $NR_setgroups,
     $NR_setresuid, $AUDIT_ARCH, $X32_ABI, @BLOCKED);
 # Calls refused only when they name ANOTHER process ([nr, index of the pid argument]): a process may still
@@ -120,7 +122,10 @@ if ($arch eq 'x86_64') {
     $NR_close = 3;
     # prlimit64, setpriority (who), ioprio_set (who), sched_setparam, sched_setscheduler, sched_setaffinity, sched_setattr.
     @PID_ARG = ([302, 0], [141, 1], [251, 1], [142, 0], [144, 0], [203, 0], [314, 0]);
-    @CMD_ARG = ([72, 1, 8, 15], [16, 1, 0x8901, 0x8902]);
+    # fcntl F_SETOWN / F_SETSIG / F_SETOWN_EX; ioctl FIOSETOWN / SIOCSPGRP; setpriority and ioprio_set aimed
+    # at a process GROUP or a USER (which != PRIO_PROCESS / IOPRIO_WHO_PROCESS): with who = 0 those mean
+    # "my group" / "every process of my uid" — the host included.
+    @CMD_ARG = ([72, 1, 8, 10, 15], [16, 1, 0x8901, 0x8902], [141, 0, 1, 2], [251, 0, 2, 3]);
     ($NR_truncate, $NR_openat2) = (76, 437);
     @OPEN_FLAGS_ARG = ([2, 1], [257, 2]);  # open(path, flags), openat(dirfd, path, flags)
     @BLOCKED = (
@@ -152,6 +157,8 @@ if ($arch eq 'x86_64') {
         # copy and archive libraries.
         90, 268, 452, 92, 93, 94, 260,
         188, 189, 190, 197, 198, 199, 463, 466,
+        # POSIX message queues (mq_open … mq_getsetattr): a channel between processes no plugin uses.
+        240, 241, 242, 243, 244, 245,
     );
 }
 elsif ($arch eq 'aarch64') {
@@ -159,7 +166,7 @@ elsif ($arch eq 'aarch64') {
         $NR_setresuid, $AUDIT_ARCH, $X32_ABI) = (167, 277, 198, 199, 220, 435, 91, 159, 147, 0xc00000b7, 0);
     $NR_close = 57;
     @PID_ARG = ([261, 0], [140, 1], [30, 1], [118, 0], [119, 0], [122, 0], [274, 0]);
-    @CMD_ARG = ([25, 1, 8, 15], [29, 1, 0x8901, 0x8902]);
+    @CMD_ARG = ([25, 1, 8, 10, 15], [29, 1, 0x8901, 0x8902], [140, 0, 1, 2], [30, 0, 2, 3]);
     ($NR_truncate, $NR_openat2) = (45, 437);
     @OPEN_FLAGS_ARG = ([56, 2]);
     @BLOCKED = (
@@ -173,6 +180,7 @@ elsif ($arch eq 'aarch64') {
         442, 443, 457, 458, 460,
         53, 452, 54, 55,
         5, 6, 7, 14, 15, 16, 463, 466,
+        180, 181, 182, 183, 184, 185,
     );
 }
 else { unsupported("architecture $arch has no verified syscall table here"); }

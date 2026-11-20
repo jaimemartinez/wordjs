@@ -64,6 +64,28 @@ const REFUSED: string[] = [
     `CREATE OR REPLACE VIEW wjp_other_v AS SELECT * FROM ${P}a`,
     `ALTER VIEW wjp_other_v AS SELECT * FROM ${P}a`,
     `ALTER INDEX ${P}i RENAME TO wjp_other_i`,
+    // An alias spelled like a keyword (unquoted after AS, or followed by a comma) is a NAME: it must not
+    // end the FROM / UPDATE list, or the next table goes unjudged.
+    `SELECT u.user_pass FROM ${P}a AS offset, users u`,
+    `SELECT u.user_pass FROM ${P}a AS with, users u`,
+    `SELECT u.user_pass FROM ${P}a AS set, users u`,
+    `SELECT u.user_pass FROM ${P}a offset, users u`,
+    `SELECT * FROM ${P}a AS limit, wjp_other_orders`,
+    `UPDATE ${P}a AS set, users SET user_pass = ?`,
+    `UPDATE ${P}a offset, users SET user_pass = ?`,
+    `INSERT INTO ${P}log SELECT u.user_pass FROM ${P}a AS offset, users u`,
+    // MySQL's INSERT / REPLACE without INTO.
+    `INSERT users (user_login) VALUES (?)`,
+    `INSERT IGNORE users SET user_login = ?`,
+    `REPLACE options (option_name, option_value) VALUES (?, ?)`,
+    `INSERT LOW_PRIORITY wjp_other_orders (id) VALUES (1)`,
+    // Postgres' INHERIT without parens.
+    `ALTER TABLE ${P}a INHERIT users`,
+    `ALTER TABLE ${P}a NO INHERIT wjp_other_orders`,
+    // A quoted object name never stands in for the statement's own ON / name.
+    "CREATE TRIGGER `wjp_tgt_tr on wjp_tgt_a` AFTER INSERT ON users FOR EACH ROW INSERT INTO wjp_tgt_log (p) VALUES (NEW.user_pass)",
+    'CREATE INDEX "wjp_tgt_i on wjp_tgt_a" ON users (user_login)',
+    'CREATE VIEW "wjp_tgt_v x" AS SELECT 1',
 ];
 
 for (const sql of REFUSED) {
@@ -109,6 +131,23 @@ const ALLOWED: [string, string[]?][] = [
     [`INSERT INTO ${P}a (id, color) VALUES (?, ?) ON CONFLICT (id) DO UPDATE SET color = excluded.color`],
     [`INSERT INTO ${P}a (id, color) VALUES (?, ?) ON DUPLICATE KEY UPDATE color = VALUES(color)`],
     [`SELECT id FROM ${P}a WHERE color LIKE ? FOR UPDATE`, READ],
+    // Keyword-looking words that ARE the keyword keep working.
+    [`SELECT a FROM ${P}a ORDER BY a LIMIT 10 OFFSET 5`, READ],
+    [`SELECT a FROM ${P}a x, ${P}c y WHERE x.id = y.a_id LIMIT 5, 10`, READ],
+    [`SELECT a AS offset FROM ${P}a`, READ],
+    [`SELECT a FROM ${P}a AS t WHERE t.id = ?`, READ],
+    [`WITH ${P}cte AS (SELECT id FROM ${P}a) SELECT id FROM ${P}cte`, READ],
+    [`CREATE TABLE ${P}d AS SELECT id, color FROM ${P}a`],
+    [`INSERT OR REPLACE INTO ${P}a (id, color) VALUES (?, ?)`],
+    [`INSERT OR IGNORE INTO ${P}a (id) VALUES (?)`],
+    [`INSERT IGNORE INTO ${P}a (id) VALUES (?)`],
+    [`INSERT ${P}a (id) VALUES (?)`],
+    [`REPLACE INTO ${P}a (id, color) VALUES (?, ?)`],
+    [`UPDATE ${P}a SET color = REPLACE(color, 'a', 'b')`],
+    [`SELECT REPLACE(color, 'a', 'b') FROM ${P}a`, READ],
+    [`CREATE TRIGGER ${P}trg2 AFTER INSERT ON ${P}a FOR EACH ROW INSERT INTO ${P}c (code) VALUES ('x')`],
+    [`ALTER TABLE ${P}c INHERIT ${P}a`],
+    ['CREATE INDEX "wjp_tgt_i2" ON wjp_tgt_a (color)'],
 ];
 for (const [sql, verbs] of ALLOWED) {
     test(`still allowed: ${sql.slice(0, 80)}`, () => {
@@ -151,4 +190,16 @@ test('an installed theme claims its real table prefix (wjp_theme_<name>_) from b
         (() => { try { assertSqlAllowed(`SELECT * FROM wjp_theme_${name}_settings`, READ, 'wjp_theme_', 'theme'); return 'allowed'; } catch (e: any) { return e.message; } })(),
         'allowed');
     assert.strictEqual(require('../core/plugin-api').isTableOwnedBy(`wjp_theme_${name}_settings`, `theme:${themes[0]}`), true);
+});
+
+test('createTable is judged like any plugin DDL: the table and every name its columns cite', () => {
+    const { assertCreateTableAllowed } = require('../core/plugin-api');
+    const v = (name: string, cols: string[], prefix = P, slug = SLUG) => {
+        try { assertCreateTableAllowed(name, cols, prefix, slug); return 'allowed'; } catch (e: any) { return String(e && e.message); }
+    };
+    assert.strictEqual(v(`${P}ok`, ['id INTEGER PRIMARY KEY', `a_id INTEGER REFERENCES ${P}a(id)`, "note TEXT DEFAULT 'x'"]), 'allowed');
+    assert.notStrictEqual(v(`${P}fk`, ['id INTEGER PRIMARY KEY', 'u INTEGER REFERENCES users(id)']), 'allowed', 'a foreign key into a core table');
+    assert.notStrictEqual(v(`${P}fk2`, ['id INTEGER PRIMARY KEY', 'o INTEGER REFERENCES wjp_other_orders(id)']), 'allowed', 'into another plugin');
+    assert.notStrictEqual(v(`${P}def`, ["x TEXT DEFAULT (query_to_xml('select 1', true, true, ''))"]), 'allowed', 'a forbidden function in DEFAULT');
+    assert.notStrictEqual(v(`${P}def2`, ['x TEXT DEFAULT (SELECT user_pass FROM users LIMIT 1)']), 'allowed', 'a subquery on a core table');
 });

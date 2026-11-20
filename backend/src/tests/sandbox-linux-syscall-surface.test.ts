@@ -52,9 +52,26 @@ test('another process\'s limits, priority and scheduling are refused, the child\
     assert.match(SHIM, /push @p, \[0x15, 1, 0, 0\]; {12}# pid 0 \(self\) skips the denial/);
 });
 
-test('F_SETOWN and its ioctl twins are refused', () => {
-    assert.match(x86, /@CMD_ARG = \(\[72, 1, 8, 15\], \[16, 1, 0x8901, 0x8902\]\);/);
-    assert.match(arm, /@CMD_ARG = \(\[25, 1, 8, 15\], \[29, 1, 0x8901, 0x8902\]\);/);
+test('F_SETOWN, F_SETSIG and their ioctl twins are refused, and so is a priority change aimed at a group or user', () => {
+    assert.match(x86, /@CMD_ARG = \(\[72, 1, 8, 10, 15\], \[16, 1, 0x8901, 0x8902\], \[141, 0, 1, 2\], \[251, 0, 2, 3\]\);/);
+    assert.match(arm, /@CMD_ARG = \(\[25, 1, 8, 10, 15\], \[29, 1, 0x8901, 0x8902\], \[140, 0, 1, 2\], \[30, 0, 2, 3\]\);/);
+});
+
+test('POSIX message queues are refused, and the architecture is read without running a command', () => {
+    const X = blocked(x86), A = blocked(arm);
+    for (const nr of [240, 241, 242, 243, 244, 245]) assert.ok(X.has(nr), `x86_64 ${nr}`);
+    for (const nr of [180, 181, 182, 183, 184, 185]) assert.ok(A.has(nr), `aarch64 ${nr}`);
+    assert.match(SHIM, /my \$arch = \(POSIX::uname\(\)\)\[4\];/);
+    assert.doesNotMatch(SHIM, /=\s*`uname/);
+});
+
+test('the Node runtime read root is never the home directory, the app root, nor a whole shared prefix', () => {
+    const { linuxRuntimeRoots } = require('../core/sandbox-linux');
+    assert.deepStrictEqual(linuxRuntimeRoots('/home/u/bin/node', '/srv/wordjs/backend', '/home/u'), ['/home/u/bin']);
+    assert.deepStrictEqual(linuxRuntimeRoots('/srv/wordjs/backend/bin/node', '/srv/wordjs/backend', '/home/u'), ['/srv/wordjs/backend/bin']);
+    assert.deepStrictEqual(linuxRuntimeRoots('/usr/local/bin/node', '/srv/wordjs/backend', '/home/u'), ['/usr/local/bin', '/usr/local/lib']);
+    assert.deepStrictEqual(linuxRuntimeRoots('/home/u/.nvm/versions/node/v24.1.0/bin/node', '/srv/wordjs/backend', '/home/u'), ['/home/u/.nvm/versions/node/v24.1.0']);
+    assert.deepStrictEqual(linuxRuntimeRoots('/usr/bin/node', '/srv/wordjs/backend', '/home/u'), []);
 });
 
 test('below Landlock ABI 3, truncation of a read-only file is refused by seccomp', () => {

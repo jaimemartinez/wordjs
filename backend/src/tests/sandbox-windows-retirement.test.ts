@@ -185,7 +185,8 @@ describe('launch', () => {
     test('a timed-out ACL batch kills the whole process tree', () => {
         const src = fs.readFileSync(path.join(CORE, 'sandbox-windows.ts'), 'utf8');
         assert.match(src, /killProcessTree\(ps && ps\.pid\);\s+try \{ ps\.kill\(\); \}/);
-        assert.match(src, /spawnSync\('taskkill\.exe', \['\/PID', String\(pid\), '\/T', '\/F'\]/);
+        assert.match(src, /spawnSync\(TASKKILL_EXE, \['\/PID', String\(pid\), '\/T', '\/F'\]/);
+        assert.match(src, /const TASKKILL_EXE = require\('path'\)\.join\(SYSTEM32, 'taskkill\.exe'\);/);
     });
 
     test('writable trees carry OWNER RIGHTS, so owning a file never grants WRITE_DAC', () => {

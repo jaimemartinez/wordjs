@@ -51,15 +51,23 @@ const NON_REQUIRABLE_DIRS: string[] = (() => {
 })();
 
 // Methods that require filesystem:read permission
-const FS_READ_METHODS = [
+/** A Set whose contents can no longer change (add / delete / clear throw). */
+function sealedSet<T>(items: T[]): Set<T> {
+    const set = new Set<T>(items);
+    const no = () => { throw new TypeError('sealed policy set'); };
+    for (const k of ['add', 'delete', 'clear']) Object.defineProperty(set, k, { value: no, writable: false, configurable: false, enumerable: false });
+    return Object.freeze(set);
+}
+
+const FS_READ_METHODS = Object.freeze([
     'readFile', 'readFileSync', 'readdir', 'readdirSync',
     'createReadStream', 'stat', 'statSync', 'lstat', 'lstatSync',
     'existsSync', 'access', 'accessSync', 'realpath', 'realpathSync',
     'readlink', 'readlinkSync', 'opendir', 'opendirSync'
-];
+]) as unknown as string[];
 
 // Methods that require filesystem:write permission
-const FS_WRITE_METHODS = [
+const FS_WRITE_METHODS = Object.freeze([
     'writeFile', 'writeFileSync', 'appendFile', 'appendFileSync',
     'createWriteStream', 'mkdir', 'mkdirSync', 'rmdir', 'rmdirSync',
     'unlink', 'unlinkSync', 'rm', 'rmSync', 'rename', 'renameSync',
@@ -67,12 +75,12 @@ const FS_WRITE_METHODS = [
     'truncate', 'truncateSync', 'utimes', 'utimesSync', 'link', 'linkSync',
     'symlink', 'symlinkSync', 'open', 'openSync', 'close', 'closeSync',
     'write', 'writeSync', 'ftruncate', 'ftruncateSync'
-];
+]) as unknown as string[];
 
 // Link-creating fs methods are DENIED for plugins entirely (even in their own dir): a plugin
 // could create a symlink pointing outside its dir and then follow it, and they enable
 // check-then-write TOCTOU races on containment. Plugins have no legitimate need for them.
-const FS_LINK_DENIED = ['symlink', 'symlinkSync', 'link', 'linkSync'];
+const FS_LINK_DENIED = Object.freeze(['symlink', 'symlinkSync', 'link', 'linkSync']) as unknown as string[];
 
 // Methods that take TWO paths (source READ, dest WRITE) — both must be checked.
 const FS_TWO_PATH = new Set(['copyfile', 'copyfilesync', 'cp', 'cpsync', 'rename', 'renamesync']);
@@ -99,7 +107,9 @@ function guardFsCall(pluginSlug: string, prop: string, args: any[]): void {
         if (o && typeof o === 'object') {
             const safe: any = {};
             for (const k of Object.keys(o)) safe[k] = (o as any)[k]; // read each getter ONCE
-            delete safe.fd;                                          // Node now cannot receive an fd
+            // An OWN `fd: undefined`, not a delete: with no own property Node reads `options.fd` through the
+            // prototype chain, and a plugin that set Object.prototype.fd handed the stream an fd anyway.
+            safe.fd = undefined;                                     // Node now cannot receive an fd
             args[1] = safe;
         }
     }
@@ -463,13 +473,15 @@ const originalRequire = Module.prototype.require;
 // channel carries only that plugin's own traffic. It is blocked anyway: the reviewed-safe list
 // admitted tty on the reasoning that a plugin cannot obtain a descriptor, and that reasoning was
 // simply wrong — the sandbox hands it one at birth.
-const BLOCKED_PLUGIN_MODULES = ['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events', 'cluster', 'async_hooks', 'v8', 'sqlite', 'wasi', 'diagnostics_channel', 'tty'];
+// Frozen, like the other policy vocabularies: they are exported (tests read the real lists), and a live
+// array reachable through the module cache could be emptied by whoever reached it.
+const BLOCKED_PLUGIN_MODULES = Object.freeze(['worker_threads', 'vm', 'module', 'inspector', 'repl', 'test', 'trace_events', 'cluster', 'async_hooks', 'v8', 'sqlite', 'wasi', 'diagnostics_channel', 'tty']) as unknown as string[];
 
 // Raw network/socket modules enable data exfiltration + SSRF straight out of an isolated worker
 // (the worker has full Node net access; the isolate boundary is heap-only). Deny them by default and
 // allow ONLY when an admin granted the Network permission — a plugin gets no outbound sockets
 // otherwise. NOT self-declarable.
-const NETWORK_MODULES = new Set(['net', 'tls', 'dgram', 'http', 'https', 'http2', 'dns', 'dns/promises']);
+const NETWORK_MODULES = sealedSet(['net', 'tls', 'dgram', 'http', 'https', 'http2', 'dns', 'dns/promises']);
 
 /**
  * THE OTHER HALF OF A DENY-LIST: everything it does not name.
@@ -694,6 +706,9 @@ function secureModuleFor(id: any, requirer?: any) {
 // appRegistry, adminMenu, shortcodes, widgets, middleware/*, config/database) are NOT blocked.
 const CORE_DIR = __dirname;
 const CONFIG_APP = path.join(CORE_DIR, '../config', 'app');
+// Windows and macOS file systems ignore case: `CORE/IO-GUARD` is the same file as `core/io-guard`, so the
+// comparison must ignore it too.
+function foldCase(p: string): string { return process.platform === 'win32' || process.platform === 'darwin' ? p.toLowerCase() : p; }
 const BLOCKED_CORE = new Set([
     'plugin-test-runner', 'import-export', 'backup', 'cert-manager', 'certManager',
     'plugin-context', 'secure-require', 'io-guard', 'crash-guard', 'configManager',
@@ -703,8 +718,10 @@ const BLOCKED_CORE = new Set([
     // a LIVE ioredis client built with host config → a plugin/theme could run arbitrary Redis commands and
     // poison the option cache (#20). No plugin/theme has a legitimate reason to load any of these (they use
     // the RPC bridge / options API). Defense-in-depth alongside the function-level gates.
-    'roles', 'plugin-permissions', 'cache'
-].map(n => path.join(CORE_DIR, n)));
+    'roles', 'plugin-permissions', 'cache',
+    // The child's own egress layer: its policy setters and the tunnel client belong to the worker.
+    'egress-guard', 'egress-tunnel-client',
+].map(n => foldCase(path.join(CORE_DIR, n))));
 
 // Realpath-resolved plugin/theme dirs, used to classify the REQUIRING module by its filename.
 let REAL_PLUGINS_DIR: string;
@@ -815,16 +832,20 @@ function secureDatabase() {
 // undefined to fall through. Keys on the REQUIRING module: only a plugin/theme file's OWN
 // requires are policed (core->core requires are always allowed, even inside a plugin context).
 function corePolicyFor(request: any, mod: any): any {
-    if (typeof request !== 'string' || request[0] !== '.') return undefined;
+    // Every PATH-shaped request — relative, absolute or a file: URL. Only `./x` was judged before, so the
+    // absolute path of a core module (core's own location is no secret) loaded it unchecked. A bare
+    // package name resolves into node_modules, never into core.
+    if (typeof request !== 'string') return undefined;
+    if (!(request[0] === '.' || path.isAbsolute(request) || /^file:/i.test(request))) return undefined;
     const requirer = mod && mod.filename;
     if (!requirer) return undefined;
     const slug = requirerSlug(requirer);
     if (!slug) return undefined; // core (non-plugin requirer) is unrestricted; plugins are policed uniformly
     let resolved: string;
     try { resolved = Module._resolveFilename(request, mod); } catch { return undefined; }
-    const noExt = resolved.replace(/\.[cm]?[jt]s$/, '');
-    if (noExt === CONFIG_APP) return secureConfig();
-    if (noExt === CONFIG_DB) return secureDatabase();
+    const noExt = foldCase(resolved.replace(/\.[cm]?[jt]s$/i, ''));
+    if (noExt === foldCase(CONFIG_APP)) return secureConfig();
+    if (noExt === foldCase(CONFIG_DB)) return secureDatabase();
     if (BLOCKED_CORE.has(noExt)) {
         throw createSecurityError(slug, `require('${request}')`, 'this core module is not accessible to plugins');
     }

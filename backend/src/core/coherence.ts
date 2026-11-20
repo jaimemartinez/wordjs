@@ -86,11 +86,15 @@ const reconcileQueued = new Map<string, Promise<boolean>>();
 
 /** Respawn `slug`'s running child if the policy it was spawned with is no longer the current one. */
 function reconcileIsolate(slug: string): Promise<boolean> {
-    const queued = reconcileQueued.get(slug);
+    // Keyed by SITE and slug: on a network each site runs its own child of the plugin, and a second site's
+    // request used to join the first site's queued reconcile — which judged only the first site's child.
+    const site: number | null = (() => { try { return require('./site-context').currentSiteIdOrNull(); } catch { return null; } })();
+    const key = `${site == null ? 1 : site}:${slug}`;
+    const queued = reconcileQueued.get(key);
     if (queued) return queued;
-    const prev = reconcileTail.get(slug) || Promise.resolve(false);
+    const prev = reconcileTail.get(key) || Promise.resolve(false);
     const run: Promise<boolean> = prev.catch(() => false).then(async () => {
-        if (reconcileQueued.get(slug) === run) reconcileQueued.delete(slug);
+        if (reconcileQueued.get(key) === run) reconcileQueued.delete(key);
         const iso = require('./plugin-isolate');
         await iso.awaitIsolateSettled(slug);
         if (!isolateIsStale(slug)) return false;
@@ -104,9 +108,9 @@ function reconcileIsolate(slug: string): Promise<boolean> {
             return true;
         });
     });
-    reconcileQueued.set(slug, run);
-    reconcileTail.set(slug, run);
-    run.finally(() => { if (reconcileTail.get(slug) === run) reconcileTail.delete(slug); }).catch(() => { /* */ });
+    reconcileQueued.set(key, run);
+    reconcileTail.set(key, run);
+    run.finally(() => { if (reconcileTail.get(key) === run) reconcileTail.delete(key); }).catch(() => { /* */ });
     return run;
 }
 

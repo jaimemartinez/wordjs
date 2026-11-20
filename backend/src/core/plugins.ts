@@ -512,7 +512,8 @@ async function prunePluginDependencies(slug: string, manifest: any) {
         log.info({ slug: logSafe(slug) }, `♻️ Garbage Collector: Removing unused dependencies for ${logSafe(slug)}: ${logSafe(toRemove.join(', '))}`);
         try {
             // Async so pruning on the deactivate request path doesn't block the event loop.
-            await execFileAsync(NPM_BIN, ['uninstall', ...toRemove, '--save'], { cwd: ROOT_DIR });
+            // The same hardening as install: no lifecycle scripts, and `--` so no name can read as a flag.
+            await execFileAsync(NPM_BIN, ['uninstall', '--save', '--ignore-scripts', '--', ...toRemove], { cwd: ROOT_DIR, env: { ...process.env, npm_config_ignore_scripts: 'true' } });
             forgetPluginInstalledDeps(toRemove);
             log.info('   ✅ Dependencies removed successfully.');
         } catch (e) {
@@ -1222,13 +1223,18 @@ function validatePluginPermissions(
     // (isThemeScan is defined above.) THEMES run functions.js in-process, so EVERY .js they could require()
     // must be scanned — a theme shipping dist/payload.js + require('./dist/payload.js') would otherwise run
     // never-scanned host code (#8). For plugins, dist/client/frontend are browser bundles (never the worker).
-    function getFiles(dir: string): string[] {
+    // The walk never follows a symbolic link (a link loop recursed until the stack overflowed, and a link
+    // out of the package read files that are not its own) and stops at a sane depth.
+    const MAX_SCAN_DEPTH = 40;
+    function getFiles(dir: string, depth = 0): string[] {
         let results: string[] = [];
         if (!fs.existsSync(dir)) return results;
+        if (depth > MAX_SCAN_DEPTH) throw new Error(`Security scan: the package is nested deeper than ${MAX_SCAN_DEPTH} directories.`);
         const list = fs.readdirSync(dir);
         list.forEach((file: string) => {
             const fullPath = path.join(dir, file);
-            const stat = fs.statSync(fullPath);
+            const stat = fs.lstatSync(fullPath);
+            if (stat.isSymbolicLink()) return;
             if (stat && stat.isDirectory()) {
                 // For PLUGINS skip node_modules, hidden dirs, and FRONTEND/dist bundles (browser-only, and
                 // bundling falsely trips the scan). For THEMES skip ONLY node_modules — a theme's functions.js
@@ -1238,9 +1244,9 @@ function validatePluginPermissions(
                 // runtime require() from exactly the directories this walk skips. It used to be spelled
                 // out in both places, and the two had drifted apart in two ways — see that file.
                 const { isScannerSkippedDir } = require('./scan-exclusions');
-                const skipDir = isScannerSkippedDir(file, isThemeScan);
+                const skipDir = isScannerSkippedDir(file, isThemeScan, depth);
                 if (!skipDir) {
-                    results = results.concat(getFiles(fullPath));
+                    results = results.concat(getFiles(fullPath, depth + 1));
                 }
             } else if (file.endsWith('.js') || file.endsWith('.ts') ||
                        file.endsWith('.cjs') || file.endsWith('.mjs')) {
@@ -1794,6 +1800,10 @@ function validatePluginPermissions(
                     }
 
                     if (node.object.name === 'process') {
+                        // `process['binding']` names the property with a string literal, not an identifier.
+                        const propName = node.computed
+                            ? (node.property && node.property.type === 'Literal' ? String(node.property.value) : undefined)
+                            : node.property && node.property.name;
                         // Allow process.env (handled by runtime proxy), block everything else.
                         // In a DEPENDENCY, narrow this to the NATIVE-BINDING escapes (process.binding,
                         // process._linkedBinding, process.dlopen, process.getBuiltinModule): every other
@@ -1801,9 +1811,10 @@ function validatePluginPermissions(
                         // appears in almost every npm package and is already virtualised by the sandbox's
                         // process proxy, so charging it here would block every tree without adding a
                         // single bit of signal. The escapes above are the ones that reach C++ directly.
-                        if (node.property.name !== 'env'
-                            && (!dependency || NATIVE_BINDING_PROCESS_PROPS.has(node.property.name))) {
-                            dangerousCalls.add(`Forbidden 'process' property: ${node.property.name || 'computed'}`);
+                        // A computed name that is not a literal is unknowable here — charged in a dependency too.
+                        if (propName !== 'env'
+                            && (!dependency || propName === undefined || NATIVE_BINDING_PROCESS_PROPS.has(propName))) {
+                            dangerousCalls.add(`Forbidden 'process' property: ${propName || 'computed'}`);
                         }
                     } else if (!isAssignment && !dependency) {
                         // `global.x` / `module.parent` / `require.resolve` reads are routine in packages.
@@ -1846,6 +1857,14 @@ function validatePluginPermissions(
                 if (node.source && node.source.type === 'Literal') {
                     flagModuleLiteral(node.source.value, 'import');
                 }
+            },
+            // `export * from 'child_process'` / `export { exec } from 'child_process'` load the module just as
+            // an import does, with no import statement for the check above to see.
+            ExportAllDeclaration(node: any) {
+                if (node.source && node.source.type === 'Literal') flagModuleLiteral(node.source.value, 'import');
+            },
+            ExportNamedDeclaration(node: any) {
+                if (node.source && node.source.type === 'Literal') flagModuleLiteral(node.source.value, 'import');
             },
             // Aliasing/destructuring a sensitive global — `const p = process` or
             // `const { getBuiltinModule } = process` — dodges the MemberExpression guard and reaches
@@ -2816,11 +2835,16 @@ async function reconcileDeactivatedPlugins(): Promise<string[]> {
         stray.add(slug);
     }
     const stopped: string[] = [];
-    for (const slug of [...strayObservations.keys()]) if (!stray.has(slug)) strayObservations.delete(slug);
+    // Counted PER SITE: every site's pass runs this, and with bare slugs as keys one site's pass wiped the
+    // other's first observation, so a lost deactivation there never reached its second one.
+    const site: number | null = (() => { try { return require('./site-context').currentSiteIdOrNull(); } catch { return null; } })();
+    const prefix = `${site == null ? 1 : site}:`;
+    for (const key of [...strayObservations.keys()]) if (key.startsWith(prefix) && !stray.has(key.slice(prefix.length))) strayObservations.delete(key);
     for (const slug of stray) {
-        const seen = (strayObservations.get(slug) || 0) + 1;
-        if (seen < 2) { strayObservations.set(slug, seen); continue; }
-        strayObservations.delete(slug);
+        const key = prefix + slug;
+        const seen = (strayObservations.get(key) || 0) + 1;
+        if (seen < 2) { strayObservations.set(key, seen); continue; }
+        strayObservations.delete(key);
         log.warn({ slug: logSafe(slug) }, `[plugins] '${logSafe(slug)}' runs here but is no longer active in the shared active set (a lost deactivation) — stopping it`);
         if (unloadOnePlugin(slug)) stopped.push(slug);
     }

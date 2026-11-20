@@ -206,9 +206,10 @@ function hasPermission(scope: string, access = 'read') {
     if (!manifest) {
         const manifestPath = path.join(PLUGINS_DIR, pluginSlug, 'manifest.json');
 
-        if (fs.existsSync(manifestPath)) {
+        // Read as the host, like a theme's declaration above: the plugin's own fs gate must not decide it.
+        if (runAsHost(() => fs.existsSync(manifestPath))) {
             try {
-                manifest = JSON.parse(fs.readFileSync(manifestPath, 'utf8'));
+                manifest = JSON.parse(runAsHost(() => fs.readFileSync(manifestPath, 'utf8')));
                 manifestCache.set(pluginSlug, manifest);
             } catch (e) {
                 console.error(`[Security] Failed to parse manifest for ${pluginSlug}:`, e.message);
@@ -243,9 +244,18 @@ function hasPermission(scope: string, access = 'read') {
     return granted;
 }
 
-/** Drop the cached declaration of `theme:<slug>` (its theme.json changed: update, re-activation). */
+/** Drop the cached declaration of `theme:<slug>` (its theme.json changed: update, re-activation, deletion). */
 function forgetThemeDeclaration(themeSlug: string) {
     manifestCache.delete(`theme:${themeSlug}`);
+}
+
+/**
+ * Drop the cached manifest of a plugin (or of every one): an install, update or revocation rewrote it, and a
+ * permission removed in the new version must stop counting now, not at the next restart.
+ */
+function forgetPluginDeclaration(pluginSlug?: string) {
+    if (!pluginSlug) { for (const k of [...manifestCache.keys()]) if (!String(k).startsWith('theme:')) manifestCache.delete(k); return; }
+    manifestCache.delete(pluginSlug);
 }
 
 /**
@@ -423,5 +433,6 @@ module.exports = {
     verifyPermission,
     describePermissionRefusal,
     forgetThemeDeclaration,
+    forgetPluginDeclaration,
     DEFAULT_THEME_PERMISSIONS
 };

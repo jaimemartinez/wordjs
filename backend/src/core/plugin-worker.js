@@ -49,6 +49,17 @@ const nonceReady = new Promise((resolve) => { nonceArrived = resolve; });
 // guarded process.send that refuses; the worker keeps the original, so only code in this file can
 // emit control frames (ready / fatal / register). See secure-require PROC_BLOCKED for why.
 const rawSend = (!IS_WORKER && typeof process.send === 'function') ? process.send.bind(process) : null;
+// process.send looks up `this._send` AT CALL TIME, so a plugin that replaced process._send saw every frame
+// this file sends — nonce included — and could forge its own. Pin the channel's real `_send` (and the
+// disconnect twin) as non-writable, non-configurable properties before any plugin code exists.
+if (!IS_WORKER) {
+    for (const k of ['_send', '_disconnect']) {
+        const v = process[k];
+        if (typeof v === 'function') {
+            try { Object.defineProperty(process, k, { value: v, writable: false, configurable: false, enumerable: false }); } catch { /* already pinned */ }
+        }
+    }
+}
 const _post = IS_WORKER ? parentPort.postMessage.bind(parentPort) : (m) => { try { rawSend && rawSend(m); } catch { /* parent gone */ } };
 // Stamp every outbound frame with the per-spawn nonce so the host accepts it as worker-origin. Plugin code
 // cannot read FRAME_NONCE (closure-only, scrubbed from argv/cfg above), so a frame it writes directly to
@@ -176,9 +187,25 @@ Object.defineProperty(global, '__WORDJS_PLUGIN_ALLOWED_HOSTS__', { value: Object
 // reloads. Immutable so a plugin can't clear it.
 Object.defineProperty(global, '__WORDJS_PLUGIN_EGRESS_DENY_ALL__', { value: !!cfg.egressDenyAll, writable: false, configurable: false, enumerable: false });
 const netAllowed = !!global.__WORDJS_PLUGIN_NETWORK__;
+// Touching Response / Request / Headers / FormData loads Node's bundled undici, which then publishes a real
+// HTTP dispatcher on globalThis under these symbols — an HTTP client no global trap below covers. Pin an
+// inert one first (undici only creates its own when the slot is empty): Response & co. keep working, and
+// any request through the pinned dispatcher fails. A network-granted plugin gets the guarded fetch below,
+// which carries its own dispatcher.
+function pinInertDispatcher(why) {
+    const inert = Object.freeze({
+        dispatch() { throw new Error(`[sandbox] ${why}`); },
+        close() { return Promise.resolve(); },
+        destroy() { return Promise.resolve(); },
+    });
+    for (const k of ['undici.globalDispatcher.1', 'undici.globalDispatcher.2']) {
+        try { Object.defineProperty(globalThis, Symbol.for(k), { value: inert, writable: false, configurable: false, enumerable: false }); } catch { /* already set */ }
+    }
+}
 // The egress tunnel client (network-granted plugins only); the host's `net` frames are handed to it.
 let netTunnel = null;
 if (!netAllowed) {
+    pinInertDispatcher(`network is blocked for plugin '${slug}' — grant Network access in the admin UI`);
     for (const name of ['fetch', 'WebSocket', 'EventSource']) {
         try {
             Object.defineProperty(globalThis, name, {
@@ -197,10 +224,11 @@ if (!netAllowed) {
         // Install this plugin's egress policy BEFORE the connect/dgram guards so the very first outbound
         // connection is already policy-checked. Deny-all (fail-closed, F-06) WINS over the allowlist; an
         // empty allowlist ⇒ no-op (allow-all-public), so no regression for plugins without a configured list.
-        try {
-            if (global.__WORDJS_PLUGIN_EGRESS_DENY_ALL__) eg.setDenyAllEgress();
-            else eg.setAllowedHosts(global.__WORDJS_PLUGIN_ALLOWED_HOSTS__);
-        } catch { /* best-effort */ }
+        // A policy that fails to install is NOT best-effort: fall into the catch below, which blocks the
+        // network globals for this plugin (fail closed) instead of running with no allowlist at all.
+        if (global.__WORDJS_PLUGIN_EGRESS_DENY_ALL__) eg.setDenyAllEgress();
+        else eg.setAllowedHosts(global.__WORDJS_PLUGIN_ALLOWED_HOSTS__);
+        if (typeof eg.sealEgressPolicy === 'function') eg.sealEgressPolicy();
         // This child has NO direct network at the kernel layer: every connection goes through the host's
         // egress tunnel (core/egress-tunnel), which decides and opens the real destination. The tunnel
         // client answers dns.lookup through the host and runs tls.connect over a tunnelled socket.
@@ -246,6 +274,7 @@ if (!netAllowed) {
             }
         }
     } catch (e) {
+        pinInertDispatcher(`network egress guard unavailable for '${slug}'`);
         for (const name of ['fetch', 'WebSocket', 'EventSource']) {
             try {
                 Object.defineProperty(globalThis, name, {
@@ -321,10 +350,20 @@ try {
                     // _stream_wrap, …): socket/stream primitives BELOW the connect chokepoint, denied on the
                     // require side by secure-require — import() must deny the same set or the twin path is open.
                     // A relative `./_helper` has bare starting with `./`, so a plugin's own file is unaffected.
-                    if (bare.startsWith('_') || esmBlocked.has(bare) || esmBlocked.has(bare.split('/')[0])) {
-                        throw new Error(`[sandbox] import('${specifier}') is blocked for plugin '${slug}'`);
-                    }
-                    return nextResolve(specifier, context);
+                    const refuse = () => { throw new Error(`[sandbox] import('${specifier}') is blocked for plugin '${slug}'`); };
+                    const blockedName = (b) => b.startsWith('_') || esmBlocked.has(b) || esmBlocked.has(b.split('/')[0]);
+                    if (blockedName(bare)) refuse();
+                    // A data: module is code built from a string at run time — the one thing
+                    // --disallow-code-generation-from-strings is there to forbid — and no reviewer ever sees it.
+                    if (/^data:/i.test(String(specifier))) refuse();
+                    // Judge WHERE it resolved, not only what was asked: a package.json "imports" map turns
+                    // `#anything` into a builtin (`"#cp": "child_process"`), and the specifier alone says nothing.
+                    const res = nextResolve(specifier, context);
+                    const url = res && typeof res.url === 'string' ? res.url : '';
+                    if (/^data:/i.test(url)) refuse();
+                    if (url.startsWith('node:') && blockedName(url.slice(5))) refuse();
+                    if (url && !url.includes(':') && blockedName(url)) refuse();
+                    return res;
                 }
             });
             esmGuardInstalled = true;
@@ -336,8 +375,13 @@ try {
                 'export async function initialize(d){ blocked = new Set(d.blocked); }\n' +
                 'export async function resolve(spec, ctx, next){\n' +
                 '  const bare = String(spec).replace(/^node:/, "");\n' +
-                '  if (bare.startsWith("_") || blocked.has(bare) || blocked.has(bare.split("/")[0])) throw new Error("[sandbox] import(\'" + spec + "\') is blocked for plugin");\n' +
-                '  return next(spec, ctx);\n' +
+                '  const no = (b) => b.startsWith("_") || blocked.has(b) || blocked.has(b.split("/")[0]);\n' +
+                '  const refuse = () => { throw new Error("[sandbox] import(\'" + spec + "\') is blocked for plugin"); };\n' +
+                '  if (no(bare) || /^data:/i.test(String(spec))) refuse();\n' +
+                '  const res = await next(spec, ctx);\n' +
+                '  const url = res && typeof res.url === "string" ? res.url : "";\n' +
+                '  if (/^data:/i.test(url) || (url.startsWith("node:") && no(url.slice(5)))) refuse();\n' +
+                '  return res;\n' +
                 '}';
             nodeModule.register(
                 'data:text/javascript,' + encodeURIComponent(hookSrc),
@@ -345,6 +389,15 @@ try {
                 { data: { blocked: [...esmBlocked] } }
             );
             esmGuardInstalled = true;
+        }
+        // The hook above is the worker's; nobody may add another. A later registerHooks() runs FIRST (hooks
+        // chain last-registered-first) and can short-circuit any specifier to a raw builtin before this one
+        // sees it. Replace both entry points with a refusal — plugin code never needs its own loader hooks.
+        if (esmGuardInstalled) {
+            const noHooks = function () { throw new Error(`[sandbox] module loader hooks are not available to plugin '${slug}'`); };
+            for (const k of ['registerHooks', 'register']) {
+                try { Object.defineProperty(nodeModule, k, { value: noHooks, writable: false, configurable: false, enumerable: false }); } catch { esmGuardInstalled = false; }
+            }
         }
     } catch {
         esmGuardInstalled = false;

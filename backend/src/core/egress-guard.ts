@@ -116,6 +116,11 @@ function embeddedIpv4(b: number[]): string[] | null {
     if (first10Zero && ((b[10] === 0xff && b[11] === 0xff) || (b[10] === 0 && b[11] === 0))) {
         return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
     }
+    // SIIT ::ffff:0:0:0/96 (RFC 2765, IPv4-translated): a stateless translator routes it to the IPv4 in
+    // the last 32 bits, like the mapped form above.
+    if (b.slice(0, 8).every((x) => x === 0) && b[8] === 0xff && b[9] === 0xff && b[10] === 0 && b[11] === 0) {
+        return [`${b[12]}.${b[13]}.${b[14]}.${b[15]}`];
+    }
     // NAT64 well-known prefix 64:ff9b::/96 embeds an IPv4 address a translator routes to — on an
     // IPv6-only cloud VPC this reaches v4 metadata/loopback (64:ff9b::a9fe:a9fe = 169.254.169.254).
     // Block only when the embedded v4 is itself private (public NAT64 targets stay allowed).
@@ -169,8 +174,11 @@ export function isBlockedIp(ip: string): boolean {
         // 64:ff9b:1::/48 is a LOCAL translator (RFC 8215): whatever IPv4 it embeds, and wherever in the
         // /48 the operator placed it, it routes into the operator's own network — never a public target.
         if (b[0] === 0x00 && b[1] === 0x64 && b[2] === 0xff && b[3] === 0x9b && b[4] === 0x00 && b[5] === 0x01) return true;
+        // An embedded IPv4 that is private blocks the address — but a PUBLIC one never clears it: the IPv6
+        // rules below still apply. (ISATAP matches under ANY prefix, so `fe80::5efe:1.1.1.1` or a ULA
+        // `fd00::200:5efe:8.8.8.8` returned 'allowed' from here before the link-local / ULA checks ran.)
         const embedded = embeddedIpv4(b);
-        if (embedded) return embedded.some((v4) => isBlockedV4(v4));
+        if (embedded && embedded.some((v4) => isBlockedV4(v4))) return true;
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0x80) return true;  // fe80::/10 link-local
         if (b[0] === 0xfe && (b[1] & 0xc0) === 0xc0) return true;  // fec0::/10 deprecated site-local (RFC 3879)
         if ((b[0] & 0xfe) === 0xfc) return true;                  // fc00::/7 unique-local (ULA)
@@ -201,8 +209,15 @@ let allowedHosts: string[] | null = null;
 // `allowedHosts === null` (no policy configured ⇒ allow-all-public) so a transient DB failure fails closed
 // instead of silently widening a network-granted plugin to the whole internet.
 let denyAllEgress = false;
+// Once the worker has installed this child's policy it is SEALED: a later call (plugin code reaching the
+// module through the cache) cannot widen the allowlist or lift deny-all. The host's tunnel judges every
+// connection again with its own copy of the policy; this keeps the child's first check honest too.
+let policySealed = false;
+export function sealEgressPolicy(): void { policySealed = true; }
+function assertPolicyOpen(): void { if (policySealed) throw new Error('[sandbox] the egress policy is sealed'); }
 export function setDenyAllEgress(): void { denyAllEgress = true; }
 export function setAllowedHosts(list: any): void {
+    assertPolicyOpen();
     if (!Array.isArray(list)) { allowedHosts = null; return; }
     // `host:port` entries are the administrator-approved PRIVATE destinations, which the host ships in the
     // same list (plugin-isolate getEgressAllowlistFor). They are installed separately and never count as
@@ -314,6 +329,7 @@ export function parsePrivateDestination(entry: any): PrivateDestination | null {
 
 /** Install this plugin's approved private destinations (child only — the host pushes them in cfg). */
 export function setPrivateDestinations(list: any): void {
+    assertPolicyOpen();
     const out: PrivateDestination[] = [];
     for (const e of Array.isArray(list) ? list : []) {
         const d = parsePrivateDestination(e);

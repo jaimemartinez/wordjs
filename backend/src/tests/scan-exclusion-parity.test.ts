@@ -66,7 +66,8 @@ test('dependencies stay requirable — over-blocking breaks every real plugin', 
         'node_modules/lodash/index.js',
         'node_modules/.bin/thing.js',
         'node_modules/@scope/pkg/dist/index.js',   // a DEPENDENCY's own dist — still its own business
-        'lib/node_modules/x/index.js',
+        'lib/node_modules/x/index.js',             // not the dependency folder: scanned as the plugin's own code
+        'my_node_modules/x.js',
     ]) {
         assert.strictEqual(isUnscannedCodePath(segs(p), false), false,
             `'${p}' is a dependency and must stay requirable`);

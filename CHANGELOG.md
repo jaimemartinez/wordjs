@@ -97,6 +97,55 @@ on the [Releases](https://github.com/jaimemartinez/wordjs/releases) page.
   an exclude filter, ordering, "Load more" or numbered pages, grid columns and dates; the admin page now has a
   searchable library with "Load more", grouped settings and a live sync status.
 
+### Security
+- **Plugin isolation hardened in several layers.** Each item below was found in an internal review and is fixed
+  here; none of them affects how a well-behaved plugin works.
+  - **Plugin SQL guard:**
+    - an alias spelled like a keyword (`AS offset`, `AS set`, or followed by a comma) no longer ends the table
+      list;
+    - MySQL `INSERT` / `REPLACE` without `INTO` and Postgres `INHERIT` are judged;
+    - a quoted object name can no longer stand in for a trigger's or index's own `ON` table;
+    - `createTable` follows the same ownership and column rules as every other statement.
+  - **Postgres:** a plugin's queries always use the extended protocol (one statement per call), and a connection
+    whose role could not be reset is discarded instead of reused.
+  - **Plugin worker:**
+    - its control channel cannot be intercepted;
+    - without the network permission, no HTTP client can be obtained through `Response` / `Request`;
+    - `import()` is judged on the module it resolves to, so a `package.json` `"imports"` map cannot reach a
+      blocked builtin;
+    - `data:` modules and additional loader hooks are refused;
+    - the egress policy is sealed once set;
+    - core modules are judged whether a plugin names them by a relative path, an absolute path or another
+      letter case.
+  - **Egress filter:** an IPv6 address that embeds a public IPv4 still obeys the IPv6 private-range rules, and
+    SIIT addresses are judged by their IPv4.
+  - **Host bridge:**
+    - a plugin cannot replace a core or another plugin's scheduled event;
+    - a recurrence must be a schedule name;
+    - shortcode tags must be plain names;
+    - a plugin notification transport cannot replace a core one;
+    - a notification link must be an http(s) URL or a site path;
+    - a plugin's GraphQL SDL may only add new types and the Query fields it routes;
+    - backup, cache and certificate settings are never a plugin's option namespace;
+    - a cookie's `maxAge` is capped whatever its type.
+  - **Install-time scanner:**
+    - only the package's top-level `node_modules` counts as dependencies;
+    - re-exports (`export * from …`) and computed `process['…']` members are checked;
+    - symbolic links are not followed.
+  - **Host:**
+    - nested binary data, maps, sets and cycles count toward a reply's size cap;
+    - a permission removed by a plugin update stops counting at once;
+    - npm runs without lifecycle scripts when it removes a plugin's dependencies.
+  - **Linux sandbox:**
+    - `F_SETSIG`, priority changes aimed at a process group or a user, and POSIX message queues are refused;
+    - the architecture is read without running a command;
+    - the Node runtime read root is never the home directory, the application root or a whole shared prefix.
+  - **Windows sandbox:**
+    - a plugin's private storage is readable but never executable once its write permission is gone;
+    - deleting a theme retires its AppContainer identity;
+    - PowerShell, icacls and taskkill run from System32 by full path.
+  - **Multisite:** the reconcile and stray-plugin checks are kept per site.
+
 ## [2.11.28] - 2026-11-05
 
 ### Security

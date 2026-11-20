@@ -892,6 +892,17 @@ router.delete('/:slug', authenticate, isAdmin, networkThemeFiles, auditOnSuccess
     // A theme uploaded later under this name is other code: it starts with nothing granted.
     try { await require('../core/plugin-permissions').removeThemeGrants(req.params.slug); }
     catch (e: any) { log.warn({ err: e, slug: req.params.slug }, '[Themes] could not drop the grants of a deleted theme'); }
+    // …and with no declaration cached from the old one, and no Windows AppContainer identity left over: a
+    // theme uploaded later under this name must not reuse the deleted one's SID and the ACEs it still holds.
+    try { require('../core/plugin-context').forgetThemeDeclaration(req.params.slug); } catch { /* not loaded */ }
+    try {
+        const appRoot = require('path').resolve(__dirname, '..', '..');
+        const win = require('../core/sandbox-windows');
+        for (const id of require('../core/plugins').pluginWorkerSiteIds()) {
+            try { await win.retireAppContainerPlugin(appRoot, `theme:${req.params.slug}`, id); }
+            catch (e: any) { log.warn({ err: e, slug: req.params.slug, site: id }, '[Themes] AppContainer cleanup of a deleted theme failed'); }
+        }
+    } catch (e: any) { log.warn({ err: e, slug: req.params.slug }, '[Themes] AppContainer cleanup of a deleted theme skipped'); }
     res.json(result);
 }));
 
